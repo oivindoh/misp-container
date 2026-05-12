@@ -1,0 +1,234 @@
+# Docker Compose for running MISP.
+#
+# Pull and run (no build required):
+#   docker compose up -d
+#
+# Build from source and run:
+#   docker compose build
+#   docker compose up -d
+#
+# Default login: admin@admin.test / ChangeMe-Str0ng!Pass#2026
+#
+# Set MISP_IMAGE_TAG to pin a version, e.g.:
+#   MISP_IMAGE_TAG=2.5.37 docker compose up -d
+
+x-misp-image: &misp-image
+  image: ghcr.io/oivindoh/misp-container:2.5.37-r15
+  build:
+    context: ..
+    target: final
+
+x-misp-caddy-image: &misp-caddy-image
+  image: ghcr.io/oivindoh/misp-container-caddy:2.5.37-r15
+  build:
+    context: ..
+    target: caddy
+
+x-misp-sync-image: &misp-sync-image
+  image: ghcr.io/oivindoh/misp-container-sync:2.5.37-r15
+  build:
+    context: ..
+    target: sync
+
+x-misp-metrics-image: &misp-metrics-image
+  image: ghcr.io/oivindoh/misp-container-metrics:2.5.37-r15
+  build:
+    context: ..
+    target: metrics
+
+x-misp-modules-image: &misp-modules-image
+  image: ghcr.io/oivindoh/misp-container-modules:2.5.37-r15
+  build:
+    context: ..
+    target: modules
+
+x-misp-common: &misp-common
+  <<: *misp-image
+  env_file:
+    - base/base.env
+    - base/secrets.env
+    - compose.env
+    - compose-secrets.env
+  user: "1000:1000"
+
+services:
+  # -- One-shot init: populates shared volumes from the image --------------
+  init:
+    <<: *misp-common
+    command: ["python3", "/entrypoint-init.py"]
+    volumes:
+      - misp-files:/var/www/MISP/app/files
+      - misp-attachments:/var/www/MISP/app/attachments
+      - misp-config:/var/www/MISP/app/Config
+      - misp-tmp:/var/www/MISP/app/tmp
+      - misp-gnupg:/var/www/MISP/.gnupg
+      - misp-img-orgs:/var/www/MISP/app/webroot/img/orgs
+      - misp-img-custom:/var/www/MISP/app/webroot/img/custom
+      - init-tmp:/tmp
+    depends_on:
+      mysql:
+        condition: service_healthy
+
+  # -- PHP-FPM -------------------------------------------------------------
+  web:
+    <<: *misp-common
+    command: ["python3", "/entrypoint-web.py"]
+    volumes:
+      - misp-files:/var/www/MISP/app/files
+      - misp-attachments:/var/www/MISP/app/attachments
+      - misp-config:/var/www/MISP/app/Config
+      - misp-tmp:/var/www/MISP/app/tmp
+      - misp-gnupg:/var/www/MISP/.gnupg
+      - misp-img-orgs:/var/www/MISP/app/webroot/img/orgs
+      - misp-img-custom:/var/www/MISP/app/webroot/img/custom
+      - php-tmp:/tmp
+    depends_on:
+      init:
+        condition: service_completed_successfully
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # -- Caddy (static files + FastCGI reverse proxy to PHP-FPM) -------------
+  caddy:
+    <<: *misp-caddy-image
+    user: "1000:1000"
+    environment:
+      PHP_FPM_HOST: web
+      # Set CADDY_ADDRESS to a domain (e.g. misp.example.com) for automatic HTTPS.
+      # Leave unset for plain HTTP on :8080 (when behind a load balancer).
+      # CADDY_ADDRESS: misp.example.com
+    ports:
+      - "8080:8080"
+      # - "443:443"   # uncomment for HTTPS
+      # - "80:80"     # uncomment for HTTP->HTTPS redirect
+    volumes:
+      - misp-img-orgs:/var/www/MISP/app/webroot/img/orgs:ro
+      - misp-img-custom:/var/www/MISP/app/webroot/img/custom:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - web
+
+  # -- Background workers -------------------------------------------------
+  worker:
+    <<: *misp-common
+    command: ["python3", "/entrypoint-worker.py"]
+    volumes:
+      - misp-files:/var/www/MISP/app/files
+      - misp-attachments:/var/www/MISP/app/attachments
+      - misp-config:/var/www/MISP/app/Config
+      - worker-misp-tmp:/var/www/MISP/app/tmp
+      - misp-gnupg:/var/www/MISP/.gnupg
+      - worker-tmp:/tmp
+    depends_on:
+      init:
+        condition: service_completed_successfully
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # -- Org sync (runs once after MISP is ready, then exits) ----------------
+  sync:
+    <<: *misp-sync-image
+    user: "1000:1000"
+    env_file:
+      - base/base.env
+      - base/secrets.env
+      - compose.env
+      - compose-secrets.env
+    environment:
+      SYNC_BASE_URL: http://caddy:8080
+    # volumes:
+    #   - ./orgs.yaml:/etc/misp-docker/orgs.yaml:ro
+    depends_on:
+      - caddy
+
+  # -- MISP modules (enrichment, import, export, actions) -------------------
+  modules:
+    <<: *misp-modules-image
+    environment:
+      MPLCONFIGDIR: /tmp/matplotlib
+    tmpfs:
+      - /tmp:size=100M
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:6666/healthcheck')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # -- Prometheus metrics exporter ------------------------------------------
+  metrics:
+    <<: *misp-metrics-image
+    user: "1000:1000"
+    env_file:
+      - base/base.env
+      - base/secrets.env
+      - compose.env
+      - compose-secrets.env
+    ports:
+      - "9191:9191"
+    depends_on:
+      mysql:
+        condition: service_healthy
+
+  # -- MariaDB -------------------------------------------------------------
+  mysql:
+    image: docker.io/library/mariadb:11.8.6@sha256:78a5047d3ba33975f183f183c2464cc7f1eab13ec8667e57cc9a5821d6da7577
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --max-allowed-packet=1G
+    env_file:
+      - base/secrets.env
+      - compose-secrets.env
+    environment:
+      MARIADB_DATABASE: misp
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  # -- Redis ---------------------------------------------------------------
+  redis:
+    image: docker.io/library/redis:8.6.3-trixie@sha256:0c341492924cad6f5483f9133e43bd6c51ecdecbcadfac5b51657393b6a7936c
+    env_file:
+      - compose-secrets.env
+    command: >
+      sh -c 'redis-server
+      --requirepass "$$MISP_REDIS_PASSWORD"
+      --maxmemory 128mb
+      --maxmemory-policy noeviction
+      --save ""
+      --appendonly no'
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a $$MISP_REDIS_PASSWORD --no-auth-warning ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  misp-files:
+  misp-attachments:
+  misp-config:
+  misp-tmp:
+  misp-gnupg:
+  misp-img-orgs:
+  misp-img-custom:
+  init-tmp:
+  php-tmp:
+  worker-misp-tmp:
+  worker-tmp:
+  mysql-data:
+  caddy-data:
+  caddy-config:

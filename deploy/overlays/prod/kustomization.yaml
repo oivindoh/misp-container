@@ -1,0 +1,46 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: misp-prod
+
+labels:
+  - pairs:
+      app.kubernetes.io/instance: misp-prod
+
+resources:
+  - ../../base
+
+# Secrets: KSOPS decrypts and generates a Secret with behavior:merge
+# annotation so it merges with the base secretGenerator output.
+# Encrypt with: sops -e -i secrets.sops.yaml
+generators:
+  - ksops-generator.yaml
+
+configMapGenerator:
+  - name: misp-env
+    behavior: merge
+    literals:
+      - MISP_BASEURL=https://misp.example.com
+      - MISP_EXTERNAL_BASEURL=https://misp.example.com
+      - SECURITY_REST_CLIENT_BASEURL=https://misp.example.com
+      - ADMIN_EMAIL=misp-admin@example.com
+      - ADMIN_ORG=My Organisation
+      - MISP_UUID=06732f0d-87e3-4ede-8767-4e0e9879414c
+      - MISP_EMAIL=misp-admin@example.com
+      - MISP_CONTACT=misp-admin@example.com
+
+patches:
+  # Ingress: set host and annotations
+  - target:
+      kind: Ingress
+      name: misp
+    patch: |
+      - op: add
+        path: /metadata/annotations/cert-manager.io~1cluster-issuer
+        value: your-cluster-issuer
+      - op: replace
+        path: /spec/tls/0/hosts/0
+        value: misp.example.com
+      - op: replace
+        path: /spec/rules/0/host
+        value: misp.example.com

@@ -1,0 +1,7 @@
+.git
+.github
+deploy
+*.md
+LICENSE
+.dockerignore
+.claude

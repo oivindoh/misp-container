@@ -1,0 +1,23 @@
+# Editor / OS
+.DS_Store
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+
+# Claude
+.claude/
+
+# Docker
+docker-compose.override.yml
+
+# SOPS - never commit decrypted secrets
+**/secrets.dec.yaml
+
+# Python
+*.pyc
+__pycache__/
+.venv/
+.pytest_cache/TODO.md
+TODO.md

@@ -1,0 +1,824 @@
+# MISP container settings configuration.
+#
+# Format:
+#   settings:
+#     <group>:
+#       <MISP.setting.name>:
+#         value: <default value>
+#         force: true          # optional: pass -f to cake
+#         blank_protection: true  # optional: skip if env var is empty
+#         since: v2.5.40       # optional: re-apply on image upgrade past this version
+#
+# Env var override convention:
+#   Any setting can be overridden by an env var derived from the setting name:
+#     MISP.redis_host   -> MISP_REDIS_HOST
+#     Plugin.S3_bucket_name -> PLUGIN_S3_BUCKET_NAME
+#   If the env var exists and is non-empty, the setting is enforced every startup.
+#   If no env var, the default is applied once (then user owns it via the UI).
+#
+# Groups are applied in order:
+#   minimum_config -> db_enable -> initialisation -> critical -> optional -> gpg -> s3 -> proxy -> kafka -> linotp
+
+settings:
+
+  # -- minimum_config: bootstrap settings written to config.php ----------------
+  minimum_config:
+
+    # Redis connection
+    MISP.redis_host:
+      description: "The host running the redis server to be used for generic MISP tasks such as caching. This is not to be confused by th..."
+      value: redis
+    MISP.redis_port:
+      description: "The port used by the redis server to be used for generic MISP tasks such as caching. This is not to be confused by th..."
+      value: 6379
+    MISP.redis_password:
+      value: ""
+      sensitive: true
+    MISP.redis_database:
+      description: "The database on the redis server to be used for generic MISP tasks. If you run more than one MISP instance, please ma..."
+      value: 13
+
+    # Redis serializer
+    MISP.redis_serializer:
+      description: "Redis serializer method. WARNING: Changing this setting will drop some cached data"
+      value: JSON
+
+    # ZeroMQ Redis (mirrors MISP Redis by default)
+    Plugin.ZeroMQ_redis_host:
+      description: "Location of the Redis db used by MISP and the Python PUB script to queue data to be published"
+      value: redis
+    Plugin.ZeroMQ_redis_port:
+      description: "The port that Redis is listening on"
+      value: 6379
+    Plugin.ZeroMQ_redis_password:
+      value: ""
+      sensitive: true
+    Plugin.ZeroMQ_redis_database:
+      description: "The database to be used for queuing messages for the pub/sub functionality"
+      value: 1
+    Plugin.ZeroMQ_redis_namespace:
+      description: "The namespace to be used for queuing messages for the pub/sub functionality"
+      value: mispq
+    Plugin.ZeroMQ_enable:
+      description: "Enables or disables the pub/sub feature of MISP. Make sure that you install the requirements for the plugin to work. ..."
+      value: false
+    Plugin.ZeroMQ_host:
+      description: "The host that the pub/sub feature will use"
+      value: "127.0.0.1"
+    Plugin.ZeroMQ_port:
+      description: "The port that the pub/sub feature will use"
+      value: 50000
+    Plugin.ZeroMQ_password:
+      value: ""
+      sensitive: true
+
+    # Background jobs Redis + supervisor
+    SimpleBackgroundJobs.enabled:
+      description: "Enables or disables background jobs with Supervisor backend. <span class=\"red bold\">Please read <a href=\"https://gith..."
+      value: true
+    SimpleBackgroundJobs.supervisor_host:
+      description: "The host where the Supervisor XML-RPC API is running"
+      value: "127.0.0.1"
+    SimpleBackgroundJobs.supervisor_port:
+      description: "The port where the Supervisor XML-RPC API is running"
+      value: 9001
+    SimpleBackgroundJobs.supervisor_user:
+      description: "The user of the Supervisor XML-RPC API"
+      value: supervisor
+    SimpleBackgroundJobs.supervisor_password:
+      value: supervisor
+      sensitive: true
+    SimpleBackgroundJobs.redis_host:
+      description: "The host running the redis server to be used for background jobs"
+      value: redis
+    SimpleBackgroundJobs.redis_port:
+      description: "The port used by the redis server to be used for background jobs"
+      value: 6379
+    SimpleBackgroundJobs.redis_password:
+      value: ""
+      sensitive: true
+    SimpleBackgroundJobs.redis_database:
+      description: "The database on the redis server to be used for background jobs. If you run more than one MISP instance, please make ..."
+      value: 1
+    SimpleBackgroundJobs.redis_namespace:
+      description: "The namespace to be used for the background jobs related keys"
+      value: background_jobs
+    SimpleBackgroundJobs.max_job_history_ttl:
+      description: "The time in seconds the job statuses history will be kept"
+      value: 86400
+    SimpleBackgroundJobs.redis_serializer:
+      description: "Redis serializer method. WARNING: Changing this setting in production will break your jobs"
+      value: JSON
+
+    # Paths and binaries
+    MISP.python_bin:
+      description: "It is highly recommended to install all the python dependencies in a virtualenv. The recommended location is: /var/ww..."
+      value: /usr/bin/python3
+    GnuPG.binary:
+      description: "The location of the GnuPG executable. If you would like to use a different GnuPG executable than /usr/bin/gpg, you ca..."
+      value: /usr/bin/gpg
+    MISP.tmpdir:
+      description: "Please indicate the temp directory you wish to use for certain functionalities in MISP. By default this is set to /va..."
+      value: /var/www/MISP/app/tmp
+    MISP.attachments_dir:
+      description: "Directory where attachments are stored. MISP will NOT migrate the existing data if you change this setting. The only ..."
+      value: /var/www/MISP/app/attachments
+    MISP.ca_path:
+      description: "MISP will default to the bundled mozilla certificate bundle shipped with the framework, which is rather stale. If you..."
+      value: /etc/ssl/certs/ca-certificates.crt
+      force: true
+
+    # Instance identity
+    MISP.osuser:
+      description: "The Unix user MISP (php) is running as"
+      value: misp
+    MISP.uuid:
+      description: "The MISP instance UUID. This UUID is used to identify this instance"
+      value: ""
+      force: true
+
+    # Security bootstrap
+    Security.salt:
+      value: ""
+      sensitive: true
+      force: true
+    Security.rest_client_enable_arbitrary_urls:
+      description: "Enable this setting if you wish for users to be able to query any arbitrary URL via the rest client. Keep in mind tha..."
+      value: false
+    Security.disable_local_feed_access:
+      description: "Disabling this setting will allow the creation/modification of local feeds (as opposed to network feeds). Enabling th..."
+      value: false
+    Security.disable_instance_file_uploads:
+      description: "When enabled, the \"Manage files\" menu is disabled on the server settings. You can still copy files via ssh to the app..."
+      value: false
+
+    # Feature toggles
+    MISP.download_gpg_from_homedir:
+      description: "Fetch GPG instance key from GPG keyring. Be careful a user with the email address used for the instance key can overr..."
+      value: true
+    MISP.background_jobs:
+      description: "Enables the use of MISP's background processing"
+      value: true
+    MISP.online_version_check:
+      description: "Enable the online MISP version check when loading the Diagnostics page"
+      value: false
+    MISP.self_update:
+      description: "Enable the GUI button for MISP self-update on the Diagnostics page"
+      value: false
+    MISP.menu_custom_right_link:
+      description: "Custom right menu URL"
+      value: ""
+    MISP.menu_custom_right_link_html:
+      description: "Custom right menu text (it is possible to use HTML)"
+      value: ""
+
+  # -- db_enable: toggle system_setting_db -------------------------------------
+  db_enable:
+
+    MISP.system_setting_db:
+      description: "Enable storing setting in database"
+      value: true
+
+  # -- initialisation: core instance settings ----------------------------------
+  initialisation:
+
+    # Instance identity and contact
+    debug:
+      value: 0
+      force: true
+    MISP.baseurl:
+      description: "The base url of the application (in the format https://www.mymispinstance.com or https://myserver.com/misp). Several ..."
+      value: https://localhost
+    MISP.email:
+      description: "The e-mail address that MISP should use for all notifications"
+      value: admin@admin.test
+    MISP.contact:
+      description: "The e-mail address that MISP should include as a contact address for the instance's support team"
+      value: admin@admin.test
+    MISP.attachments_dir:
+      description: "Directory where attachments are stored. MISP will NOT migrate the existing data if you change this setting. The only ..."
+      value: /var/www/MISP/app/attachments
+    MISP.uuid:
+      description: "The MISP instance UUID. This UUID is used to identify this instance"
+      value: ""
+      blank_protection: true
+    MISP.language:
+      description: "Select the language MISP should use. The default is english"
+      value: eng
+
+    # Security
+    Security.encryption_key:
+      value: ""
+      sensitive: true
+      force: true
+      blank_protection: true
+    Security.salt:
+      value: ""
+      sensitive: true
+      force: true
+      blank_protection: true
+    Security.advanced_authkeys:
+      description: "Advanced authkeys will allow each user to create and manage a set of authkeys for themselves, each with individual ex..."
+      value: true
+    Security.disable_browser_cache:
+      description: "If enabled, HTTP headers that block browser cache will be send. Static files (like images or JavaScripts) will still ..."
+      value: true
+    Security.check_sec_fetch_site_header:
+      description: "If enabled, any POST, PUT or AJAX request will only be allowed when Sec-Fetch-Site header is not defined or contains ..."
+      value: true
+    Security.username_in_response_header:
+      description: "When enabled, logged in username will be included in X-Username HTTP response header. This is useful for request logg..."
+      value: true
+    Security.do_not_log_authkeys:
+      description: "If enabled, any authkey will be replaced by asterisks in Audit log"
+      value: true
+    Security.log_each_individual_auth_fail:
+      description: "By default API authentication failures that happen within the same hour for the same key are omitted and a single log..."
+      value: true
+    Security.alert_on_suspicious_logins:
+      description: "When enabled, MISP will alert users of logins from new devices / suspicious logins. Please make sure that your logs t..."
+      value: false
+    Security.require_password_confirmation:
+      description: "Enabling this setting will require users to submit their current password on any edits to their profile (including a ..."
+      value: true
+    SecureAuth.amount:
+      description: "The number of tries a user can try to login and fail before the bruteforce protection kicks in"
+      value: 5
+    SecureAuth.expire:
+      description: "The duration (in seconds) of how long the user will be locked out when the allowed number of login attempts are exhau..."
+      value: 300
+
+    # Password policy
+    Security.password_policy_length:
+      description: "Password length requirement. If it is not set or it is set to 0, then the default value is assumed (12)"
+      value: 12
+    # 12-15 must be "complex" - after 16 characters anything goes
+    Security.password_policy_complexity:
+      description: "Password complexity requirement. Leave it empty for the default setting (3 out of 4, with either a digit or a special..."
+      value: '/^((?=.*\d)|(?=.*\W+))(?![\n])(?=.*[A-Z])(?=.*[a-z]).*$|.{16,}/'
+    Security.api_key_quick_lookup_expiration:
+      description: "If the api key quick lookup is enabled, this setting will allow you to tune the expiration of the keys in redis. A lo..."
+      value: 180
+
+    # Email OTP
+    Security.email_otp_length:
+      description: "Define the length of the OTP code sent by email"
+      value: 6
+    Security.email_otp_validity:
+      description: "Define the validity (in minutes) of the OTP code sent by email"
+      value: 5
+
+    # Logging
+    Security.syslog_to_stderr:
+      description: "Write syslog messages also to standard error output"
+      value: true
+
+    # Session
+    Session.defaults:
+      description: "The session type used by MISP. The default setting is php, which will use the session settings configured in php.ini ..."
+      value: php
+    Session.timeout:
+      description: "The timeout duration of sessions (in MINUTES). 0 does not mean infinite for the PHP session handler, instead sessions..."
+      value: 60
+    Session.cookieTimeout:
+      description: "The expiration of the cookie (in MINUTES). The session timeout gets refreshed frequently, however the cookies do not...."
+      value: 60
+
+    # Event defaults
+    MISP.showorg:
+      description: "Setting this setting to 'false' will hide all organisation names / logos"
+      value: true
+    MISP.default_event_distribution:
+      description: "The default distribution setting for events (0-4)"
+      value: 1
+    MISP.default_event_tag_collection:
+      description: "The tag collection to be applied to all events created manually"
+      value: 0
+    MISP.default_attribute_distribution:
+      description: "The default distribution setting for attributes, set it to 'event' if you would like the attributes to default to the..."
+      value: event
+    MISP.default_object_distribution:
+      description: "The default distribution setting for objects, set it to 'event' if you would like the objects to default to the event..."
+      value: event
+    MISP.default_eventreport_distribution:
+      description: "The default distribution setting for event-reports, set it to 'event' if you would like the event-reports to default ..."
+      value: event
+    MISP.default_galaxy_distribution:
+      description: "The default distribution setting for Galaxies and Clusters (0-3)"
+      value: 1
+    MISP.default_analyst_data_distribution:
+      description: "The default distribution setting for analyst-data (notes, opinions, ...) (0-3)"
+      value: 1
+    MISP.default_event_threat_level:
+      description: "The default threat level setting when creating events"
+      value: 4
+    MISP.default_publish_alert:
+      description: "The default setting for publish alerts when creating users"
+      value: true
+    MISP.proposals_block_attributes:
+      description: "Enable this setting to allow blocking attributes from to_ids sensitive exports if a proposal has been made to it to r..."
+      value: false
+    MISP.tagging:
+      description: "Enable the tagging feature of MISP. This is highly recommended"
+      value: true
+    MISP.enableEventBlocklisting:
+      description: "Since version 2.3.107 you can start blocklisting event UUIDs to prevent them from being pushed to your instance. This..."
+      value: true
+    MISP.enableOrgBlocklisting:
+      description: "Blocklisting organisation UUIDs to prevent the creation of any event created by the blocklisted organisation"
+      value: true
+    MISP.incoming_tags_disabled_by_default:
+      description: "Enable this settings if new tags synced / added via incoming events from any source should not be selectable by users..."
+      value: false
+    MISP.full_tags_on_event_index:
+      description: "Show the full tag names on the event index"
+      value: 1
+    MISP.event_alert_republish_ban:
+      description: "Enable this setting to start blocking alert e-mails for events that have already been published since a specified amo..."
+      value: true
+    MISP.event_alert_republish_ban_refresh_on_retry:
+      description: "If the MISP.event_alert_republish_ban setting is set, this setting will control if a ban time should be reset if emai..."
+      value: true
+    MISP.event_alert_republish_ban_threshold:
+      description: "If the MISP.event_alert_republish_ban setting is set, this setting will control how long no alerting by email will be..."
+      value: 120
+    MISP.showCorrelationsOnIndex:
+      description: "When enabled, the number of correlations visible to the currently logged in user will be visible on the event index U..."
+      value: true
+
+    # Misc
+    MISP.store_api_access_time:
+      description: "If enabled, MISP will capture a users' last API access time following every successful authentication using API keys ..."
+      value: false
+    MISP.log_auth:
+      description: "If enabled, MISP will log all successful authentications using API keys. The requested URLs are also logged"
+      value: true
+    MISP.log_new_audit:
+      description: "Enable new audit log system"
+      value: true
+    MISP.disable_user_login_change:
+      description: "When enabled only Site admins can change user email. This should be enabled if you manage user logins by external system"
+      value: false
+    MISP.server_settings_skip_backup_rotate:
+      description: "Enable this setting to directly save the config.php file without first creating a temporary file and moving it to avo..."
+      value: false
+    MISP.user_email_notification_ban:
+      description: "Enable this setting to start blocking users to send too many e-mails notification since a specified amount of time. T..."
+      value: true
+    MISP.delegation:
+      description: "This feature allows users to create org only events and ask another organisation to take ownership of the event. This..."
+      value: true
+    MISP.take_ownership_xml_import:
+      description: "Allows users to take ownership of an event uploaded via the \"Add MISP XML\" button. This allows spoofing the creator o..."
+      value: false
+    MISP.unpublishedprivate:
+      description: "True will deny access to unpublished events to users outside the organization of the submitter except site admins"
+      value: false
+    MISP.terms_download:
+      description: "Choose whether the terms and conditions should be displayed inline (false) or offered as a download (true)"
+      value: false
+    MISP.disable_emailing:
+      description: "You can disable all e-mailing using this setting. When enabled, no outgoing e-mails will be sent by MISP"
+      value: true
+    MISP.showorgalternate:
+      description: "True enables the alternate org fields for the event index (source org and member org) instead of the traditional way ..."
+      value: false
+
+    # Correlation
+    MISP.correlation_engine:
+      description: "Choose which correlation engine to use. MISP defaults to the default engine, maintaining all data in the database whi..."
+      value: default
+    MISP.correlation_limit:
+      description: "Set a value for the maximum number of correlations a value should have before MISP will refuse to correlate it (extre..."
+      value: 20
+    MISP.max_correlations_per_event:
+      description: "Sets the maximum number of correlations that can be fetched with a single event. For extreme edge cases this can prev..."
+      value: 5000
+    MISP.correlation_chunk_size:
+      description: "When correlating large events, set a number of attributes that MISP will fetch per round when recorrelating. Large ch..."
+      value: 5000
+    MISP.ssdeep_correlation_threshold:
+      description: "Set the ssdeep score at which to consider two ssdeep hashes as correlating [1-100]"
+      value: 40
+
+    # Email subjects
+    MISP.email_subject_tag:
+      description: "If this tag is set on an event it's value will be sent in the E-mail subject. If the tag is not set the email_subject..."
+      value: tlp
+    MISP.email_subject_TLP_string:
+      description: "This is the TLP string for e-mails when email_subject_tag is not found"
+      value: "tlp:amber"
+    MISP.email_subject_include_tag_name:
+      description: "Include in name of the email_subject_tag in the subject. When false only the tag value is used"
+      value: true
+    MISP.threatlevel_in_email_subject:
+      description: "Put the event threat level in the notification E-mail subject"
+      value: true
+    MISP.block_event_alert_tag:
+      description: "If the MISP.block_event_alert setting is set, alert e-mails for events tagged with the tag defined by this setting wi..."
+      value: 'no-alerts="true"'
+
+    # Operational
+    MISP.title_text:
+      description: "Used in the page title, after the name of the page"
+      value: MISP
+    MISP.manage_workers:
+      description: "Set this to false if you would like to disable MISP managing its own worker processes (for example, if you are managi..."
+      value: true
+    MISP.disablerestalert:
+      description: "This setting controls whether notification e-mails will be sent when an event is created via the REST interface. It m..."
+      value: true
+    MISP.disable_cached_exports:
+      description: "Cached exports can take up a considerable amount of space and can be disabled instance wide using this setting. Even ..."
+      value: true
+    MISP.download_attachments_on_load:
+      description: "Always download attachments when loaded by a user in a browser. It is highly recommended to leave this setting on tru..."
+      value: true
+    MISP.enableSightingBlocklisting:
+      description: "Blocklisting organisation UUIDs to prevent the creation of any sightings created by the blocklisted organisation"
+      value: true
+    MISP.hide_unknown_cluster:
+      description: "This will hide unknown cluster to all users expect those having the sync permission"
+      value: true
+    MISP.event_view_filter_fields:
+      description: "Specify which fields to filter on when you search on the event view. Default values are : \"id, uuid, value, comment, ..."
+      value: "id, uuid, value, comment, type, category, Tag.name"
+    MISP.log_client_ip_header:
+      description: "If log_client_ip is enabled, you can customize which header field contains the client's IP address. This is generally..."
+      value: REMOTE_ADDR
+    MISP.log_errors_ndjson_path:
+      description: "Path for the ndjson error log file - defaults to /var/www/MISP/app//app/tmp/logs/error.log.ndjson"
+      value: /var/www/MISP/app/tmp/logs/error.log.ndjson
+    MISP.attachment_scan_timeout:
+      description: "How long to wait for scan results in seconds"
+      value: 30
+    MISP.curl_request_timeout:
+      description: "Control the default timeout in seconds of curl HTTP requests issued by MISP (during synchronisation, feed fetching, e..."
+      value: 300
+    MISP.updateTimeThreshold:
+      description: "Sets the minimum time before being able to re-trigger an update if the previous one failed. (safe guard to avoid star..."
+      value: 7200
+    MISP.default_attribute_memory_coefficient:
+      description: "This values controls the internal fetcher's memory envelope when it comes to attributes. The number provided is the a..."
+      value: 50
+    MISP.default_event_memory_divisor:
+      description: "This value controls the divisor for attribute weighting when it comes to loading full events. Meaning that it will lo..."
+      value: 3
+    MISP.user_email_notification_ban_amount_threshold:
+      description: "If the MISP.user_email_notification_ban setting is set, this setting will control how many notification by email can ..."
+      value: 10
+    MISP.user_email_notification_ban_time_threshold:
+      description: "If the MISP.user_email_notification_ban setting is set, this setting will control how long no notification by email w..."
+      value: 120
+    MISP.cveurl:
+      description: "Turn Vulnerability type attributes into links linking to the provided CVE lookup"
+      value: "https://vulnerability.circl.lu/vuln/"
+    MISP.cweurl:
+      description: "Turn Weakness type attributes into links linking to the provided CWE lookup"
+      value: "https://vulnerability.circl.lu/cwes/"
+
+  # -- critical: always-enforced settings -------------------------------------
+  critical:
+
+    MISP.external_baseurl:
+      description: "The base url of the application (in the format https://www.mymispinstance.com) as visible externally/by other MISPs. ..."
+      value: https://localhost
+    Security.rest_client_baseurl:
+      description: "If left empty, the baseurl of your MISP is used. However, in some instances (such as port-forwarded VM installations)..."
+      value: https://localhost
+    MISP.host_org_id:
+      description: "The hosting organisation of this instance. If this is not selected then replication instances cannot be added"
+      value: 1
+    Plugin.Enrichment_hover_enable:
+      description: "Enable/disable the hover over information retrieved from the enrichment modules"
+      value: false
+    Plugin.Enrichment_hover_popover_only:
+      description: "When enabled, users have to click on the magnifier icon to show the enrichment"
+      value: false
+    Security.csp_enforce:
+      description: "Enforce CSP. Content Security Policy (CSP) is an added layer of security that helps to detect and mitigate certain ty..."
+      value: true
+    Security.do_not_log_authkeys:
+      description: "If enabled, any authkey will be replaced by asterisks in Audit log"
+      value: true
+
+  # -- optional: nice-to-have defaults ----------------------------------------
+  optional:
+
+    MISP.enable_themes:
+      description: "Enable themes for users of the instance. Currently this is used to allow users to opt-in to a the various preview/bet..."
+      value: true
+    MISP.welcome_text_top:
+      description: "Used on the login page, before the MISP logo"
+      value: ""
+      force: true
+    MISP.welcome_text_bottom:
+      description: "Used on the login page, after the MISP logo"
+      value: ""
+      force: true
+    MISP.log_client_ip:
+      description: "If enabled, all log entries will include the IP address of the user"
+      value: true
+    MISP.log_user_ips:
+      description: "Log user IPs on each request. 30 day retention for lookups by IP to get the last authenticated user ID for the given ..."
+      value: true
+    MISP.log_user_ips_authkeys:
+      description: "Log user IP and key usage on each API request. All logs for given keys are deleted after one year when this key is no..."
+      value: true
+
+    # Module service URLs (all point to modules by default)
+    Plugin.Enrichment_services_url:
+      description: "The url used to access the enrichment services. By default, it is accessible at http://127.0.0.1:6666"
+      value: http://modules
+    Plugin.Enrichment_services_port:
+      description: "The port used to access the enrichment services. By default, it is accessible at 127.0.0.1:6666"
+      value: 6666
+    Plugin.Enrichment_services_enable:
+      description: "Enable/disable the enrichment services"
+      value: true
+    Plugin.Enrichment_timeout:
+      description: "Set a timeout for the enrichment services"
+      value: 30
+    Plugin.Enrichment_hover_timeout:
+      description: "Set a timeout for the hover services"
+      value: 5
+    Plugin.Import_services_url:
+      description: "The url used to access the import services. By default, it is accessible at http://127.0.0.1:6666"
+      value: http://modules
+    Plugin.Import_services_port:
+      description: "The port used to access the import services. By default, it is accessible at 127.0.0.1:6666"
+      value: 6666
+    Plugin.Import_services_enable:
+      description: "Enable/disable the import services"
+      value: true
+    Plugin.Export_services_url:
+      description: "The url used to access the export services. By default, it is accessible at http://127.0.0.1:6666"
+      value: http://modules
+    Plugin.Export_services_port:
+      description: "The port used to access the export services. By default, it is accessible at 127.0.0.1:6666"
+      value: 6666
+    Plugin.Export_services_enable:
+      description: "Enable/disable the export services"
+      value: true
+    Plugin.Action_services_url:
+      description: "The url used to access the action services. By default, it is accessible at http://127.0.0.1:6666"
+      value: http://modules
+    Plugin.Action_services_port:
+      description: "The port used to access the action services. By default, it is accessible at 127.0.0.1:6666"
+      value: 6666
+    Plugin.Action_services_enable:
+      description: "Enable/disable the action services"
+      value: true
+    Plugin.Cortex_services_enable:
+      description: "Enable/disable the Cortex services"
+      value: false
+    Plugin.Cortex_services_url:
+      description: "The url used to access Cortex. By default, it is accessible at http://cortex-url"
+      value: "http://127.0.0.1"
+    Plugin.Cortex_services_port:
+      description: "The port used to access Cortex. By default, this is port 9000"
+      value: 9000
+    Plugin.Cortex_timeout:
+      description: "Set a timeout for the Cortex services"
+      value: 120
+    Plugin.Cortex_ssl_verify_host:
+      description: "Set to false if you wish to ignore hostname match errors when validating certificates"
+      value: true
+    Plugin.Cortex_ssl_verify_peer:
+      description: "Set to false to disable SSL verification. This is not recommended"
+      value: true
+    Plugin.Workflow_enable:
+      description: "Enable/disable workflow feature. [experimental]"
+      value: true
+    Plugin.Workflow_debug_url:
+      description: "Set the debug URL where info about workflow execution will be POSTed"
+      value: "http://127.0.0.1:27051"
+
+    # Module timeouts
+    Plugin.Action_timeout:
+      description: "Set a timeout for the action services"
+      value: 10
+    Plugin.Import_timeout:
+      description: "Set a timeout for the import services"
+      value: 10
+    Plugin.Export_timeout:
+      description: "Set a timeout for the export services"
+      value: 10
+
+    # Sightings
+    Plugin.Sightings_policy:
+      description: "This setting defines who will have access to seeing the reported sightings. The default setting is the event owner or..."
+      value: 2
+    Plugin.Sightings_range:
+      description: "Set the range in which sightings will be taken into account when generating graphs. For example a sighting with a sig..."
+      value: 365
+    Plugin.Sightings_anonymise_as:
+      description: "When pushing sightings to another server, report all sightings from this instance as this organisation. This effectiv..."
+      value: 0
+
+    # Benchmarking
+    Plugin.Benchmarking_slow_log_threshold:
+      description: "The duration of a query to be considered a slow query. Default: 5000 (=5s)"
+      value: 5000
+    Plugin.Benchmarking_slow_query_retention:
+      description: "The retention of slow query log entries in seconds. Default: 259200 (=3 days)"
+      value: 259200
+
+    # External lookups
+    Plugin.CyCat_url:
+      description: "URL to use for CyCat lookups, if enabled"
+      value: "https://api.cycat.org"
+    Plugin.Geolocation_url:
+      description: "The base URL of the tile server used for geolocation maps. Defaults to https://geo.circl.lu if not set"
+      value: "https://geo.circl.lu"
+
+    # Custom auth header (used when CustomAuth_enable=true)
+    Plugin.CustomAuth_name:
+      description: "The name of the authentication method, this is cosmetic only and will be shown on the user creation page and logs"
+      value: "External authentication"
+    Plugin.CustomAuth_header:
+      description: "Set the header that MISP should look for here. If left empty it will default to the Authorization header"
+      value: AUTHORIZATION
+    Plugin.CustomAuth_header_namespace:
+      description: "The default header namespace for the auth header - default setting is HTTP_"
+      value: "HTTP_"
+    Plugin.CustomAuth_use_header_namespace:
+      description: "Use a header namespace for the auth header - default setting is enabled"
+      value: true
+
+    # RPZ export
+    Plugin.RPZ_policy:
+      description: "The default policy action for the values added to the RPZ"
+      value: 1
+    Plugin.RPZ_ns:
+      description: "Nameserver"
+      value: "localhost."
+    Plugin.RPZ_email:
+      description: "The e-mail address specified in the SOA portion of the zone file"
+      value: "root.localhost"
+    Plugin.RPZ_ttl:
+      description: "The TTL of the zone file. (in seconds, or shorthand duration such as 15m)"
+      value: "1w"
+    Plugin.RPZ_refresh:
+      description: "The refresh specified in the SOA portion of the zone file. (in seconds, or shorthand duration such as 15m)"
+      value: "2h"
+    Plugin.RPZ_retry:
+      description: "The retry specified in the SOA portion of the zone file. (in seconds, or shorthand duration such as 15m)"
+      value: "30m"
+    Plugin.RPZ_expiry:
+      description: "The expiry specified in the SOA portion of the zone file. (in seconds, or shorthand duration such as 15m)"
+      value: "30d"
+    Plugin.RPZ_minimum_ttl:
+      description: "The minimum TTL specified in the SOA portion of the zone file. (in seconds, or shorthand duration such as 15m)"
+      value: "1h"
+    Plugin.RPZ_serial:
+      description: "The serial in the SOA portion of the zone file. (numeric, best practice is yyyymmddrr where rr is the two digit sub-r..."
+      value: "$date00"
+    Plugin.RPZ_walled_garden:
+      description: "The default walled garden used by the RPZ export if the Local-Data policy setting is picked for the export"
+      value: "127.0.0.1"
+
+    # S3 TLS verification
+    Plugin.S3_aws_validate_ca:
+      description: "Validate CA"
+      value: true
+
+  # -- gpg: GnuPG settings ----------------------------------------------------
+  gpg:
+
+    GnuPG.email:
+      description: "The e-mail address that the instance's GnuPG key is tied to"
+      value: admin@admin.test
+    GnuPG.homedir:
+      description: "The location of the GnuPG homedir"
+      value: /var/www/MISP/.gnupg
+    GnuPG.password:
+      value: ""
+      sensitive: true
+    GnuPG.onlyencrypted:
+      description: "Allow (false) unencrypted e-mails to be sent to users that don't have a GnuPG key"
+      value: false
+    GnuPG.sign:
+      description: "Enable the signing of GnuPG emails. By default, GnuPG emails are signed"
+      value: true
+    SMIME.enabled:
+      description: "Enable S/MIME encryption. The encryption posture of the GnuPG.onlyencrypted and GnuPG.bodyonlyencrypted settings are ..."
+      value: false
+    SMIME.cert_public_sign:
+      description: "The location of the public half of the signing certificate"
+      value: "/var/www/MISP/.smime/email@address.com.pem"
+    SMIME.key_sign:
+      description: "The location of the private half of the signing certificate"
+      value: "/var/www/MISP/.smime/email@address.com.key"
+    SMIME.password:
+      value: ""
+      sensitive: true
+
+  # -- s3: S3 attachment storage (only applied when PLUGIN_S3_BUCKET_NAME is set)
+  s3:
+
+    Plugin.S3_enable:
+      description: "Enables or disables uploading of malware samples to S3 rather than to disk (WARNING: Get permission from amazon first!)"
+      value: true
+    Plugin.S3_aws_compatible:
+      description: "Use external AWS compatible system such as MinIO"
+      value: true
+    Plugin.S3_bucket_name:
+      description: "Bucket name to upload to, please make sure that the bucket exists. We will not create the bucket for you"
+      value: ""
+    Plugin.S3_aws_endpoint:
+      description: "Uses external AWS compatible endpoint such as MinIO"
+      value: ""
+    Plugin.S3_aws_access_key:
+      value: ""
+    Plugin.S3_aws_secret_key:
+      value: ""
+      sensitive: true
+    Plugin.S3_region:
+      description: "S3 region for the bucket"
+      value: ""
+    MISP.attachments_dir:
+      description: "Directory where attachments are stored. MISP will NOT migrate the existing data if you change this setting. The only ..."
+      value: "s3://"
+      force: true
+
+  # -- proxy: HTTP proxy settings (only applied when PROXY_HOST is set)
+  proxy:
+
+    Proxy.host:
+      description: "The hostname of an HTTP proxy for outgoing sync requests. Leave empty to not use a proxy"
+      value: ""
+    Proxy.port:
+      description: "The TCP port for the HTTP proxy"
+      value: ""
+    Proxy.method:
+      description: "The authentication method for the HTTP proxy. Currently supported are Basic or Digest. Leave empty for no proxy authe..."
+      value: ""
+    Proxy.user:
+      description: "The authentication username for the HTTP proxy"
+      value: ""
+    Proxy.password:
+      value: ""
+      sensitive: true
+
+  # -- kafka: Kafka pub/sub integration (only applied when PLUGIN_KAFKA_ENABLE is set)
+  kafka:
+
+    Plugin.Kafka_enable:
+      description: "Enables or disables the Kafka pub feature of MISP. Make sure that you install the requirements for the plugin to work..."
+      value: false
+    Plugin.Kafka_brokers:
+      description: "A comma separated list of Kafka bootstrap brokers"
+      value: "kafka:9092"
+    Plugin.Kafka_rdkafka_config:
+      description: "A path to an ini file with configuration options to be passed to rdkafka. Section headers in the ini file will be ign..."
+      value: "/etc/rdkafka.ini"
+    Plugin.Kafka_event_notifications_topic:
+      description: "Topic for publishing event creations/edits/deletions"
+      value: misp_event
+    Plugin.Kafka_event_publish_notifications_topic:
+      description: "Topic for publishing event information on publish"
+      value: misp_event_publish
+    Plugin.Kafka_object_notifications_topic:
+      description: "Topic for publishing object creations/edits/deletions"
+      value: misp_object
+    Plugin.Kafka_object_reference_notifications_topic:
+      description: "Topic for publishing object reference creations/deletions"
+      value: misp_object_reference
+    Plugin.Kafka_attribute_notifications_topic:
+      description: "Topic for publishing attribute creations/edits/soft deletions"
+      value: misp_attribute
+    Plugin.Kafka_shadow_attribute_notifications_topic:
+      description: "Topic for publishing proposal creations/edits/deletions"
+      value: misp_shadow_attribute
+    Plugin.Kafka_tag_notifications_topic:
+      description: "Topic for publishing tag creations/edits/deletions as well as tags being attached to / detached from various MISP ele..."
+      value: misp_tag
+    Plugin.Kafka_sighting_notifications_topic:
+      description: "Topic for publishing sightings"
+      value: misp_sighting
+    Plugin.Kafka_organisation_notifications_topic:
+      description: "Topic for publishing new/modified organisations"
+      value: misp_organisation
+    Plugin.Kafka_user_notifications_topic:
+      description: "Topic for publishing new/modified users"
+      value: misp_user
+    Plugin.Kafka_audit_notifications_topic:
+      description: "Topic for publishing log entries"
+      value: misp_audit
+
+  # -- linotp: LinOTP two-factor authentication
+  linotp:
+
+    LinOTPAuth.enabled:
+      description: "Enable / Disable LinOTP"
+      value: false
+    LinOTPAuth.baseUrl:
+      description: "The default LinOTP URL"
+      value: "https://<your-linotp-baseUrl>"
+    LinOTPAuth.realm:
+      description: "The LinOTP realm to authenticate against"
+      value: lino
+    LinOTPAuth.verifyssl:
+      description: "Set to false to skip SSL/TLS verify"
+      value: true

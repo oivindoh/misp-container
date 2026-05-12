@@ -1,0 +1,86 @@
+# Test overlay -- overrides docker-compose.yml with test-specific values.
+# Used by tests/run-integration-tests.sh
+
+x-test-env: &test-env
+  env_file:
+    - base/base.env
+    - base/secrets.env
+    - ../tests/test-compose.env
+    - ../tests/test-compose-secrets.env
+
+services:
+  # read_only on all our containers to catch filesystem write issues
+  # before they hit Kubernetes (readOnlyRootFilesystem: true)
+  init:
+    <<: *test-env
+    read_only: true
+  web:
+    <<: *test-env
+    # Not read_only: version-gate tests patch /etc/misp-docker/settings.yaml.
+    # In K8s, readOnlyRootFilesystem is set and settings.yaml is mounted read-only.
+  worker:
+    <<: *test-env
+    read_only: true
+
+  caddy:
+    read_only: true
+    ports:
+      - "18080:8080"
+
+  sync:
+    read_only: true
+    env_file:
+      - base/base.env
+      - base/secrets.env
+      - ../tests/test-compose.env
+      - ../tests/test-compose-secrets.env
+
+  metrics:
+    read_only: true
+    env_file:
+      - base/base.env
+      - base/secrets.env
+      - ../tests/test-compose.env
+      - ../tests/test-compose-secrets.env
+    ports:
+      - "19191:9191"
+
+  modules:
+    read_only: true
+    ports:
+      - "16666:6666"
+
+  mysql:
+    env_file:
+      - base/secrets.env
+      - ../tests/test-compose-secrets.env
+    environment:
+      MARIADB_DATABASE: misp
+
+  redis:
+    env_file:
+      - ../tests/test-compose-secrets.env
+    command: >
+      sh -c 'redis-server
+      --requirepass "$$MISP_REDIS_PASSWORD"
+      --maxmemory 128mb
+      --maxmemory-policy noeviction
+      --save ""
+      --appendonly no'
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a $$MISP_REDIS_PASSWORD --no-auth-warning ping"]
+
+  # S3-compatible storage for attachment testing
+  garage:
+    image: dxflrs/garage:v2.3.0
+    ports:
+      - "3900:3900"
+      - "3903:3903"
+    volumes:
+      - ../tests/garage.toml:/etc/garage.toml:ro
+      - garage-data:/tmp/garage
+    environment:
+      GARAGE_CONFIG_FILE: /etc/garage.toml
+
+volumes:
+  garage-data:

@@ -1,0 +1,48 @@
+[tools]
+python = "3.13"
+uv = "latest"
+
+[env]
+VIRTUAL_ENV = "{{config_root}}/.venv"
+PYTHONPATH = "{{config_root}}/files"
+_.path = [".venv/bin"]
+
+[hooks.enter]
+run = "test -d .venv || uv sync --python 3.13"
+
+[tasks.test]
+description = "Run unit tests"
+run = "python -m pytest tests/ -v"
+
+[tasks.test-integration]
+description = "Run integration tests (requires Docker)"
+run = "tests/run-integration-tests.sh"
+
+[tasks.test-sync]
+description = "Run hub-spoke sync test (3 MISP instances)"
+run = "tests/run-sync-test.sh"
+
+[tasks.test-all]
+description = "Run unit + integration + sync tests"
+depends = ["test", "test-integration", "test-sync"]
+
+[tasks.smoketest]
+description = "Run smoke test against a live MISP instance"
+run = """
+#!/usr/bin/env bash
+URL="${1:?Usage: mise run smoketest <url>}"
+read -rsp "API key: " KEY; echo
+tests/smoketest.sh "$URL" "$KEY"
+"""
+
+[tasks.logs]
+description = "Follow integration test compose logs"
+run = "docker compose -f deploy/docker-compose.yml -f tests/docker-compose.test.yml logs -f"
+
+[tasks.logs-sync]
+description = "Follow sync test compose logs"
+run = "docker compose -f tests/docker-compose.sync-test.yml logs -f"
+
+[tasks.release]
+description = "Prepare a release: bump MISP version (optional), update image tags, create git tag"
+run = "scripts/release.sh ${@}"

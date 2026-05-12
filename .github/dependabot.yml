@@ -1,0 +1,13 @@
+version: 2
+updates:
+  # Keep GitHub Actions pinned SHAs up to date
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+
+  # Track Dockerfile base image updates
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly

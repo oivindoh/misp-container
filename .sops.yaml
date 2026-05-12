@@ -1,0 +1,11 @@
+creation_rules:
+  # Kubernetes Secret manifests
+  - path_regex: '\.sops\.yaml$'
+    encrypted_regex: "^(data|stringData)$"
+    age: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIP85EpeWD3ZQyeCG6gYJTwK1dC3ZhWgv739bHO21PpAz
+
+  # dotenv secret files (encrypt values, keys stay readable)
+  - path_regex: 'secrets\.env$'
+    age: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIP85EpeWD3ZQyeCG6gYJTwK1dC3ZhWgv739bHO21PpAz
+  - path_regex: 'secrets\.sops\.env$'
+    age: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIP85EpeWD3ZQyeCG6gYJTwK1dC3ZhWgv739bHO21PpAz

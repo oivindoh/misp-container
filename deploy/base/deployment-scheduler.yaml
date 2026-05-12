@@ -1,0 +1,145 @@
+# Single-replica scheduler for MISP workflow ad-hoc execution.
+# Must not be scaled past 1 -- duplicate schedulers cause double execution.
+# Standard periodic tasks (feeds, sync, taxonomy updates) are handled
+# by Kubernetes CronJobs instead.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: scheduler
+  labels:
+    app: scheduler
+    app.kubernetes.io/name: scheduler
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: scheduler
+      app.kubernetes.io/name: scheduler
+  template:
+    metadata:
+      labels:
+        app: scheduler
+        app.kubernetes.io/name: scheduler
+    spec:
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+
+      initContainers:
+        - name: init-misp-files
+          image: ghcr.io/oivindoh/misp-container
+          command: ["/usr/bin/tini", "--", "python3", "/entrypoint-init.py"]
+          envFrom:
+            - configMapRef:
+                name: misp-env
+            - secretRef:
+                name: misp-secrets
+          volumeMounts:
+            - name: misp-files
+              mountPath: /var/www/MISP/app/files
+            - name: misp-config
+              mountPath: /var/www/MISP/app/Config
+            - name: misp-tmp
+              mountPath: /var/www/MISP/app/tmp
+            - name: misp-gnupg
+              mountPath: /var/www/MISP/.gnupg
+            - name: init-tmp
+              mountPath: /tmp
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+
+      containers:
+        - name: scheduler
+          image: ghcr.io/oivindoh/misp-container
+          command: ["/usr/bin/tini", "--", "python3", "/entrypoint-worker.py"]
+          env:
+            # Only run the scheduler, no job queue workers
+            - name: NUM_WORKERS_DEFAULT
+              value: "0"
+            - name: NUM_WORKERS_PRIO
+              value: "0"
+            - name: NUM_WORKERS_EMAIL
+              value: "0"
+            - name: NUM_WORKERS_UPDATE
+              value: "0"
+            - name: NUM_WORKERS_CACHE
+              value: "0"
+            - name: ENABLE_SCHEDULER
+              value: "true"
+          envFrom:
+            - configMapRef:
+                name: misp-env
+            - secretRef:
+                name: misp-secrets
+          volumeMounts:
+            - name: misp-files
+              mountPath: /var/www/MISP/app/files
+            - name: misp-config
+              mountPath: /var/www/MISP/app/Config
+            - name: misp-tmp
+              mountPath: /var/www/MISP/app/tmp
+            - name: misp-gnupg
+              mountPath: /var/www/MISP/.gnupg
+            - name: scheduler-tmp
+              mountPath: /tmp
+          resources:
+            requests:
+              cpu: 5m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+          startupProbe:
+            exec:
+              command: ["test", "-S", "/tmp/supervisor.sock"]
+            failureThreshold: 60
+            periodSeconds: 5
+          readinessProbe:
+            exec:
+              command: ["test", "-S", "/tmp/supervisor.sock"]
+            periodSeconds: 30
+          livenessProbe:
+            exec:
+              command: ["test", "-S", "/tmp/supervisor.sock"]
+            periodSeconds: 60
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+
+      volumes:
+        - name: misp-files
+          emptyDir:
+            sizeLimit: 2Gi
+        - name: misp-config
+          emptyDir:
+            sizeLimit: 10Mi
+        - name: misp-tmp
+          emptyDir:
+            sizeLimit: 1Gi
+        - name: misp-gnupg
+          emptyDir:
+            sizeLimit: 10Mi
+        - name: scheduler-tmp
+          emptyDir:
+            sizeLimit: 100Mi
+        - name: init-tmp
+          emptyDir:
+            sizeLimit: 500Mi

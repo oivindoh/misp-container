@@ -1,0 +1,208 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+  labels:
+    app: web
+    app.kubernetes.io/name: web
+spec:
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: web
+      app.kubernetes.io/name: web
+  template:
+    metadata:
+      labels:
+        app: web
+        app.kubernetes.io/name: web
+    spec:
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+
+      initContainers:
+        - name: init-misp-files
+          image: ghcr.io/oivindoh/misp-container
+          command: ["/usr/bin/tini", "--", "python3", "/entrypoint-init.py"]
+          envFrom:
+            - configMapRef:
+                name: misp-env
+            - secretRef:
+                name: misp-secrets
+          volumeMounts:
+            - name: misp-files
+              mountPath: /var/www/MISP/app/files
+            - name: misp-config
+              mountPath: /var/www/MISP/app/Config
+            - name: misp-tmp
+              mountPath: /var/www/MISP/app/tmp
+            - name: misp-gnupg
+              mountPath: /var/www/MISP/.gnupg
+            - name: misp-img-orgs
+              mountPath: /var/www/MISP/app/webroot/img/orgs
+            - name: misp-img-custom
+              mountPath: /var/www/MISP/app/webroot/img/custom
+            - name: init-tmp
+              mountPath: /tmp
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+
+      containers:
+        # caddy sidecar - lightweight scratch image with static webroot files
+        - name: caddy
+          image: ghcr.io/oivindoh/misp-container-caddy
+          command: ["caddy", "run", "--config", "/etc/caddy/Caddyfile"]
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          volumeMounts:
+            - name: misp-img-orgs
+              mountPath: /var/www/MISP/app/webroot/img/orgs
+              readOnly: true
+            - name: misp-img-custom
+              mountPath: /var/www/MISP/app/webroot/img/custom
+              readOnly: true
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 500m
+              memory: 128Mi
+          # caddy is ready once it can serve the login page (php-fpm must be up too)
+          startupProbe:
+            httpGet:
+              path: /users/login
+              port: 8080
+            failureThreshold: 60
+            periodSeconds: 2
+          readinessProbe:
+            httpGet:
+              path: /users/login
+              port: 8080
+            periodSeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /users/login
+              port: 8080
+            periodSeconds: 30
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+
+        # PHP-FPM - the MISP application
+        - name: php-fpm
+          image: ghcr.io/oivindoh/misp-container
+          command: ["/usr/bin/tini", "--", "python3", "/entrypoint-web.py"]
+          ports:
+            - name: php-fpm
+              containerPort: 9002
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: misp-env
+            - secretRef:
+                name: misp-secrets
+          volumeMounts:
+            - name: misp-files
+              mountPath: /var/www/MISP/app/files
+            - name: misp-config
+              mountPath: /var/www/MISP/app/Config
+            - name: misp-tmp
+              mountPath: /var/www/MISP/app/tmp
+            - name: misp-gnupg
+              mountPath: /var/www/MISP/.gnupg
+            - name: misp-img-orgs
+              mountPath: /var/www/MISP/app/webroot/img/orgs
+            - name: misp-img-custom
+              mountPath: /var/www/MISP/app/webroot/img/custom
+            - name: php-run
+              mountPath: /run/php
+            - name: php-tmp
+              mountPath: /tmp
+          resources:
+            requests:
+              cpu: 100m
+              memory: 1Gi
+            limits:
+              cpu: 2000m
+              memory: 4Gi
+          # FPM startup can take 30s+ on cold start (DB init, configure).
+          # tcpSocket for startup/liveness (is FPM alive?), exec for readiness
+          # (is the application actually serving? checks MISP.live in DB).
+          startupProbe:
+            tcpSocket:
+              port: 9002
+            failureThreshold: 60
+            periodSeconds: 2
+          readinessProbe:
+            exec:
+              command:
+                - python3
+                - -c
+                - |
+                  from misp_container.db import query
+                  v = query("SELECT value FROM system_settings WHERE setting='MISP.live'").strip().strip('"')
+                  exit(0 if v == 'true' else 1)
+            periodSeconds: 3
+          livenessProbe:
+            tcpSocket:
+              port: 9002
+            periodSeconds: 30
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+
+      volumes:
+        - name: misp-files
+          emptyDir:
+            sizeLimit: 2Gi
+        - name: misp-config
+          emptyDir:
+            sizeLimit: 10Mi
+        - name: misp-tmp
+          emptyDir:
+            sizeLimit: 1Gi
+        - name: misp-gnupg
+          emptyDir:
+            sizeLimit: 10Mi
+        - name: misp-img-orgs
+          emptyDir:
+            sizeLimit: 100Mi
+        - name: misp-img-custom
+          emptyDir:
+            sizeLimit: 100Mi
+        - name: php-run
+          emptyDir:
+            sizeLimit: 5Mi
+        - name: php-tmp
+          emptyDir:
+            sizeLimit: 100Mi
+        - name: init-tmp
+          emptyDir:
+            sizeLimit: 500Mi

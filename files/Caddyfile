@@ -1,0 +1,52 @@
+{
+	admin off
+	servers {
+		trusted_proxies static {$TRUSTED_PROXY_CIDR:private_ranges}
+	}
+}
+
+# Default: plain HTTP on :8080 (behind a load balancer or for local dev).
+# Set CADDY_ADDRESS to a domain for automatic HTTPS with Let's Encrypt:
+#   CADDY_ADDRESS=misp.example.com
+{$CADDY_ADDRESS::8080} {
+	root * /var/www/MISP/app/webroot
+
+	# PHP via FastCGI
+	php_fastcgi {$PHP_FPM_HOST:127.0.0.1}:9002
+
+	file_server
+
+	# Plain status code error responses, no HTML
+	handle_errors {
+		header Content-Type text/plain
+		respond "{err.status_code}"
+	}
+
+	# Strip unnecessary headers
+	header -Server
+	header -X-Powered-By
+
+	# Security headers
+	header X-Content-Type-Options "nosniff"
+	header X-Frame-Options "SAMEORIGIN"
+	header Referrer-Policy "strict-origin-when-cross-origin"
+	header Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=()"
+
+	# Deny access to sensitive paths
+	@hidden path_regexp /\.
+	respond @hidden 404
+
+	@config path_regexp ^/(Config|tmp|files/scripts)/
+	respond @config 404
+
+	@probes path_regexp \.(php\.bak|php~|sql|tar\.gz|zip)$
+	respond @probes 404
+
+	# Static assets caching
+	@static path_regexp \.(css|js|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot)$
+	header @static Cache-Control "public, max-age=3600, immutable"
+
+	log {
+		output stdout
+	}
+}

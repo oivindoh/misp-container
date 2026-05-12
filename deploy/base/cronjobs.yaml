@@ -1,0 +1,424 @@
+# MISP maintenance cronjobs.
+# All use curl to hit the MISP API via the web service.
+# ADMIN_KEY must be set in the misp-secrets Secret for these to work.
+# If unset, jobs exit with a clear error message.
+
+# -- Feed caching: cache all configured feeds --
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: cache-feeds
+  labels:
+    app.kubernetes.io/name: cache-feeds
+spec:
+  schedule: "20 2 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 1200
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: cache-feeds
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: curl
+              image: docker.io/curlimages/curl
+              command: ["sh", "-c"]
+              args:
+                - |
+                  if [ -z "$ADMIN_KEY" ]; then echo "ERROR: ADMIN_KEY not set in misp-secrets. Cronjobs need a valid API key." >&2; exit 1; fi
+                  echo "POST /feeds/cacheFeeds/all"
+                  curl -sS --fail-with-body --max-time 600 \
+                    -w "\nHTTP %{http_code} (%{time_total}s)\n" \
+                    -X POST -H "Authorization: $ADMIN_KEY" -H "Accept: application/json" -H "Content-Type: application/json" \
+                    http://web:8080/feeds/cacheFeeds/all
+              env:
+                - name: ADMIN_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: misp-secrets
+                      key: ADMIN_KEY
+                      optional: true
+              resources:
+                requests:
+                  cpu: 5m
+                  memory: 16Mi
+                limits:
+                  cpu: 200m
+                  memory: 64Mi
+---
+# -- Feed fetching: fetch data from all configured feeds --
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: fetch-feeds
+  labels:
+    app.kubernetes.io/name: fetch-feeds
+spec:
+  schedule: "30 2 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 1200
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: fetch-feeds
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: curl
+              image: docker.io/curlimages/curl
+              command: ["sh", "-c"]
+              args:
+                - |
+                  if [ -z "$ADMIN_KEY" ]; then echo "ERROR: ADMIN_KEY not set in misp-secrets. Cronjobs need a valid API key." >&2; exit 1; fi
+                  echo "POST /feeds/fetchFromAllFeeds"
+                  curl -sS --fail-with-body --max-time 600 \
+                    -w "\nHTTP %{http_code} (%{time_total}s)\n" \
+                    -X POST -H "Authorization: $ADMIN_KEY" -H "Accept: application/json" -H "Content-Type: application/json" \
+                    http://web:8080/feeds/fetchFromAllFeeds
+              env:
+                - name: ADMIN_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: misp-secrets
+                      key: ADMIN_KEY
+                      optional: true
+              resources:
+                requests:
+                  cpu: 5m
+                  memory: 16Mi
+                limits:
+                  cpu: 200m
+                  memory: 64Mi
+---
+# -- Pull from all sync servers (every 5 min) --
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: pull-servers
+  labels:
+    app.kubernetes.io/name: pull-servers
+spec:
+  schedule: "*/5 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 1200
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: pull-servers
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: curl
+              image: docker.io/curlimages/curl
+              command: ["sh", "-c"]
+              args:
+                - |
+                  if [ -z "$ADMIN_KEY" ]; then echo "ERROR: ADMIN_KEY not set in misp-secrets. Cronjobs need a valid API key." >&2; exit 1; fi
+                  echo "GET /servers (listing sync servers)"
+                  SERVERS=$(curl -sS --fail-with-body --max-time 30 \
+                    -w "\nHTTP %{http_code} (%{time_total}s)\n" \
+                    -H "Authorization: $ADMIN_KEY" -H "Accept: application/json" \
+                    http://web:8080/servers)
+                  echo "$SERVERS"
+                  PULLED=0
+                  for id in $(echo "$SERVERS" | grep -o '"id":"[0-9]*"' | grep -o '[0-9]*'); do
+                    PULL=$(echo "$SERVERS" | grep -o "\"id\":\"${id}\"[^}]*\"pull\":[a-z]*" | grep -o '"pull":[a-z]*' | grep -o '[a-z]*$')
+                    if [ "$PULL" = "true" ]; then
+                      echo "pulling server $id"
+                      curl -sS --fail-with-body --max-time 600 \
+                        -w "\nHTTP %{http_code} (%{time_total}s)\n" \
+                        -H "Authorization: $ADMIN_KEY" -H "Accept: application/json" \
+                        "http://web:8080/servers/pull/$id"
+                      PULLED=$((PULLED + 1))
+                    fi
+                  done
+                  echo "pulled from $PULLED server(s)"
+              env:
+                - name: ADMIN_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: misp-secrets
+                      key: ADMIN_KEY
+                      optional: true
+              resources:
+                requests:
+                  cpu: 5m
+                  memory: 16Mi
+                limits:
+                  cpu: 200m
+                  memory: 64Mi
+---
+# -- Push to all sync servers (every 15 min) --
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: push-servers
+  labels:
+    app.kubernetes.io/name: push-servers
+spec:
+  schedule: "*/15 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 1200
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: push-servers
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: curl
+              image: docker.io/curlimages/curl
+              command: ["sh", "-c"]
+              args:
+                - |
+                  if [ -z "$ADMIN_KEY" ]; then echo "ERROR: ADMIN_KEY not set in misp-secrets. Cronjobs need a valid API key." >&2; exit 1; fi
+                  echo "GET /servers (listing sync servers)"
+                  SERVERS=$(curl -sS --fail-with-body --max-time 30 \
+                    -w "\nHTTP %{http_code} (%{time_total}s)\n" \
+                    -H "Authorization: $ADMIN_KEY" -H "Accept: application/json" \
+                    http://web:8080/servers)
+                  echo "$SERVERS"
+                  PUSHED=0
+                  for id in $(echo "$SERVERS" | grep -o '"id":"[0-9]*"' | grep -o '[0-9]*'); do
+                    PUSH=$(echo "$SERVERS" | grep -o "\"id\":\"${id}\"[^}]*\"push\":[a-z]*" | grep -o '"push":[a-z]*' | grep -o '[a-z]*$')
+                    if [ "$PUSH" = "true" ]; then
+                      echo "pushing server $id"
+                      curl -sS --fail-with-body --max-time 600 \
+                        -w "\nHTTP %{http_code} (%{time_total}s)\n" \
+                        -H "Authorization: $ADMIN_KEY" -H "Accept: application/json" \
+                        "http://web:8080/servers/push/$id"
+                      PUSHED=$((PUSHED + 1))
+                    fi
+                  done
+                  echo "pushed to $PUSHED server(s)"
+              env:
+                - name: ADMIN_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: misp-secrets
+                      key: ADMIN_KEY
+                      optional: true
+              resources:
+                requests:
+                  cpu: 5m
+                  memory: 16Mi
+                limits:
+                  cpu: 200m
+                  memory: 64Mi
+---
+# -- Update galaxies --
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: update-galaxies
+  labels:
+    app.kubernetes.io/name: update-galaxies
+spec:
+  schedule: "0 3 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 1200
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: update-galaxies
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: curl
+              image: docker.io/curlimages/curl
+              command: ["sh", "-c"]
+              args:
+                - |
+                  if [ -z "$ADMIN_KEY" ]; then echo "ERROR: ADMIN_KEY not set in misp-secrets. Cronjobs need a valid API key." >&2; exit 1; fi
+                  echo "POST /galaxies/update"
+                  curl -sS --fail-with-body --max-time 600 \
+                    -w "\nHTTP %{http_code} (%{time_total}s)\n" \
+                    -X POST -H "Authorization: $ADMIN_KEY" -H "Accept: application/json" -H "Content-Type: application/json" \
+                    http://web:8080/galaxies/update
+              env:
+                - name: ADMIN_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: misp-secrets
+                      key: ADMIN_KEY
+                      optional: true
+              resources:
+                requests:
+                  cpu: 5m
+                  memory: 16Mi
+                limits:
+                  cpu: 200m
+                  memory: 64Mi
+---
+# -- Update taxonomies --
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: update-taxonomies
+  labels:
+    app.kubernetes.io/name: update-taxonomies
+spec:
+  schedule: "10 3 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 1200
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: update-taxonomies
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: curl
+              image: docker.io/curlimages/curl
+              command: ["sh", "-c"]
+              args:
+                - |
+                  if [ -z "$ADMIN_KEY" ]; then echo "ERROR: ADMIN_KEY not set in misp-secrets. Cronjobs need a valid API key." >&2; exit 1; fi
+                  echo "POST /taxonomies/update"
+                  curl -sS --fail-with-body --max-time 600 \
+                    -w "\nHTTP %{http_code} (%{time_total}s)\n" \
+                    -X POST -H "Authorization: $ADMIN_KEY" -H "Accept: application/json" -H "Content-Type: application/json" \
+                    http://web:8080/taxonomies/update
+              env:
+                - name: ADMIN_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: misp-secrets
+                      key: ADMIN_KEY
+                      optional: true
+              resources:
+                requests:
+                  cpu: 5m
+                  memory: 16Mi
+                limits:
+                  cpu: 200m
+                  memory: 64Mi
+---
+# -- Update warninglists --
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: update-warninglists
+  labels:
+    app.kubernetes.io/name: update-warninglists
+spec:
+  schedule: "20 3 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 1200
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: update-warninglists
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: curl
+              image: docker.io/curlimages/curl
+              command: ["sh", "-c"]
+              args:
+                - |
+                  if [ -z "$ADMIN_KEY" ]; then echo "ERROR: ADMIN_KEY not set in misp-secrets. Cronjobs need a valid API key." >&2; exit 1; fi
+                  echo "POST /warninglists/update"
+                  curl -sS --fail-with-body --max-time 600 \
+                    -w "\nHTTP %{http_code} (%{time_total}s)\n" \
+                    -X POST -H "Authorization: $ADMIN_KEY" -H "Accept: application/json" -H "Content-Type: application/json" \
+                    http://web:8080/warninglists/update
+              env:
+                - name: ADMIN_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: misp-secrets
+                      key: ADMIN_KEY
+                      optional: true
+              resources:
+                requests:
+                  cpu: 5m
+                  memory: 16Mi
+                limits:
+                  cpu: 200m
+                  memory: 64Mi
+---
+# -- Update noticelists --
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: update-noticelists
+  labels:
+    app.kubernetes.io/name: update-noticelists
+spec:
+  schedule: "30 3 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 1200
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: update-noticelists
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: curl
+              image: docker.io/curlimages/curl
+              command: ["sh", "-c"]
+              args:
+                - |
+                  if [ -z "$ADMIN_KEY" ]; then echo "ERROR: ADMIN_KEY not set in misp-secrets. Cronjobs need a valid API key." >&2; exit 1; fi
+                  echo "POST /noticelists/update"
+                  curl -sS --fail-with-body --max-time 600 \
+                    -w "\nHTTP %{http_code} (%{time_total}s)\n" \
+                    -X POST -H "Authorization: $ADMIN_KEY" -H "Accept: application/json" -H "Content-Type: application/json" \
+                    http://web:8080/noticelists/update
+              env:
+                - name: ADMIN_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: misp-secrets
+                      key: ADMIN_KEY
+                      optional: true
+              resources:
+                requests:
+                  cpu: 5m
+                  memory: 16Mi
+                limits:
+                  cpu: 200m
+                  memory: 64Mi

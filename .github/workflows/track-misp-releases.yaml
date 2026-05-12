@@ -1,0 +1,62 @@
+name: Track MISP releases
+
+on:
+  schedule:
+    # Check daily at 06:00 UTC
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Get latest MISP release
+        id: misp
+        run: |
+          LATEST=$(gh api repos/MISP/MISP/releases/latest --jq '.tag_name')
+          CURRENT=$(grep '^ARG CORE_TAG=' Dockerfile | cut -d= -f2)
+          echo "latest=${LATEST}" >> "$GITHUB_OUTPUT"
+          echo "current=${CURRENT}" >> "$GITHUB_OUTPUT"
+          echo "Current: ${CURRENT}, Latest: ${LATEST}"
+          if [ "${LATEST}" != "${CURRENT}" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Update CORE_TAG and open PR
+        if: steps.misp.outputs.changed == 'true'
+        run: |
+          NEW="${{ steps.misp.outputs.latest }}"
+          OLD="${{ steps.misp.outputs.current }}"
+          BRANCH="misp-update/${NEW}"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -b "${BRANCH}"
+
+          sed -i "s/^ARG CORE_TAG=.*/ARG CORE_TAG=${NEW}/" Dockerfile
+          git add Dockerfile
+          git commit -m "bump MISP to ${NEW}"
+          git push origin "${BRANCH}"
+
+          BODY="MISP released ${NEW} (was ${OLD})."
+          BODY="${BODY}
+
+          CI will build and test automatically. After merging, tag and push to release:
+
+              git tag ${NEW}
+              git push origin ${NEW}"
+
+          gh pr create \
+            --title "bump MISP to ${NEW}" \
+            --body "${BODY}" \
+            --head "${BRANCH}"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

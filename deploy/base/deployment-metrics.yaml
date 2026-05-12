@@ -1,0 +1,70 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: metrics
+  labels:
+    app: metrics
+    app.kubernetes.io/name: metrics
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: metrics
+      app.kubernetes.io/name: metrics
+  template:
+    metadata:
+      labels:
+        app: metrics
+        app.kubernetes.io/name: metrics
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9191"
+        prometheus.io/path: "/metrics"
+    spec:
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+
+      containers:
+        - name: metrics
+          image: ghcr.io/oivindoh/misp-container-metrics
+          ports:
+            - name: metrics
+              containerPort: 9191
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: misp-env
+            - secretRef:
+                name: misp-secrets
+          resources:
+            requests:
+              cpu: 5m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: 9191
+            failureThreshold: 30
+            periodSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 9191
+            periodSeconds: 30
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 9191
+            periodSeconds: 60
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]

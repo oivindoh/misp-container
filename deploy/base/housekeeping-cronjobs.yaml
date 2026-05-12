@@ -1,0 +1,126 @@
+# Nightly housekeeping for MISP database tables.
+# Batched deletes (LIMIT 25000) to avoid long locks,
+# followed by OPTIMIZE to reclaim fragmented space.
+
+# -- Jobs cleanup: delete jobs older than 2 days --
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: mysql-jobs-cleanup
+  labels:
+    app.kubernetes.io/name: mysql-jobs-cleanup
+spec:
+  schedule: "0 2 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: mysql-jobs-cleanup
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: mysql-cleanup
+              image: docker.io/library/mariadb
+              command:
+                - bash
+                - -c
+                - |
+                  DELETED=1
+                  while [ "$DELETED" -ge 100 ]; do
+                    DELETED=$(mysql -u "$MYSQL_USER" -p"$MYSQL_PASSWORD" -h mysql "$MYSQL_DATABASE" -N -e \
+                      "DELETE FROM jobs WHERE date_created < NOW() - INTERVAL 2 DAY LIMIT 25000; SELECT ROW_COUNT();")
+                    echo "Deleted $DELETED old jobs"
+                  done
+                  mysql -u "$MYSQL_USER" -p"$MYSQL_PASSWORD" -h mysql "$MYSQL_DATABASE" -e "OPTIMIZE TABLE jobs;"
+                  echo "Jobs cleanup complete"
+              env:
+                - name: MYSQL_USER
+                  valueFrom:
+                    secretKeyRef:
+                      name: misp-secrets
+                      key: MYSQL_USER
+                - name: MYSQL_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: misp-secrets
+                      key: MYSQL_PASSWORD
+                - name: MYSQL_DATABASE
+                  value: misp
+              resources:
+                requests:
+                  cpu: 20m
+                  memory: 32Mi
+                limits:
+                  cpu: 500m
+                  memory: 128Mi
+---
+# -- Logs cleanup: delete logs >30d, audit_logs >90d --
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: mysql-logs-cleanup
+  labels:
+    app.kubernetes.io/name: mysql-logs-cleanup
+spec:
+  schedule: "0 3 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: mysql-logs-cleanup
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: mysql-cleanup
+              image: docker.io/library/mariadb
+              command:
+                - bash
+                - -c
+                - |
+                  # Delete old logs (>30 days)
+                  DELETED=1
+                  while [ "$DELETED" -ge 100 ]; do
+                    DELETED=$(mysql -u "$MYSQL_USER" -p"$MYSQL_PASSWORD" -h mysql "$MYSQL_DATABASE" -N -e \
+                      "DELETE FROM logs WHERE created < NOW() - INTERVAL 30 DAY LIMIT 25000; SELECT ROW_COUNT();")
+                    echo "Deleted $DELETED old logs"
+                  done
+                  mysql -u "$MYSQL_USER" -p"$MYSQL_PASSWORD" -h mysql "$MYSQL_DATABASE" -e "OPTIMIZE TABLE logs;"
+
+                  # Delete old audit logs (>90 days)
+                  DELETED=1
+                  while [ "$DELETED" -ge 100 ]; do
+                    DELETED=$(mysql -u "$MYSQL_USER" -p"$MYSQL_PASSWORD" -h mysql "$MYSQL_DATABASE" -N -e \
+                      "DELETE FROM audit_logs WHERE created < NOW() - INTERVAL 90 DAY LIMIT 25000; SELECT ROW_COUNT();")
+                    echo "Deleted $DELETED old audit_logs"
+                  done
+                  mysql -u "$MYSQL_USER" -p"$MYSQL_PASSWORD" -h mysql "$MYSQL_DATABASE" -e "OPTIMIZE TABLE audit_logs;"
+
+                  echo "Logs cleanup complete"
+              env:
+                - name: MYSQL_USER
+                  valueFrom:
+                    secretKeyRef:
+                      name: misp-secrets
+                      key: MYSQL_USER
+                - name: MYSQL_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: misp-secrets
+                      key: MYSQL_PASSWORD
+                - name: MYSQL_DATABASE
+                  value: misp
+              resources:
+                requests:
+                  cpu: 20m
+                  memory: 32Mi
+                limits:
+                  cpu: 500m
+                  memory: 128Mi

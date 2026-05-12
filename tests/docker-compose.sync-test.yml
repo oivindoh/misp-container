@@ -1,0 +1,286 @@
+# Hub-spoke sync integration test: 3 isolated MISP instances (A, B, C).
+#
+# B is the hub: pulls all events from A and C.
+# A pulls from B only events tagged "release-to:A".
+# C pulls from B only events tagged "release-to:C".
+#
+# Usage:
+#   docker compose -f deploy/docker-compose.sync-test.yml build
+#   tests/run-sync-test.sh
+
+x-misp-image: &misp-image
+  image: ghcr.io/oivindoh/misp-container:2.5.37-r15
+  build:
+    context: ..
+    target: final
+
+x-caddy-image: &caddy-image
+  image: ghcr.io/oivindoh/misp-container-caddy:2.5.37-r15
+  build:
+    context: ..
+    target: caddy
+
+x-sync-image: &sync-image
+  image: ghcr.io/oivindoh/misp-container-sync:2.5.37-r15
+  build:
+    context: ..
+    target: sync
+
+x-mysql: &mysql
+  image: docker.io/library/mariadb:11.8.6@sha256:78a5047d3ba33975f183f183c2464cc7f1eab13ec8667e57cc9a5821d6da7577
+  command:
+    - --character-set-server=utf8mb4
+    - --collation-server=utf8mb4_unicode_ci
+    - --max-allowed-packet=1G
+  environment:
+    MARIADB_DATABASE: misp
+  healthcheck:
+    test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+    interval: 5s
+    timeout: 3s
+    retries: 15
+    start_period: 15s
+
+x-redis: &redis
+  image: docker.io/library/redis:8.6.3-trixie@sha256:0c341492924cad6f5483f9133e43bd6c51ecdecbcadfac5b51657393b6a7936c
+  command: >
+    sh -c 'redis-server
+    --requirepass "$$MISP_REDIS_PASSWORD"
+    --maxmemory 64mb
+    --maxmemory-policy noeviction
+    --save ""
+    --appendonly no'
+  healthcheck:
+    test: ["CMD-SHELL", "redis-cli -a $$MISP_REDIS_PASSWORD --no-auth-warning ping"]
+    interval: 5s
+    timeout: 3s
+    retries: 10
+
+services:
+  # =========================================================================
+  # Instance A (spoke)
+  # =========================================================================
+  a-mysql:
+    <<: *mysql
+    env_file: [sync-test-secrets.env]
+    volumes: [a-mysql-data:/var/lib/mysql]
+
+  a-redis:
+    <<: *redis
+    env_file: [sync-test-secrets.env]
+
+  a-init:
+    <<: *misp-image
+    env_file: [../deploy/base/base.env, sync-test-a.env, sync-test-secrets.env]
+    user: "1000:1000"
+    command: ["python3", "/entrypoint-init.py"]
+    volumes:
+      - a-files:/var/www/MISP/app/files
+      - a-config:/var/www/MISP/app/Config
+      - a-tmp:/var/www/MISP/app/tmp
+      - a-gnupg:/var/www/MISP/.gnupg
+    depends_on:
+      a-mysql: { condition: service_healthy }
+
+  a-web:
+    <<: *misp-image
+    env_file: [../deploy/base/base.env, sync-test-a.env, sync-test-secrets.env]
+    user: "1000:1000"
+    command: ["python3", "/entrypoint-web.py"]
+    volumes:
+      - a-files:/var/www/MISP/app/files
+      - a-config:/var/www/MISP/app/Config
+      - a-tmp:/var/www/MISP/app/tmp
+      - a-gnupg:/var/www/MISP/.gnupg
+      - a-php-tmp:/tmp
+    depends_on:
+      a-init: { condition: service_completed_successfully }
+      a-mysql: { condition: service_healthy }
+      a-redis: { condition: service_healthy }
+
+  a-caddy:
+    <<: *caddy-image
+    user: "1000:1000"
+    environment:
+      PHP_FPM_HOST: a-web
+    ports: ["18091:8080"]
+    depends_on: [a-web]
+
+  a-worker:
+    <<: *misp-image
+    env_file: [../deploy/base/base.env, sync-test-a.env, sync-test-secrets.env]
+    user: "1000:1000"
+    command: ["python3", "/entrypoint-worker.py"]
+    volumes:
+      - a-files:/var/www/MISP/app/files
+      - a-config:/var/www/MISP/app/Config
+      - a-worker-tmp:/var/www/MISP/app/tmp
+      - a-gnupg:/var/www/MISP/.gnupg
+      - a-worker-sys-tmp:/tmp
+    depends_on:
+      a-init: { condition: service_completed_successfully }
+      a-mysql: { condition: service_healthy }
+      a-redis: { condition: service_healthy }
+
+  # =========================================================================
+  # Instance B (hub)
+  # =========================================================================
+  b-mysql:
+    <<: *mysql
+    env_file: [sync-test-secrets.env]
+    volumes: [b-mysql-data:/var/lib/mysql]
+
+  b-redis:
+    <<: *redis
+    env_file: [sync-test-secrets.env]
+
+  b-init:
+    <<: *misp-image
+    env_file: [../deploy/base/base.env, sync-test-b.env, sync-test-secrets.env]
+    user: "1000:1000"
+    command: ["python3", "/entrypoint-init.py"]
+    volumes:
+      - b-files:/var/www/MISP/app/files
+      - b-config:/var/www/MISP/app/Config
+      - b-tmp:/var/www/MISP/app/tmp
+      - b-gnupg:/var/www/MISP/.gnupg
+    depends_on:
+      b-mysql: { condition: service_healthy }
+
+  b-web:
+    <<: *misp-image
+    env_file: [../deploy/base/base.env, sync-test-b.env, sync-test-secrets.env]
+    user: "1000:1000"
+    command: ["python3", "/entrypoint-web.py"]
+    volumes:
+      - b-files:/var/www/MISP/app/files
+      - b-config:/var/www/MISP/app/Config
+      - b-tmp:/var/www/MISP/app/tmp
+      - b-gnupg:/var/www/MISP/.gnupg
+      - b-php-tmp:/tmp
+    depends_on:
+      b-init: { condition: service_completed_successfully }
+      b-mysql: { condition: service_healthy }
+      b-redis: { condition: service_healthy }
+
+  b-caddy:
+    <<: *caddy-image
+    user: "1000:1000"
+    environment:
+      PHP_FPM_HOST: b-web
+    ports: ["18092:8080"]
+    depends_on: [b-web]
+
+  b-worker:
+    <<: *misp-image
+    env_file: [../deploy/base/base.env, sync-test-b.env, sync-test-secrets.env]
+    user: "1000:1000"
+    command: ["python3", "/entrypoint-worker.py"]
+    volumes:
+      - b-files:/var/www/MISP/app/files
+      - b-config:/var/www/MISP/app/Config
+      - b-worker-tmp:/var/www/MISP/app/tmp
+      - b-gnupg:/var/www/MISP/.gnupg
+      - b-worker-sys-tmp:/tmp
+    depends_on:
+      b-init: { condition: service_completed_successfully }
+      b-mysql: { condition: service_healthy }
+      b-redis: { condition: service_healthy }
+
+  # =========================================================================
+  # Instance C (spoke)
+  # =========================================================================
+  c-mysql:
+    <<: *mysql
+    env_file: [sync-test-secrets.env]
+    volumes: [c-mysql-data:/var/lib/mysql]
+
+  c-redis:
+    <<: *redis
+    env_file: [sync-test-secrets.env]
+
+  c-init:
+    <<: *misp-image
+    env_file: [../deploy/base/base.env, sync-test-c.env, sync-test-secrets.env]
+    user: "1000:1000"
+    command: ["python3", "/entrypoint-init.py"]
+    volumes:
+      - c-files:/var/www/MISP/app/files
+      - c-config:/var/www/MISP/app/Config
+      - c-tmp:/var/www/MISP/app/tmp
+      - c-gnupg:/var/www/MISP/.gnupg
+    depends_on:
+      c-mysql: { condition: service_healthy }
+
+  c-web:
+    <<: *misp-image
+    env_file: [../deploy/base/base.env, sync-test-c.env, sync-test-secrets.env]
+    user: "1000:1000"
+    command: ["python3", "/entrypoint-web.py"]
+    volumes:
+      - c-files:/var/www/MISP/app/files
+      - c-config:/var/www/MISP/app/Config
+      - c-tmp:/var/www/MISP/app/tmp
+      - c-gnupg:/var/www/MISP/.gnupg
+      - c-php-tmp:/tmp
+    depends_on:
+      c-init: { condition: service_completed_successfully }
+      c-mysql: { condition: service_healthy }
+      c-redis: { condition: service_healthy }
+
+  c-caddy:
+    <<: *caddy-image
+    user: "1000:1000"
+    environment:
+      PHP_FPM_HOST: c-web
+    ports: ["18093:8080"]
+    depends_on: [c-web]
+
+  c-worker:
+    <<: *misp-image
+    env_file: [../deploy/base/base.env, sync-test-c.env, sync-test-secrets.env]
+    user: "1000:1000"
+    command: ["python3", "/entrypoint-worker.py"]
+    volumes:
+      - c-files:/var/www/MISP/app/files
+      - c-config:/var/www/MISP/app/Config
+      - c-worker-tmp:/var/www/MISP/app/tmp
+      - c-gnupg:/var/www/MISP/.gnupg
+      - c-worker-sys-tmp:/tmp
+    depends_on:
+      c-init: { condition: service_completed_successfully }
+      c-mysql: { condition: service_healthy }
+      c-redis: { condition: service_healthy }
+
+  # =========================================================================
+  # Sync runner (used via: docker compose run --rm sync ...)
+  # =========================================================================
+  sync:
+    <<: *sync-image
+    user: "1000:1000"
+
+volumes:
+  a-mysql-data:
+  a-files:
+  a-config:
+  a-tmp:
+  a-gnupg:
+  a-php-tmp:
+  a-worker-tmp:
+  a-worker-sys-tmp:
+  b-mysql-data:
+  b-files:
+  b-config:
+  b-tmp:
+  b-gnupg:
+  b-php-tmp:
+  b-worker-tmp:
+  b-worker-sys-tmp:
+  c-mysql-data:
+  c-files:
+  c-config:
+  c-tmp:
+  c-gnupg:
+  c-php-tmp:
+  c-worker-tmp:
+  c-worker-sys-tmp:

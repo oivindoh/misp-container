@@ -1,0 +1,23 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: misp
+  labels:
+    app.kubernetes.io/name: web
+spec:
+  ingressClassName: haproxy
+  tls:
+    - hosts:
+        - misp.example.com
+      secretName: misp-tls
+  rules:
+    - host: misp.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: web
+                port:
+                  name: http

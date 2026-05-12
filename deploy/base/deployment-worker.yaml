@@ -1,0 +1,131 @@
+# Scalable job workers -- safe to run multiple replicas.
+# The MISP scheduler is disabled because periodic tasks are handled
+# by Kubernetes CronJobs (cronjobs.yaml) instead.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker
+  labels:
+    app: worker
+    app.kubernetes.io/name: worker
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: worker
+      app.kubernetes.io/name: worker
+  template:
+    metadata:
+      labels:
+        app: worker
+        app.kubernetes.io/name: worker
+    spec:
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+
+      initContainers:
+        - name: init-misp-files
+          image: ghcr.io/oivindoh/misp-container
+          command: ["/usr/bin/tini", "--", "python3", "/entrypoint-init.py"]
+          envFrom:
+            - configMapRef:
+                name: misp-env
+            - secretRef:
+                name: misp-secrets
+          volumeMounts:
+            - name: misp-files
+              mountPath: /var/www/MISP/app/files
+            - name: misp-config
+              mountPath: /var/www/MISP/app/Config
+            - name: misp-tmp
+              mountPath: /var/www/MISP/app/tmp
+            - name: misp-gnupg
+              mountPath: /var/www/MISP/.gnupg
+            - name: init-tmp
+              mountPath: /tmp
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+
+      containers:
+        - name: worker
+          image: ghcr.io/oivindoh/misp-container
+          command: ["/usr/bin/tini", "--", "python3", "/entrypoint-worker.py"]
+          env:
+            - name: ENABLE_SCHEDULER
+              value: "false"
+          envFrom:
+            - configMapRef:
+                name: misp-env
+            - secretRef:
+                name: misp-secrets
+          volumeMounts:
+            - name: misp-files
+              mountPath: /var/www/MISP/app/files
+            - name: misp-config
+              mountPath: /var/www/MISP/app/Config
+            - name: misp-tmp
+              mountPath: /var/www/MISP/app/tmp
+            - name: misp-gnupg
+              mountPath: /var/www/MISP/.gnupg
+            - name: worker-tmp
+              mountPath: /tmp
+          resources:
+            requests:
+              cpu: 10m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 1Gi
+          startupProbe:
+            exec:
+              command: ["test", "-S", "/tmp/supervisor.sock"]
+            failureThreshold: 60
+            periodSeconds: 5
+          readinessProbe:
+            exec:
+              command: ["test", "-S", "/tmp/supervisor.sock"]
+            periodSeconds: 30
+          livenessProbe:
+            exec:
+              command: ["test", "-S", "/tmp/supervisor.sock"]
+            periodSeconds: 60
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+
+      volumes:
+        - name: misp-files
+          emptyDir:
+            sizeLimit: 2Gi
+        - name: misp-config
+          emptyDir:
+            sizeLimit: 10Mi
+        - name: misp-tmp
+          emptyDir:
+            sizeLimit: 1Gi
+        - name: misp-gnupg
+          emptyDir:
+            sizeLimit: 10Mi
+        - name: worker-tmp
+          emptyDir:
+            sizeLimit: 100Mi
+        - name: init-tmp
+          emptyDir:
+            sizeLimit: 500Mi

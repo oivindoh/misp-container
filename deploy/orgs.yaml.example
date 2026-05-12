@@ -1,0 +1,83 @@
+# Example org sync configuration.
+# Copy to orgs.yaml and customise. Mount into the sync container at
+# /etc/misp-docker/orgs.yaml (see docker-compose.yml).
+#
+# All string values support ${ENV_VAR} expansion for secrets injection.
+
+taxonomies:
+  - tlp
+
+warninglists:
+  - Top 10000 websites from Majestic Million
+  - name: Sector specific top list
+    enabled: true
+    description: "sector sites and domains typically used extensively within"
+    version: 20260515
+    type: hostname
+    matching_attributes:
+      - hostname
+      - domain
+      - uri
+      - url
+    values:
+      - github.com
+      - x.ai
+      - lets.try.that.again
+
+tags:
+  - tlp:clear
+
+# roles:
+#   - name: Custom Analyst
+#     permission: 2
+#     perm_tagger: true
+#     perm_sighting: true
+#     perm_analyst_data: true
+
+teams:
+  - uuid: 6959402f-4acd-49bb-be1a-1f30e9064d89
+    name: Example Team
+    description: An example organisation
+    sector: academic
+    default_role: User
+
+    users:
+      - email: analyst@example.com
+        role: User
+
+    feide_users:
+      - email: feide-user@university.no
+        role: User
+        # allow_external: true  # let an external config source move this user
+
+    sync_users:
+      - email: sync-inbound@partner.no
+        role: Sync user
+        authkey: ${PARTNER_SYNC_KEY}
+
+    # service_users:
+    #   - email: bot@example.com
+
+    servers:
+      - name: Partner MISP
+        url: https://misp.partner.no
+        authkey: ${OUR_KEY_ON_PARTNER}
+        pull: true
+        push: false
+        pull_tags:
+          - tlp:clear
+        push_tags:
+          - tlp:clear
+          - sector:academic
+        internal: false
+
+    tags:
+      - name: example-team:internal
+        colour: "#aa0000"
+
+# sharing_groups:
+#   - name: Sector sharing
+#     uuid: a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d
+#     description: Sharing within our sector
+#     organisations:
+#       - 6959402f-4acd-49bb-be1a-1f30e9064d89

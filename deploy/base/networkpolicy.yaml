@@ -1,0 +1,403 @@
+# CiliumNetworkPolicy for MISP
+#
+# Traffic flow:
+#   haproxy-controller ns --> caddy :8080
+#   cronjobs              --> caddy :8080
+#   caddy                 --> php-fpm :9002  (localhost in same pod)
+#   php-fpm               --> mariadb :3306, redis :6379
+#   worker                --> mariadb :3306, redis :6379
+#   init                  --> mariadb :3306  (for config generation)
+#   housekeeping          --> mariadb :3306
+#   all pods              --> kube-dns :53
+#
+# Everything else is denied by default.
+
+# -- caddy (web pod) --
+# Accepts ingress from haproxy-controller namespace on :8080.
+# php-fpm is in the same pod so localhost traffic is implicit (not filtered by CNP).
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: web
+spec:
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: web
+  ingress:
+    # Allow traffic from haproxy ingress controller and cronjobs
+    - fromEndpoints:
+        - matchLabels:
+            io.kubernetes.pod.namespace: haproxy-controller
+        - matchExpressions:
+            - key: app.kubernetes.io/name
+              operator: In
+              values:
+                - cache-feeds
+                - fetch-feeds
+                - pull-servers
+                - push-servers
+                - update-galaxies
+                - update-taxonomies
+                - update-warninglists
+                - update-noticelists
+      toPorts:
+        - ports:
+            - port: "8080"
+              protocol: TCP
+  egress:
+    # MariaDB
+    - toEndpoints:
+        - matchLabels:
+            app.kubernetes.io/name: mysql
+      toPorts:
+        - ports:
+            - port: "3306"
+              protocol: TCP
+    # Redis
+    - toEndpoints:
+        - matchLabels:
+            app.kubernetes.io/name: redis
+      toPorts:
+        - ports:
+            - port: "6379"
+              protocol: TCP
+    # MISP modules (enrichment/import/export)
+    - toEndpoints:
+        - matchLabels:
+            app.kubernetes.io/name: modules
+      toPorts:
+        - ports:
+            - port: "6666"
+              protocol: TCP
+    # Worker supervisord (job management)
+    - toEndpoints:
+        - matchLabels:
+            app.kubernetes.io/name: worker
+      toPorts:
+        - ports:
+            - port: "9001"
+              protocol: TCP
+    # DNS
+    - toEndpoints:
+        - matchLabels:
+            io.kubernetes.pod.namespace: kube-system
+            k8s-app: kube-dns
+      toPorts:
+        - ports:
+            - port: "53"
+              protocol: UDP
+            - port: "53"
+              protocol: TCP
+---
+# -- worker + scheduler --
+# No ingress needed. Egress to MariaDB, Redis, and DNS.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: worker
+spec:
+  endpointSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/name
+        operator: In
+        values: [worker, scheduler]
+  ingress:
+    # Web pod connects to supervisord for job management
+    - fromEndpoints:
+        - matchLabels:
+            app.kubernetes.io/name: web
+      toPorts:
+        - ports:
+            - port: "9001"
+              protocol: TCP
+  egress:
+    # MariaDB
+    - toEndpoints:
+        - matchLabels:
+            app.kubernetes.io/name: mysql
+      toPorts:
+        - ports:
+            - port: "3306"
+              protocol: TCP
+    # Redis
+    - toEndpoints:
+        - matchLabels:
+            app.kubernetes.io/name: redis
+      toPorts:
+        - ports:
+            - port: "6379"
+              protocol: TCP
+    # DNS
+    - toEndpoints:
+        - matchLabels:
+            io.kubernetes.pod.namespace: kube-system
+            k8s-app: kube-dns
+      toPorts:
+        - ports:
+            - port: "53"
+              protocol: UDP
+            - port: "53"
+              protocol: TCP
+---
+# -- MISP API cronjobs (feeds, sync, updates) --
+# Egress to web pod (caddy :8080) and DNS only.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: cronjob
+spec:
+  endpointSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/name
+        operator: In
+        values:
+          - cache-feeds
+          - fetch-feeds
+          - pull-servers
+          - push-servers
+          - update-galaxies
+          - update-taxonomies
+          - update-warninglists
+          - update-noticelists
+  ingress: []
+  egress:
+    - toEndpoints:
+        - matchLabels:
+            app.kubernetes.io/name: web
+      toPorts:
+        - ports:
+            - port: "8080"
+              protocol: TCP
+    - toEndpoints:
+        - matchLabels:
+            io.kubernetes.pod.namespace: kube-system
+            k8s-app: kube-dns
+      toPorts:
+        - ports:
+            - port: "53"
+              protocol: UDP
+            - port: "53"
+              protocol: TCP
+---
+# -- Housekeeping cronjobs --
+# Egress to MariaDB and DNS only.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: housekeeping
+spec:
+  endpointSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/name
+        operator: In
+        values:
+          - mysql-jobs-cleanup
+          - mysql-logs-cleanup
+  ingress: []
+  egress:
+    - toEndpoints:
+        - matchLabels:
+            app.kubernetes.io/name: mysql
+      toPorts:
+        - ports:
+            - port: "3306"
+              protocol: TCP
+    - toEndpoints:
+        - matchLabels:
+            io.kubernetes.pod.namespace: kube-system
+            k8s-app: kube-dns
+      toPorts:
+        - ports:
+            - port: "53"
+              protocol: UDP
+            - port: "53"
+              protocol: TCP
+---
+# -- MISP modules --
+# Accepts queries from web pod on :6666.
+# Egress to external HTTPS APIs (enrichment services like VirusTotal, Shodan, etc.)
+# and DNS. L7 HTTP filtering is not possible on HTTPS egress without TLS termination.
+#
+# To restrict which external services modules can reach, add toFQDNs rules:
+#   - toFQDNs:
+#       - matchName: "www.virustotal.com"
+#       - matchName: "api.shodan.io"
+#     toPorts:
+#       - ports:
+#           - port: "443"
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: modules
+spec:
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: modules
+  ingress:
+    # Only the web pod queries the modules API
+    - fromEndpoints:
+        - matchLabels:
+            app.kubernetes.io/name: web
+      toPorts:
+        - ports:
+            - port: "6666"
+              protocol: TCP
+  egress:
+    # External HTTPS APIs (enrichment, sandboxes, threat feeds)
+    - toCIDRSet:
+        - cidr: 0.0.0.0/0
+          except:
+            - 10.0.0.0/8
+            - 172.16.0.0/12
+            - 192.168.0.0/16
+        - cidr: "::/0"
+          except:
+            - fc00::/7
+      toPorts:
+        - ports:
+            - port: "443"
+              protocol: TCP
+    # DNS
+    - toEndpoints:
+        - matchLabels:
+            io.kubernetes.pod.namespace: kube-system
+            k8s-app: kube-dns
+      toPorts:
+        - ports:
+            - port: "53"
+              protocol: UDP
+            - port: "53"
+              protocol: TCP
+---
+# -- metrics exporter --
+# No ingress from within the cluster (Prometheus scrapes via annotations/ServiceMonitor).
+# Egress to MariaDB (metrics queries) and external HTTPS (server reachability checks).
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: metrics
+spec:
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: metrics
+  ingress:
+    # Prometheus scraping -- allow from monitoring namespace
+    - fromEndpoints:
+        - matchLabels:
+            io.kubernetes.pod.namespace: monitoring
+      toPorts:
+        - ports:
+            - port: "9191"
+              protocol: TCP
+  egress:
+    # MariaDB (metric queries)
+    - toEndpoints:
+        - matchLabels:
+            app.kubernetes.io/name: mysql
+      toPorts:
+        - ports:
+            - port: "3306"
+              protocol: TCP
+    # External HTTPS (server reachability + TLS cert checks)
+    - toCIDRSet:
+        - cidr: 0.0.0.0/0
+          except:
+            - 10.0.0.0/8
+            - 172.16.0.0/12
+            - 192.168.0.0/16
+        - cidr: "::/0"
+          except:
+            - fc00::/7
+      toPorts:
+        - ports:
+            - port: "443"
+              protocol: TCP
+    # DNS
+    - toEndpoints:
+        - matchLabels:
+            io.kubernetes.pod.namespace: kube-system
+            k8s-app: kube-dns
+      toPorts:
+        - ports:
+            - port: "53"
+              protocol: UDP
+            - port: "53"
+              protocol: TCP
+---
+# -- MariaDB --
+# Accepts connections from web, worker, scheduler, and housekeeping pods.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: mysql
+spec:
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: mysql
+  ingress:
+    - fromEndpoints:
+        - matchLabels:
+            app.kubernetes.io/name: web
+        - matchLabels:
+            app.kubernetes.io/name: worker
+        - matchLabels:
+            app.kubernetes.io/name: scheduler
+        - matchExpressions:
+            - key: app.kubernetes.io/name
+              operator: In
+              values:
+                - mysql-jobs-cleanup
+                - mysql-logs-cleanup
+        - matchLabels:
+            app.kubernetes.io/name: metrics
+      toPorts:
+        - ports:
+            - port: "3306"
+              protocol: TCP
+  egress:
+    # DNS only
+    - toEndpoints:
+        - matchLabels:
+            io.kubernetes.pod.namespace: kube-system
+            k8s-app: kube-dns
+      toPorts:
+        - ports:
+            - port: "53"
+              protocol: UDP
+            - port: "53"
+              protocol: TCP
+---
+# -- Redis --
+# Accepts connections from web, worker, and scheduler pods.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: cache
+spec:
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: redis
+  ingress:
+    - fromEndpoints:
+        - matchLabels:
+            app.kubernetes.io/name: web
+        - matchLabels:
+            app.kubernetes.io/name: worker
+        - matchLabels:
+            app.kubernetes.io/name: scheduler
+      toPorts:
+        - ports:
+            - port: "6379"
+              protocol: TCP
+  egress:
+    # DNS only
+    - toEndpoints:
+        - matchLabels:
+            io.kubernetes.pod.namespace: kube-system
+            k8s-app: kube-dns
+      toPorts:
+        - ports:
+            - port: "53"
+              protocol: UDP
+            - port: "53"
+              protocol: TCP
