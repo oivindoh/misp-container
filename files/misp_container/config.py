@@ -243,19 +243,14 @@ class SettingsCache:
             log.info("%s defaults: %d new, %d upgraded, %d existing", group, applied, upgraded, skipped)
 
 
-CUSTOM_YAML = os.path.join(CONFIG_DIR, "custom.yaml")
-
-
-def load_settings_yaml(path: str | None = None, custom_path: str | None = None) -> dict[str, list[SettingSpec]]:
+def load_settings_yaml(path: str | None = None) -> dict[str, list[SettingSpec]]:
     """Load settings.yaml and return specs grouped by group name.
 
-    New format: settings.yaml has a top-level 'settings' key with groups as levels.
+    settings.yaml has a top-level 'settings' key with groups as levels.
     Each setting has a 'value' (default) and optional 'force', 'blank_protection', 'since'.
 
     Env var override is automatic: MISP.redis_host -> MISP_REDIS_HOST.
     If the env var exists, the setting is enforced every startup.
-
-    custom.yaml can add/override settings in any group.
     """
     import yaml
 
@@ -265,21 +260,7 @@ def load_settings_yaml(path: str | None = None, custom_path: str | None = None) 
     with open(path) as f:
         raw = yaml.safe_load(f) or {}
 
-    # New format has top-level 'settings' key
     group_data = raw.get("settings", raw)
-
-    # Merge custom.yaml on top if it exists
-    if custom_path is None:
-        custom_path = CUSTOM_YAML
-    if os.path.exists(custom_path):
-        with open(custom_path) as f:
-            custom = yaml.safe_load(f) or {}
-        custom_settings = custom.get("settings", custom)
-        log.info("merging settings from custom.yaml")
-        for group_name, settings in custom_settings.items():
-            if group_name not in group_data:
-                group_data[group_name] = {}
-            group_data[group_name].update(settings)
 
     return _parse_settings(group_data)
 

@@ -262,61 +262,6 @@ settings:
         assert vals["MISP.background_jobs"] == "true"
         assert vals["Plugin.ZeroMQ_enable"] == "false"
 
-    def test_custom_yaml_overrides(self, tmp_path):
-        """custom.yaml entries override matching settings."""
-        base = tmp_path / "settings.yaml"
-        base.write_text("""
-settings:
-  test:
-    MISP.language:
-      value: eng
-    MISP.debug:
-      value: 0
-""")
-        custom = tmp_path / "custom.yaml"
-        custom.write_text("""
-settings:
-  test:
-    MISP.language:
-      value: fra
-""")
-        groups = load_settings_yaml(str(base), custom_path=str(custom))
-        vals = {s.name: s.default_value for s in groups["test"]}
-        assert vals["MISP.language"] == "fra"
-        assert vals["MISP.debug"] == "0"
-
-    def test_custom_yaml_adds_new_settings(self, tmp_path):
-        """custom.yaml can add settings."""
-        base = tmp_path / "settings.yaml"
-        base.write_text("""
-settings:
-  test:
-    MISP.language:
-      value: eng
-""")
-        custom = tmp_path / "custom.yaml"
-        custom.write_text("""
-settings:
-  test:
-    MISP.custom_field:
-      value: custom_value
-""")
-        groups = load_settings_yaml(str(base), custom_path=str(custom))
-        names = {s.name for s in groups["test"]}
-        assert "MISP.custom_field" in names
-
-    def test_no_custom_yaml(self, tmp_path):
-        """Missing custom.yaml is silently ignored."""
-        base = tmp_path / "settings.yaml"
-        base.write_text("""
-settings:
-  test:
-    MISP.language:
-      value: eng
-""")
-        groups = load_settings_yaml(str(base), custom_path=str(tmp_path / "nonexistent.yaml"))
-        assert len(groups["test"]) == 1
-
     def test_same_setting_in_multiple_groups(self, tmp_path):
         """Same setting can appear in multiple groups (e.g., Security.salt)."""
         f = tmp_path / "settings.yaml"
