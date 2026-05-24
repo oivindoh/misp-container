@@ -115,7 +115,7 @@ RUN pecl channel-update pecl.php.net && \
 # Stage 4: misp-source - Clone MISP, set permissions, create dist tarball
 # =============================================================================
 # debian:trixie-20260505-slim
-FROM debian:trixie-slim@sha256:109e2c65005bf160609e4ba6acf7783752f8502ad218e298253428690b9eaa4b AS misp-source
+FROM debian:trixie-slim@sha256:b6e2a152f22a40ff69d92cb397223c906017e1391a73c952b588e51af8883bf8 AS misp-source
 ARG CORE_TAG
 ARG CORE_COMMIT
 ARG MISP_UID=1000
