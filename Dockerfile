@@ -431,7 +431,7 @@ RUN /tmp/uv pip install --system --break-system-packages --no-cache -r /tmp/requ
     && rm /tmp/requirements.txt /tmp/uv
 
 # gcr.io/distroless/python3-debian13 (Python 3.13, nonroot UID 65532)
-FROM gcr.io/distroless/python3-debian13:nonroot@sha256:51b1acc177d535f20fa30a175a657079ee7dce6e326541cfd83a474d9928e123 AS modules
+FROM gcr.io/distroless/python3-debian13:nonroot@sha256:614040f7f08b3f0dca943ea54eae94ea555ea2b9ca83d1acda1b7e4238ce91fb AS modules
 COPY --from=modules-build /usr/local/lib/python3.13/dist-packages /usr/local/lib/python3.13/dist-packages
 
 EXPOSE 6666
