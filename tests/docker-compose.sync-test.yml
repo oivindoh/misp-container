@@ -9,19 +9,19 @@
 #   tests/run-sync-test.sh
 
 x-misp-image: &misp-image
-  image: ghcr.io/oivindoh/misp-container:2.5.37-r15
+  image: ghcr.io/oivindoh/misp-container:2.5.37
   build:
     context: ..
     target: final
 
 x-caddy-image: &caddy-image
-  image: ghcr.io/oivindoh/misp-container-caddy:2.5.37-r15
+  image: ghcr.io/oivindoh/misp-container-caddy:2.5.37
   build:
     context: ..
     target: caddy
 
 x-sync-image: &sync-image
-  image: ghcr.io/oivindoh/misp-container-sync:2.5.37-r15
+  image: ghcr.io/oivindoh/misp-container-sync:2.5.37
   build:
     context: ..
     target: sync

@@ -13,31 +13,31 @@
 #   MISP_IMAGE_TAG=2.5.37 docker compose up -d
 
 x-misp-image: &misp-image
-  image: ghcr.io/oivindoh/misp-container:2.5.37-r15
+  image: ghcr.io/oivindoh/misp-container:2.5.37
   build:
     context: ..
     target: final
 
 x-misp-caddy-image: &misp-caddy-image
-  image: ghcr.io/oivindoh/misp-container-caddy:2.5.37-r15
+  image: ghcr.io/oivindoh/misp-container-caddy:2.5.37
   build:
     context: ..
     target: caddy
 
 x-misp-sync-image: &misp-sync-image
-  image: ghcr.io/oivindoh/misp-container-sync:2.5.37-r15
+  image: ghcr.io/oivindoh/misp-container-sync:2.5.37
   build:
     context: ..
     target: sync
 
 x-misp-metrics-image: &misp-metrics-image
-  image: ghcr.io/oivindoh/misp-container-metrics:2.5.37-r15
+  image: ghcr.io/oivindoh/misp-container-metrics:2.5.37
   build:
     context: ..
     target: metrics
 
 x-misp-modules-image: &misp-modules-image
-  image: ghcr.io/oivindoh/misp-container-modules:2.5.37-r15
+  image: ghcr.io/oivindoh/misp-container-modules:2.5.37
   build:
     context: ..
     target: modules
