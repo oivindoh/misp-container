@@ -37,6 +37,13 @@ jobs:
           OLD="${{ steps.misp.outputs.current }}"
           BRANCH="misp-update/${NEW}"
 
+          # Skip if a PR already exists for this version
+          EXISTING=$(gh pr list --head "${BRANCH}" --state open --json number --jq 'length')
+          if [ "${EXISTING}" -gt 0 ]; then
+            echo "PR already exists for ${BRANCH}, skipping"
+            exit 0
+          fi
+
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git checkout -b "${BRANCH}"
@@ -44,7 +51,7 @@ jobs:
           sed -i "s/^ARG CORE_TAG=.*/ARG CORE_TAG=${NEW}/" Dockerfile
           git add Dockerfile
           git commit -m "bump MISP to ${NEW}"
-          git push origin "${BRANCH}"
+          git push --force-with-lease origin "${BRANCH}"
 
           BODY="MISP released ${NEW} (was ${OLD})."
           BODY="${BODY}
