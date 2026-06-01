@@ -32,7 +32,7 @@ jobs:
       - uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
 
       - name: Build misp image
-        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
         with:
           context: .
           target: final
@@ -42,7 +42,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=misp
 
       - name: Build caddy image
-        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
         with:
           context: .
           target: caddy
@@ -54,7 +54,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=caddy
 
       - name: Build sync image
-        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
         with:
           context: .
           target: sync
@@ -64,7 +64,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=sync
 
       - name: Build metrics image
-        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
         with:
           context: .
           target: metrics
@@ -74,7 +74,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=metrics
 
       - name: Build modules image
-        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
         with:
           context: .
           target: modules
@@ -126,7 +126,7 @@ jobs:
       - uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
 
       - name: Build ${{ matrix.target }} image (from cache)
-        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
         with:
           context: .
           target: ${{ matrix.target }}
@@ -202,7 +202,7 @@ jobs:
           echo "modules_tags=${{ env.IMAGE_MODULES }}:${TAG}" >> "$GITHUB_OUTPUT"
 
       - name: Build and push misp (from cache)
-        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
         with:
           context: .
           target: final
@@ -213,7 +213,7 @@ jobs:
           cache-from: type=gha,scope=misp
 
       - name: Build and push caddy (from cache)
-        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
         with:
           context: .
           target: caddy
@@ -226,7 +226,7 @@ jobs:
             type=gha,scope=caddy
 
       - name: Build and push sync (from cache)
-        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
         with:
           context: .
           target: sync
@@ -237,7 +237,7 @@ jobs:
           cache-from: type=gha,scope=sync
 
       - name: Build and push metrics (from cache)
-        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
         with:
           context: .
           target: metrics
@@ -248,7 +248,7 @@ jobs:
           cache-from: type=gha,scope=metrics
 
       - name: Build and push modules (from cache)
-        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
         with:
           context: .
           target: modules
