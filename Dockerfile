@@ -161,7 +161,7 @@ RUN find /var/www/MISP/INSTALL/* ! -name 'MYSQL.sql' -type f -exec rm {} + && \
 # Stage 5: uv - Python package installer (pinned, used by final + sync stages)
 # =============================================================================
 # uv 0.11.14
-FROM ghcr.io/astral-sh/uv:latest@sha256:440fd6477af86a2f1b38080c539f1672cd22acb1b1a47e321dba5158ab08864d AS uv
+FROM ghcr.io/astral-sh/uv:latest@sha256:b46b03ddfcfbf8f547af7e9eaefdf8a39c8cebcba7c98858d3162bd28cf536f6 AS uv
 
 # =============================================================================
 # Stage 6: final - Runtime image (non-root)
