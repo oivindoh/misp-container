@@ -300,7 +300,7 @@ CMD ["python3", "/entrypoint-web.py"]
 # =============================================================================
 # Build with: docker build --target caddy -t misp-caddy .
 # caddy:2.11.3
-FROM caddy:2@sha256:cb9d71ad83182011b79355cd57692686374bd78d6fe327efe0ff8507da03ab13 AS caddy-bin
+FROM caddy:2@sha256:cfeb0b281bc44a5a51fecde39e9e577c60d863c0b6196e6bbdf58fd00960887f AS caddy-bin
 # Strip cap_net_bind_service from the binary -- we listen on 8080 (unprivileged),
 # and Kubernetes securityContext allowPrivilegeEscalation:false (no_new_privs)
 # blocks execve on binaries with file capabilities.
