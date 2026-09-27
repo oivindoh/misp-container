@@ -61,7 +61,8 @@ jobs:
           context: .
           target: final
           load: true
-          tags: ghcr.io/oivindoh/misp-container:2.5.47
+          # The tag is irrelevant: compose builds its own; this run only fills the local layer cache
+          tags: misp-container:cache-warm
           cache-from: type=gha,scope=misp
       - name: Regenerate the settings catalogue
         if: steps.misp.outputs.changed == 'true' && steps.bump.outputs.skip != 'true'
