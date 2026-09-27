@@ -13,7 +13,8 @@ from misp_container.config import load_settings_yaml
 
 LIVE = [
     {"setting": "MISP.baseurl", "value": "https://x", "type": "string", "level": 0, "file_only": False},
-    {"setting": "MISP.new_thing", "value": False, "type": "boolean", "level": 2, "file_only": False},
+    {"setting": "MISP.new_thing", "value": False, "type": "boolean", "level": 2, "file_only": False,
+     "description": "A new toggle"},
     {"setting": "Plugin.Foo_password", "value": "*****", "type": "string", "level": 2, "redacted": True, "file_only": True},
     {"setting": "MISP.live", "value": True, "type": "boolean", "level": 0},
     {"setting": "MISP.long", "value": "x", "type": "string", "level": 2, "options": {"a": 1}},
@@ -35,7 +36,9 @@ class TestBuildCatalogue:
     def test_entries_are_track_only_and_sorted(self):
         entries = upd.build_catalogue(LIVE, curated={"MISP.baseurl"})
         assert list(entries) == ["MISP.long", "MISP.new_thing", "Plugin.Foo_password"]
-        assert entries["MISP.new_thing"] == {"value": False, "type": "boolean", "level": 2, "track_only": True}
+        assert entries["MISP.new_thing"] == {"value": False, "description": "A new toggle", "type": "boolean",
+                                             "level": 2, "track_only": True}
+        assert "description" not in entries["MISP.long"]
         secret = entries["Plugin.Foo_password"]
         assert secret["sensitive"] is True and secret["file_only"] is True and secret["value"] == ""
         assert "MISP.live" not in entries

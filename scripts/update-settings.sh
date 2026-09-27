@@ -50,6 +50,9 @@ if [ $retries -le 0 ]; then
     exit 1
 fi
 
-KEY=$(${COMPOSE} exec -T web /var/www/MISP/app/Console/cake user change_authkey test-admin@example.com 2>&1 | grep -o '[A-Za-z0-9]\{40\}')
+# cake's dump carries descriptions; the REST endpoint strips them
+DUMP="$(mktemp)"
+trap 'rm -f "$DUMP"; cleanup' EXIT
+${COMPOSE} exec -T web /var/www/MISP/app/Console/cake Admin getSetting all > "$DUMP"
 cd "$REPO"
-PYTHONPATH=files python3 scripts/update_settings.py --write --url "http://localhost:${PORT}" --key "$KEY"
+PYTHONPATH=files python3 scripts/update_settings.py --write --json "$DUMP"

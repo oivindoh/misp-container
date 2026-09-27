@@ -1055,8 +1055,9 @@ extra_web=$(container_ids web | tail -n +2)
 
 echo ""
 echo "--- Settings coverage ---"
-if PYTHONPATH="${SCRIPT_DIR}/../files" python3 "${SCRIPT_DIR}/../scripts/update_settings.py" --check \
-        --url "http://localhost:${TEST_PORT}" --key "$ADMIN_KEY"; then
+settings_dump="${WORK_DIR}/misp-settings.json"
+${COMPOSE} exec -T web /var/www/MISP/app/Console/cake Admin getSetting all > "$settings_dump" 2>/dev/null || true
+if PYTHONPATH="${SCRIPT_DIR}/../files" python3 "${SCRIPT_DIR}/../scripts/update_settings.py" --check --json "$settings_dump"; then
     pass "settings: every MISP setting is curated or catalogued"
 else
     fail "settings: new or stale settings (run scripts/update-settings.sh and review)"

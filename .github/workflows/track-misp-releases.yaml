@@ -52,9 +52,20 @@ jobs:
       # CI's strict coverage check can pass.
       - uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
         if: steps.misp.outputs.changed == 'true' && steps.bump.outputs.skip != 'true'
+      # Warm the layer cache the CI job fills (scope misp): the PECL stage does
+      # not change between MISP releases, only the source and later stages rebuild.
+      - name: Build misp image (cached)
+        if: steps.misp.outputs.changed == 'true' && steps.bump.outputs.skip != 'true'
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
+        with:
+          context: .
+          target: final
+          load: true
+          tags: ghcr.io/oivindoh/misp-container:2.5.47
+          cache-from: type=gha,scope=misp
       - name: Regenerate the settings catalogue
         if: steps.misp.outputs.changed == 'true' && steps.bump.outputs.skip != 'true'
-        timeout-minutes: 45
+        timeout-minutes: 60
         env:
           COMPOSE_CMD: docker compose
           CONTAINER_CMD: docker

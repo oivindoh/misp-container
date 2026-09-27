@@ -121,8 +121,9 @@ The version gate only triggers once per image version. Env vars always take prec
 ### The upstream catalogue
 
 `files/misp-config/settings-upstream.yaml` is generated, never edited: every setting the
-running MISP defines that `settings.yaml` does not name, with MISP's own default, type and
-level, all `track_only`. The image never applies those values; the file documents
+running MISP defines that `settings.yaml` does not name, with MISP's own default, description,
+type and level, all `track_only`. The source is `cake Admin getSetting all` inside the web
+container; the REST endpoint strips descriptions. The image never applies those values; the file documents
 them and makes every MISP setting overridable through its derived env var.
 
 ```bash
