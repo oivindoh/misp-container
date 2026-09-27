@@ -6,6 +6,7 @@ MISP.live=true has been set. Runs as UID 1000 (misp) - no root operations.
 """
 
 from misp_container.env import apply_defaults
+from misp_container.init import prepare
 from misp_container.configure import run
 from misp_container.log import setup as setup_logging, get as getlog
 
@@ -14,5 +15,6 @@ log = getlog("configure")
 
 log.info("MISP configure starting")
 apply_defaults()
+prepare()
 run()
 log.info("MISP configure complete")

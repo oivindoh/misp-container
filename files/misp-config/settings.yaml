@@ -436,9 +436,10 @@ settings:
     MISP.event_view_filter_fields:
       description: "Specify which fields to filter on when you search on the event view. Default values are : \"id, uuid, value, comment, ..."
       value: "id, uuid, value, comment, type, category, Tag.name"
+    # caddy in the same pod is a trusted proxy and forwards the client address
     MISP.log_client_ip_header:
       description: "If log_client_ip is enabled, you can customize which header field contains the client's IP address. This is generally..."
-      value: REMOTE_ADDR
+      value: HTTP_X_FORWARDED_FOR
     MISP.log_errors_ndjson_path:
       description: "Path for the ndjson error log file - defaults to /var/www/MISP/app//app/tmp/logs/error.log.ndjson"
       value: /var/www/MISP/app/tmp/logs/error.log.ndjson

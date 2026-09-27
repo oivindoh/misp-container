@@ -19,6 +19,12 @@ spec:
         app: redis
         app.kubernetes.io/name: redis
     spec:
+      securityContext:
+        runAsUser: 999
+        runAsGroup: 999
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: redis
           image: docker.io/library/redis
@@ -64,6 +70,11 @@ spec:
             exec:
               command: ["redis-cli", "-a", "$(MISP_REDIS_PASSWORD)", "--no-auth-warning", "ping"]
             periodSeconds: 30
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
 ---
 apiVersion: v1
 kind: Service

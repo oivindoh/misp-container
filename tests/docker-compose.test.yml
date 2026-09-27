@@ -11,9 +11,6 @@ x-test-env: &test-env
 services:
   # read_only on all our containers to catch filesystem write issues
   # before they hit Kubernetes (readOnlyRootFilesystem: true)
-  init:
-    <<: *test-env
-    read_only: true
   configure:
     <<: *test-env
     read_only: true

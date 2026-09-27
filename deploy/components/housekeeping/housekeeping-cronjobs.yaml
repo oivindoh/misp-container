@@ -1,6 +1,7 @@
 # Nightly housekeeping for MISP database tables.
-# Batched deletes (LIMIT 25000) to avoid long locks,
-# followed by OPTIMIZE to reclaim fragmented space.
+# Batched deletes (LIMIT 25000) to avoid long locks. No OPTIMIZE TABLE: on
+# InnoDB it rebuilds the table under a metadata lock, which stalls MISP on a
+# large audit_logs table. Retention periods are a policy choice; patch them.
 
 # -- Jobs cleanup: delete jobs older than 2 days --
 apiVersion: batch/v1
@@ -35,7 +36,6 @@ spec:
                       "DELETE FROM jobs WHERE date_created < NOW() - INTERVAL 2 DAY LIMIT 25000; SELECT ROW_COUNT();")
                     echo "Deleted $DELETED old jobs"
                   done
-                  mysql -u "$MYSQL_USER" -p"$MYSQL_PASSWORD" -h mysql "$MYSQL_DATABASE" -e "OPTIMIZE TABLE jobs;"
                   echo "Jobs cleanup complete"
               env:
                 - name: MYSQL_USER
@@ -92,7 +92,6 @@ spec:
                       "DELETE FROM logs WHERE created < NOW() - INTERVAL 30 DAY LIMIT 25000; SELECT ROW_COUNT();")
                     echo "Deleted $DELETED old logs"
                   done
-                  mysql -u "$MYSQL_USER" -p"$MYSQL_PASSWORD" -h mysql "$MYSQL_DATABASE" -e "OPTIMIZE TABLE logs;"
 
                   # Delete old audit logs (>90 days)
                   DELETED=1
@@ -101,7 +100,6 @@ spec:
                       "DELETE FROM audit_logs WHERE created < NOW() - INTERVAL 90 DAY LIMIT 25000; SELECT ROW_COUNT();")
                     echo "Deleted $DELETED old audit_logs"
                   done
-                  mysql -u "$MYSQL_USER" -p"$MYSQL_PASSWORD" -h mysql "$MYSQL_DATABASE" -e "OPTIMIZE TABLE audit_logs;"
 
                   echo "Logs cleanup complete"
               env:

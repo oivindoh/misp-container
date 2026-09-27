@@ -11,6 +11,17 @@
 {$CADDY_ADDRESS::8080} {
 	root * /var/www/MISP/app/webroot
 
+	# PHP-FPM ping for the pod probes (ping.path in the FPM pool)
+	@fpm_ping path /fpm-ping
+	reverse_proxy @fpm_ping {$PHP_FPM_HOST:127.0.0.1}:9002 {
+		transport fastcgi {
+			# FPM matches ping.path against SCRIPT_NAME; without these it
+			# resolves the path as a script under the webroot and denies it
+			env SCRIPT_NAME /fpm-ping
+			env SCRIPT_FILENAME /fpm-ping
+		}
+	}
+
 	# PHP via FastCGI
 	php_fastcgi {$PHP_FPM_HOST:127.0.0.1}:9002
 

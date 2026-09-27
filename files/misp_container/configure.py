@@ -29,22 +29,41 @@ def run_custom_script(path: str, label: str) -> None:
         log.info("custom script %s complete", label)
 
 
+# Values shipped in secrets.env and the overlay examples. A deployment that
+# still carries one of them forgot to set its secrets.
+PLACEHOLDER_MARKERS = ("change-me", "override-me", "REPLACE-WITH", "0000000000")
+CHECKED_SECRETS = ("SECURITY_SALT", "SECURITY_ENCRYPTION_KEY", "ADMIN_PASSWORD", "ADMIN_KEY",
+                   "MYSQL_PASSWORD", "MYSQL_ROOT_PASSWORD", "MISP_REDIS_PASSWORD", "GNUPG_PASSWORD")
+
+
+def is_placeholder(value: str) -> bool:
+    return any(marker in value for marker in PLACEHOLDER_MARKERS)
+
+
 def check_identity() -> None:
-    """Salt and UUID must be explicit and stable across replicas."""
+    """Secrets must be real, and salt and UUID explicit and stable across replicas."""
+    problems = []
+    for key in CHECKED_SECRETS:
+        if is_placeholder(env(key)):
+            problems.append(f"{key} still has its placeholder value")
+
     salt = env("SECURITY_SALT")
     if not salt:
-        log.warning("SECURITY_SALT is not set -- MISP will auto-generate one, but passwords set "
-                    "under one salt become invalid after a restart or on another replica. "
-                    "Generate with: python3 -c \"import secrets; print(secrets.token_hex(32))\"")
+        problems.append("SECURITY_SALT is not set; passwords set under an auto-generated salt break "
+                        "on restart and on other replicas. Generate with: "
+                        "python3 -c \"import secrets; print(secrets.token_hex(32))\"")
     elif len(salt) < 32:
-        log.error("SECURITY_SALT is too short (%d bytes, minimum 32). MISP will reject it and "
-                  "password authentication will fail. Generate a proper salt with: "
-                  "python3 -c \"import secrets; print(secrets.token_hex(32))\"", len(salt))
-        sys.exit(1)
+        problems.append(f"SECURITY_SALT is too short ({len(salt)} bytes, minimum 32)")
+
     if not env("MISP_UUID"):
-        log.warning("MISP_UUID is not set -- MISP will auto-generate one, but it must be set "
-                    "explicitly for server sync to work. Each instance needs a unique, "
-                    "stable UUID. Generate with: python3 -c \"import uuid; print(uuid.uuid4())\"")
+        problems.append("MISP_UUID is not set; each instance needs a unique, stable UUID for server "
+                        "sync. Generate with: python3 -c \"import uuid; print(uuid.uuid4())\"")
+
+    for problem in problems:
+        log.error("%s", problem)
+    if problems:
+        log.error("refusing to configure MISP with the settings above")
+        sys.exit(1)
 
 
 def configure_misp() -> None:

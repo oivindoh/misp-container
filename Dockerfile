@@ -3,13 +3,12 @@
 # Non-root MISP 2.5 Docker image
 #
 # Build targets:
-#   final    PHP-FPM, workers, configure, init, org sync, metrics (one image, entrypoint per role)
+#   final    PHP-FPM, workers, configure, org sync, metrics (one image, entrypoint per role)
 #   caddy    static files + FastCGI reverse proxy (scratch)
 #   modules  misp-modules (distroless)
 # Build through compose: podman compose build
 #
 
-ARG DOCKER_HUB_PROXY=""
 ARG CORE_TAG=v2.5.37
 ARG CORE_COMMIT
 ARG PHP_VER=20240924
@@ -18,7 +17,7 @@ ARG PHP_VER=20240924
 # Stage 1: php-base - Common runtime packages
 # =============================================================================
 # debian:trixie-20260505-slim
-FROM "${DOCKER_HUB_PROXY}debian:trixie-slim@sha256:109e2c65005bf160609e4ba6acf7783752f8502ad218e298253428690b9eaa4b" AS php-base
+FROM debian:trixie-slim@sha256:b6e2a152f22a40ff69d92cb397223c906017e1391a73c952b588e51af8883bf8 AS php-base
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -77,10 +76,10 @@ COPY --from=composer:2@sha256:1364b5b9132ab4c42ea3be53e894572c32fe75a512cb3b1c39
 RUN composer config --no-interaction allow-plugins.composer/installers true && \
     composer install && \
     composer require --with-all-dependencies --no-interaction \
-        elasticsearch/elasticsearch:^8.7.0 \
-        jakub-onderka/openid-connect-php:^1.0.0 \
+        elasticsearch/elasticsearch:8.19.0 \
+        jakub-onderka/openid-connect-php:1.5.0 \
         certmichelin/openid-connect-php:1.3.0 \
-        aws/aws-sdk-php
+        aws/aws-sdk-php:3.398.1
 
 # =============================================================================
 # Stage 3: php-build - Native PHP PECL extensions
@@ -100,11 +99,12 @@ RUN update-alternatives --set php /usr/bin/php8.4 && \
 
 RUN pecl channel-update pecl.php.net && \
     cp "/usr/lib/$(gcc -dumpmachine)"/libfuzzy.* /usr/lib && \
-    pecl install rdkafka && \
-    pecl install simdjson && \
-    pecl install zstd && \
-    pecl install brotli && \
-    git clone --recursive --depth=1 https://github.com/JakubOnderka/pecl-text-ssdeep.git /tmp/pecl-text-ssdeep && \
+    pecl install rdkafka-6.0.5 && \
+    pecl install simdjson-4.0.0 && \
+    pecl install zstd-0.18.0 && \
+    pecl install brotli-0.21.0 && \
+    git clone --recursive https://github.com/JakubOnderka/pecl-text-ssdeep.git /tmp/pecl-text-ssdeep && \
+    git -C /tmp/pecl-text-ssdeep checkout aa7ea7045a294548aedc3ccdfbb3936e1716bebd && \
     cd /tmp/pecl-text-ssdeep && phpize && ./configure && make && make install && \
     tar -czf /pecl_libs.tar.gz \
         /usr/lib/php/${PHP_VER}/ssdeep.so \
@@ -114,7 +114,7 @@ RUN pecl channel-update pecl.php.net && \
         /usr/lib/php/${PHP_VER}/zstd.so
 
 # =============================================================================
-# Stage 4: misp-source - Clone MISP, set permissions, create dist tarball
+# Stage 4: misp-source - Clone MISP, set permissions
 # =============================================================================
 # debian:trixie-20260505-slim
 FROM debian:trixie-slim@sha256:b6e2a152f22a40ff69d92cb397223c906017e1391a73c952b588e51af8883bf8 AS misp-source
@@ -133,7 +133,7 @@ RUN if [ -n "${CORE_COMMIT}" ]; then \
     fi && \
     cd /var/www/MISP && git submodule update --init --recursive .
 
-# Clean, set permissions, and create dist tarball - all in one layer
+# Clean and set permissions - all in one layer
 RUN find /var/www/MISP/INSTALL/* ! -name 'MYSQL.sql' -type f -exec rm {} + && \
     find /var/www/MISP/INSTALL/* ! -name 'MYSQL.sql' -type l -exec rm {} + && \
     find /var/www/MISP/.git/* ! -name HEAD -exec rm -rf {} + 2>/dev/null || true && \
@@ -144,14 +144,13 @@ RUN find /var/www/MISP/INSTALL/* ! -name 'MYSQL.sql' -type f -exec rm {} + && \
            /var/www/MISP/app/files/scripts/python-cybox \
            /var/www/MISP/app/files/scripts/python-maec \
            /var/www/MISP/app/files/scripts/python-stix && \
-    # Create dist tarball BEFORE setting restrictive permissions,
-    # so extracted files have normal 0644/0755 perms and can be freely managed.
     echo "${CORE_COMMIT:-${CORE_TAG}}" > /tmp/misp-dist-version && \
-    tar czf /srv/misp-dist.tar.gz -C /var/www/MISP/app files Config && \
-    chown ${MISP_UID}:${MISP_GID} /srv/misp-dist.tar.gz /tmp/misp-dist-version && \
-    # Strip app/files/ and app/Config/ from the image - the init container populates
-    # these from the tarball at runtime. Saves ~191 MB from the image layer.
-    rm -rf /var/www/MISP/app/files/* /var/www/MISP/app/Config/* && \
+    # app/Config is a per-pod volume rendered at start from these defaults
+    mkdir -p /srv/misp-config && \
+    cp /var/www/MISP/app/Config/core.default.php /var/www/MISP/app/Config/bootstrap.default.php \
+       /var/www/MISP/app/Config/routes.php /srv/misp-config/ && \
+    rm -rf /var/www/MISP/app/Config/* && \
+    chown -R ${MISP_UID}:${MISP_GID} /srv/misp-config /tmp/misp-dist-version && \
     # Now set restrictive permissions for the runtime image
     find /var/www/MISP -type f -exec chmod 0440 {} + && \
     find /var/www/MISP -type d -exec chmod 0550 {} + && \
@@ -173,7 +172,7 @@ FROM ghcr.io/astral-sh/uv:latest@sha256:440fd6477af86a2f1b38080c539f1672cd22acb1
 # that are only needed by build stages (phpize, adduser). Starting fresh and
 # installing only runtime packages saves ~75 MB.
 # debian:trixie-20260505-slim
-FROM "${DOCKER_HUB_PROXY}debian:trixie-slim@sha256:109e2c65005bf160609e4ba6acf7783752f8502ad218e298253428690b9eaa4b" AS final
+FROM debian:trixie-slim@sha256:b6e2a152f22a40ff69d92cb397223c906017e1391a73c952b588e51af8883bf8 AS final
 ENV DEBIAN_FRONTEND=noninteractive
 
 ARG CORE_TAG
@@ -262,13 +261,14 @@ COPY --from=composer-build --chown=${MISP_UID}:${MISP_GID} /tmp/composer.lock /v
 COPY --from=composer-build --chown=${MISP_UID}:${MISP_GID} /tmp/Vendor /var/www/MISP/app/Vendor
 COPY --from=composer-build --chown=${MISP_UID}:${MISP_GID} /tmp/Plugin /var/www/MISP/app/Plugin
 
-# Copy the compressed dist tarball (used by init container to populate volumes)
-# This replaces the old .src directory copy (~63MB tarball vs ~191MB directory duplication)
-COPY --from=misp-source --chown=${MISP_UID}:${MISP_GID} /srv/misp-dist.tar.gz /srv/misp-dist.tar.gz
+# app/Config defaults (rendered into the per-pod Config volume at start) and the version marker
+COPY --from=misp-source --chown=${MISP_UID}:${MISP_GID} /srv/misp-config /srv/misp-config
 COPY --from=misp-source --chown=${MISP_UID}:${MISP_GID} /tmp/misp-dist-version /srv/misp-dist-version
 
-# Prepare writable directories (overlaid by emptyDir volumes in K8s / named volumes in Compose)
-RUN for dir in app/files app/attachments app/tmp app/tmp/cache app/tmp/cache/models \
+# Prepare writable directories (overlaid by emptyDir volumes in K8s / named volumes in Compose).
+# app/files ships in the image; MISP writes only to these four subdirectories of it.
+RUN for dir in app/files/scripts/tmp app/files/certs app/files/terms app/files/img/orgs \
+               app/attachments app/tmp app/tmp/cache app/tmp/cache/models \
                app/tmp/cache/persistent app/tmp/cache/views app/tmp/logs \
                app/Config app/webroot/img/orgs app/webroot/img/custom .gnupg; do \
         mkdir -p /var/www/MISP/$dir && chown ${MISP_UID}:${MISP_GID} /var/www/MISP/$dir && chmod 0770 /var/www/MISP/$dir; \
@@ -276,7 +276,6 @@ RUN for dir in app/files app/attachments app/tmp app/tmp/cache app/tmp/cache/mod
 
 # Copy Python entrypoint package and scripts
 COPY --chown=${MISP_UID}:${MISP_GID} files/misp_container/ /opt/misp_container/
-COPY --chown=${MISP_UID}:${MISP_GID} --chmod=0550 files/entrypoint-init.py /entrypoint-init.py
 COPY --chown=${MISP_UID}:${MISP_GID} --chmod=0550 files/entrypoint-configure.py /entrypoint-configure.py
 COPY --chown=${MISP_UID}:${MISP_GID} --chmod=0550 files/entrypoint-web.py /entrypoint-web.py
 COPY --chown=${MISP_UID}:${MISP_GID} --chmod=0550 files/entrypoint-worker.py /entrypoint-worker.py
@@ -351,7 +350,7 @@ CMD ["caddy", "run", "--config", "/etc/caddy/Caddyfile"]
 #   misp-modules[all]==3.0.7      -- everything including numpy, pandas, opencv
 #   misp-modules==3.0.7           -- core only (~89 modules, 106 MB)
 
-FROM "${DOCKER_HUB_PROXY}debian:trixie-slim@sha256:109e2c65005bf160609e4ba6acf7783752f8502ad218e298253428690b9eaa4b" AS modules-build
+FROM debian:trixie-slim@sha256:b6e2a152f22a40ff69d92cb397223c906017e1391a73c952b588e51af8883bf8 AS modules-build
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y --no-install-recommends \

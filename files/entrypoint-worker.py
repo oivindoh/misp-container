@@ -13,7 +13,7 @@ from pathlib import Path
 from misp_container import CAKE, MISP_BASE
 from misp_container.env import apply_defaults, env
 from misp_container import db
-from misp_container.init import check_writable
+from misp_container.init import prepare, check_writable
 from misp_container.log import setup as setup_logging, get as getlog
 
 SUPERVISORD_CONF = "/tmp/supervisord-workers.conf"
@@ -26,6 +26,9 @@ process_name=%(program_name)s_%(process_num)02d
 numprocs={numprocs}
 autostart=true
 autorestart=true
+stopwaitsecs={stopwait}
+stopasgroup=true
+killasgroup=true
 stdout_logfile=/dev/stdout
 stdout_logfile_maxbytes=0
 stderr_logfile=/dev/stderr
@@ -40,6 +43,9 @@ process_name=%(program_name)s
 numprocs=1
 autostart=true
 autorestart=true
+stopwaitsecs={stopwait}
+stopasgroup=true
+killasgroup=true
 stdout_logfile=/dev/stdout
 stdout_logfile_maxbytes=0
 stderr_logfile=/dev/stderr
@@ -81,16 +87,20 @@ username={sv_user}
 password={sv_pass}
 """
 
+    # A job already popped from Redis is lost when its worker dies, so a
+    # stopping worker gets this long to finish before SIGKILL
+    stopwait = env("WORKER_STOP_GRACE", "300")
+
     sections = [header]
     for name in ("default", "prio", "email", "update", "cache"):
         numprocs = env(f"NUM_WORKERS_{name.upper()}", "0")
         if int(numprocs) > 0:
             sections.append(WORKER_TEMPLATE.format(
-                name=name, misp_base=MISP_BASE, cake=CAKE, numprocs=numprocs,
+                name=name, misp_base=MISP_BASE, cake=CAKE, numprocs=numprocs, stopwait=stopwait,
             ))
 
     if env("ENABLE_SCHEDULER") == "true":
-        sections.append(SCHEDULER_TEMPLATE.format(misp_base=MISP_BASE, cake=CAKE))
+        sections.append(SCHEDULER_TEMPLATE.format(misp_base=MISP_BASE, cake=CAKE, stopwait=stopwait))
     else:
         log.info("scheduler disabled (ENABLE_SCHEDULER=false)")
 
@@ -114,6 +124,7 @@ log = getlog("worker")
 log.info("MISP worker container starting")
 
 apply_defaults()
+prepare()
 if not env("PLUGIN_S3_BUCKET_NAME"):
     check_writable(env("MISP_ATTACHMENTS_DIR"), "attachments")
 db.wait_for_mysql(retries=60, wait_seconds=5)

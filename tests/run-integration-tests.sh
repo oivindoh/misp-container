@@ -166,6 +166,10 @@ assert_eq "caddy runs as UID 1000" "1000" "$caddy_uid"
 echo ""
 echo "--- HTTP / caddy ---"
 
+# The pod probes hit PHP-FPM's ping through caddy
+fpm_ping=$(curl -s "http://localhost:${TEST_PORT}/fpm-ping" 2>/dev/null | tr -d '[:space:]')
+assert_eq "caddy proxies /fpm-ping to PHP-FPM" "pong" "$fpm_ping"
+
 # caddy must serve the MISP login page (PHP proxied to FPM)
 http_code=$(curl -sf -o /dev/null -w '%{http_code}' "http://localhost:${TEST_PORT}/users/login" 2>/dev/null)
 assert_eq "login page returns 200" "200" "$http_code"
@@ -314,18 +318,15 @@ fpm_listening=$(web_exec "cat /proc/net/tcp6 2>/dev/null | grep ':232A'" || true
 assert_contains "PHP-FPM listens on port 9002" "$fpm_listening" "232A"
 
 echo ""
-echo "--- Init container / volume population ---"
+echo "--- Distribution files and app/Config rendering ---"
 
-# The init container extracts distribution files from a tarball and writes a VERSION marker
-version=$(web_exec "cat /var/www/MISP/app/files/VERSION 2>/dev/null" | tr -d '[:space:]')
-assert_eq "files/VERSION matches image" "v2.5.37" "$version"
 
-# Taxonomy definitions should be populated from the distribution tarball
+# Taxonomy definitions ship in the image
 taxonomies=$(web_exec "ls /var/www/MISP/app/files/taxonomies/ 2>/dev/null | head -3")
 assert_contains "taxonomies directory populated" "$taxonomies" ""
 [ -n "$taxonomies" ] && pass "taxonomies directory is not empty" || fail "taxonomies directory is empty"
 
-# bootstrap.php should have the auth plugin detection patch applied by the init container
+# bootstrap.php gets the auth plugin detection patch when app/Config is rendered
 bootstrap=$(web_exec "cat /var/www/MISP/app/Config/bootstrap.php 2>/dev/null | grep 'Detect what auth modules'")
 assert_contains "bootstrap.php has auth plugin patch" "$bootstrap" "Detect what auth modules"
 

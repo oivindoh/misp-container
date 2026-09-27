@@ -9,58 +9,7 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "files"))
 
-from misp_container.init import _copy_no_clobber, _make_writable, _generate_database_config, _generate_email_config
-
-
-class TestCopyNoClobber:
-    """Copy files without overwriting existing ones (for user-customizable dirs)."""
-
-    def test_copies_new_files(self, tmp_path):
-        """New files are copied to the destination."""
-        src = tmp_path / "src"
-        dst = tmp_path / "dst"
-        src.mkdir()
-        dst.mkdir()
-        (src / "file.txt").write_text("hello")
-        _copy_no_clobber(src, dst)
-        assert (dst / "file.txt").read_text() == "hello"
-
-    def test_does_not_overwrite_existing(self, tmp_path):
-        """Existing files in dst are preserved (not overwritten by src)."""
-        src = tmp_path / "src"
-        dst = tmp_path / "dst"
-        src.mkdir()
-        dst.mkdir()
-        (src / "file.txt").write_text("new")
-        (dst / "file.txt").write_text("existing")
-        _copy_no_clobber(src, dst)
-        assert (dst / "file.txt").read_text() == "existing"
-
-    def test_copies_nested_dirs(self, tmp_path):
-        """Nested directory structures are copied recursively."""
-        src = tmp_path / "src"
-        dst = tmp_path / "dst"
-        (src / "sub").mkdir(parents=True)
-        dst.mkdir()
-        (src / "sub" / "deep.txt").write_text("deep")
-        _copy_no_clobber(src, dst)
-        assert (dst / "sub" / "deep.txt").read_text() == "deep"
-
-
-class TestMakeWritable:
-    """Ensure file trees are writable (for Docker Compose volume pre-population)."""
-
-    def test_makes_readonly_files_writable(self, tmp_path):
-        """Files with 0440 permissions become writable after _make_writable."""
-        f = tmp_path / "readonly.txt"
-        f.write_text("data")
-        f.chmod(0o440)
-        _make_writable(str(tmp_path))
-        assert os.access(str(f), os.W_OK)
-
-    def test_handles_nonexistent_path(self):
-        """Non-existent path does not raise an exception."""
-        _make_writable("/nonexistent/path")
+from misp_container.init import _generate_database_config, _generate_email_config
 
 
 class TestGenerateDatabaseConfig:
@@ -119,23 +68,6 @@ class TestGenerateEmailConfig:
         assert "smtp.example.com" in content
         assert "587" in content
         assert "misp@example.com" in content
-
-
-class TestCopyTree:
-    """Full-sync copy used for app/files directories (no copystat, so no xattrs)."""
-
-    def test_copies_nested_and_overwrites(self, tmp_path):
-        from misp_container.init import _copy_tree
-        src = tmp_path / "src"
-        dst = tmp_path / "dst"
-        (src / "sub").mkdir(parents=True)
-        (src / "sub" / "a.txt").write_text("new")
-        (src / "top.txt").write_text("top")
-        (dst / "sub").mkdir(parents=True)
-        (dst / "sub" / "a.txt").write_text("old")
-        _copy_tree(src, dst)
-        assert (dst / "sub" / "a.txt").read_text() == "new"
-        assert (dst / "top.txt").read_text() == "top"
 
 
 class TestCheckWritable:
@@ -204,3 +136,52 @@ class TestPopulateGnupg:
         assert calls[2][1]["input"] == "ABCDEF0123456789:6:\n"
         for cmd, _ in calls:
             assert cmd[:4] == ["gpg", "--batch", "--homedir", str(tmp_path / "gnupg")]
+
+
+class TestPrepareConfig:
+    """app/Config rendering from the image defaults, settings.yaml and env."""
+
+    def test_renders_all_files_and_patches_bootstrap(self, tmp_path, monkeypatch):
+        from misp_container import init as init_mod
+        defaults = tmp_path / "defaults"
+        defaults.mkdir()
+        (defaults / "core.default.php").write_text("<?php // core")
+        (defaults / "routes.php").write_text("<?php // routes")
+        (defaults / "bootstrap.default.php").write_text(
+            "<?php\nCakePlugin::load('CakeResque');\nCakePlugin::loadAll(array('CakeResque' => array()));\n")
+        settings = tmp_path / "settings.yaml"
+        settings.write_text("settings:\n  minimum_config:\n    MISP.redis_host:\n      value: redis\n  db_enable:\n    MISP.system_setting_db:\n      value: true\n")
+        config_dir = tmp_path / "Config"
+        monkeypatch.setattr(init_mod, "MISP_CONFIG", str(config_dir))
+        monkeypatch.setattr("misp_container.config.CONFIG_DIR", str(tmp_path))
+        env_vars = {"MISP_CONFIG_DEFAULTS": str(defaults), "MYSQL_HOST": "db", "MYSQL_USER": "u",
+                    "MYSQL_PORT": "3306", "MYSQL_PASSWORD": "p", "MYSQL_DATABASE": "misp", "MYSQL_TLS": "false",
+                    "MISP_EMAIL": "m@x", "SMTP_FQDN": "smtp", "SMTP_PORT": "25"}
+        with patch.dict(os.environ, env_vars):
+            os.environ.pop("MISP_REDIS_HOST", None)
+            init_mod.prepare_config()
+        assert (config_dir / "core.php").read_text() == "<?php // core"
+        assert (config_dir / "routes.php").exists()
+        bootstrap = (config_dir / "bootstrap.php").read_text()
+        assert "CakeResque" not in bootstrap.split("Detect what auth modules")[0]
+        assert "Detect what auth modules" in bootstrap
+        assert "'redis_host' => 'redis'" in (config_dir / "config.php").read_text()
+        assert "'system_setting_db' => true" in (config_dir / "config.php").read_text()
+        assert "'host' => 'db'" in (config_dir / "database.php").read_text()
+        assert "'host'          => 'smtp'" in (config_dir / "email.php").read_text()
+
+    def test_existing_core_php_is_kept(self, tmp_path, monkeypatch):
+        from misp_container import init as init_mod
+        defaults = tmp_path / "defaults"
+        defaults.mkdir()
+        (defaults / "core.default.php").write_text("<?php // new")
+        config_dir = tmp_path / "Config"
+        config_dir.mkdir()
+        (config_dir / "core.php").write_text("<?php // mine")
+        settings = tmp_path / "settings.yaml"
+        settings.write_text("settings: {}\n")
+        monkeypatch.setattr(init_mod, "MISP_CONFIG", str(config_dir))
+        monkeypatch.setattr("misp_container.config.CONFIG_DIR", str(tmp_path))
+        with patch.dict(os.environ, {"MISP_CONFIG_DEFAULTS": str(defaults), "MYSQL_PORT": "3306", "SMTP_PORT": "25"}):
+            init_mod.prepare_config()
+        assert (config_dir / "core.php").read_text() == "<?php // mine"

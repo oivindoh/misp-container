@@ -87,13 +87,15 @@ Edit `compose-secrets.env` with your passwords:
 ```bash
 MYSQL_PASSWORD=<your-db-password>
 MYSQL_ROOT_PASSWORD=<your-root-password>
-REDIS_PASSWORD=<your-redis-password>
+MISP_REDIS_PASSWORD=<your-redis-password>
 ADMIN_PASSWORD=<your-admin-password>
+SECURITY_SALT=<salt-from-the-old-instance>
 ```
 
-Edit `compose.env` with your instance URL:
+Edit `compose.env` with your instance URL and UUID:
 ```bash
-BASE_URL=https://your-misp.example.com
+MISP_BASEURL=https://your-misp.example.com
+MISP_UUID=<uuid-from-the-old-instance>
 ```
 
 ## Step 3: Start infrastructure only
@@ -101,12 +103,12 @@ BASE_URL=https://your-misp.example.com
 Start MySQL and Redis without MISP (so we can import the dump before MISP touches the DB):
 
 ```bash
-podman compose up -d misp-mysql misp-redis
+podman compose up -d mysql redis
 ```
 
 Wait for MySQL to be healthy:
 ```bash
-podman compose exec misp-mysql mariadb -u root -p<root-password> -e "SELECT 1"
+podman compose exec mysql mariadb -u root -p<root-password> -e "SELECT 1"
 ```
 
 ## Step 4: Import the database
@@ -114,21 +116,21 @@ podman compose exec misp-mysql mariadb -u root -p<root-password> -e "SELECT 1"
 If you used `mysqldump`:
 ```bash
 # Create the database if it doesn't exist
-podman compose exec -T misp-mysql mariadb -u root -p<root-password> \
+podman compose exec -T mysql mariadb -u root -p<root-password> \
     -e "CREATE DATABASE IF NOT EXISTS misp CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
 
 # Import the dump
-podman compose exec -T misp-mysql mariadb -u root -p<root-password> \
+podman compose exec -T mysql mariadb -u root -p<root-password> \
     --default-character-set=utf8mb4 misp < misp-backup.sql
 ```
 
 If you used `mariadb-backup`:
 ```bash
 # Stop the database, prepare and restore
-podman compose stop misp-mysql
-podman compose exec -T misp-mysql mbstream -x -C /var/lib/mysql < misp-backup.mbstream
-podman compose exec -T misp-mysql mariadb-backup --prepare --target-dir=/var/lib/mysql
-podman compose start misp-mysql
+podman compose stop mysql
+podman compose exec -T mysql mbstream -x -C /var/lib/mysql < misp-backup.mbstream
+podman compose exec -T mysql mariadb-backup --prepare --target-dir=/var/lib/mysql
+podman compose start mysql
 ```
 
 ### Version check
@@ -141,15 +143,15 @@ If migrating from a different MISP 2.5.x version, schema updates also run automa
 
 ### Attachments (Compose only -- for Kubernetes, use the PVC or S3)
 
-This image stores attachments in `app/attachments/` (a dedicated volume), separate from `app/files/` which holds MISP distribution files managed by the init container. This prevents image upgrades from overwriting your uploaded data.
+This image stores attachments in `app/attachments/` (a dedicated volume), separate from `app/files/`, which ships in the image. Image upgrades never touch your uploaded data.
 
 ```bash
 # Extract into a temporary directory
 mkdir -p /tmp/misp-restore
 tar xzf misp-files.tar.gz -C /tmp/misp-restore
 
-# Start init container to create volumes, then copy files in
-podman compose up init
+# Create the web container (and its volumes) without starting it, then copy files in
+podman compose create web
 podman compose cp /tmp/misp-restore/files/. web:/var/www/MISP/app/attachments/
 ```
 
@@ -189,25 +191,25 @@ curl -sf -H "Authorization: <your-api-key>" \
 
 ### Common issues after migration
 
-**"MISP.live is not set"** -- The web container sets this on startup. If the worker starts before the web container finishes configuration, it will wait and retry.
+**"MISP.live is not set"** -- The configure step sets this last. Web and worker containers wait for it and retry.
 
-**"CSRF validation failed"** -- If running multiple web replicas, ensure `SALT` and `UUID` are set in your secrets and match the values from your old instance:
+**"CSRF validation failed"** -- If running multiple web replicas, ensure `SECURITY_SALT` and `MISP_UUID` are set and match the values from your old instance:
 ```bash
 # Get from old DB
 SELECT value FROM system_settings WHERE setting='Security.salt';
 SELECT value FROM system_settings WHERE setting='MISP.uuid';
 ```
-Set these in `compose-secrets.env`:
+Set these in `compose-secrets.env` and `compose.env`:
 ```bash
-SALT=<value-from-old-instance>
-UUID=<value-from-old-instance>
+SECURITY_SALT=<value-from-old-instance>
+MISP_UUID=<value-from-old-instance>
 ```
 
 **"GPG key not found"** -- Either restore your old `.gnupg` directory or set `AUTOCONF_GPG=true` to generate a new key. If you generate a new key, you'll need to re-export it to sync partners.
 
 **Password doesn't work** -- The admin password from `ADMIN_PASSWORD` env var is only set on first run (when the user doesn't exist). If the user already exists in the imported DB, the env var is ignored. Use the password from your old instance.
 
-**Workers not processing** -- Check that `SUPERVISOR_HOST` is set correctly. In Compose it should be `worker` (the service name). In Kubernetes it's `127.0.0.1` (sidecar).
+**Workers not processing** -- Check that `SIMPLEBACKGROUNDJOBS_SUPERVISOR_HOST` is set correctly: `worker`, the service name in both Compose and Kubernetes.
 
 ## Migrating to S3 storage
 
@@ -215,12 +217,13 @@ If your old instance uses local file storage and you want to switch to S3:
 
 1. Complete the migration above with local files first
 2. Set up your S3 bucket (AWS, MinIO, Garage, Ceph)
-3. Configure S3 in `compose.env` or via the MISP UI:
+3. Configure S3 in `compose.env` (the env var names follow the MISP setting names):
    ```
-   S3_BUCKET=misp-attachments
-   S3_ENDPOINT=https://s3.example.com
-   S3_ACCESS_KEY=...
-   S3_SECRET_KEY=...
+   PLUGIN_S3_BUCKET_NAME=misp-attachments
+   PLUGIN_S3_AWS_ENDPOINT=https://s3.example.com
+   PLUGIN_S3_AWS_ACCESS_KEY=...
+   PLUGIN_S3_AWS_SECRET_KEY=...
+   PLUGIN_S3_REGION=...
    ```
 4. Migrate existing attachments to S3 using the MISP admin tool:
    ```bash
@@ -233,6 +236,6 @@ The official [MISP/misp-docker](https://github.com/MISP/misp-docker) uses the sa
 
 Key differences to account for:
 - **User UID**: Official image runs as `www-data` (33), ours runs as UID 1000. File ownership in mounted volumes may need adjusting.
-- **No .dist pattern**: Our image doesn't use the `.dist` directory sync. Files are populated by the init container from a compressed tarball.
+- **No .dist pattern**: Our image doesn't use the `.dist` directory sync. `app/files` ships in the image; only `scripts/tmp`, `certs`, `terms` and `img/orgs` are volumes.
 - **No rsync/supervisord in web**: Workers run in a separate container, not inside the web container.
 - **No root at runtime**: The entrypoint never runs as root. All file permissions are set at build time.

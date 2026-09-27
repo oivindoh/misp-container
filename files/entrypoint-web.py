@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """PHP-FPM entrypoint for the misp-web container.
 
-Renders the PHP config, waits for the configure Job (MISP.live=true),
+Prepares app/Config, renders the PHP-FPM config, waits for the configure Job (MISP.live=true),
 then exec's php-fpm. Runs as UID 1000 (misp) - no root operations.
 """
 
@@ -15,7 +15,7 @@ from misp_container import MISP_BASE
 from misp_container.env import apply_defaults, env
 from misp_container import db
 from misp_container.configure import run_custom_script
-from misp_container.init import check_writable
+from misp_container.init import prepare, check_writable
 from misp_container.log import setup as setup_logging, get as getlog
 
 CUSTOM_PRE_START_SCRIPT = "/custom/pre-start.py"
@@ -78,6 +78,7 @@ setup_logging("web")
 log.info("MISP web container starting")
 
 apply_defaults()
+prepare()
 configure_php()
 
 if not env("PLUGIN_S3_BUCKET_NAME"):

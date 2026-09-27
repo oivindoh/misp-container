@@ -1,43 +1,30 @@
-"""Init container: populate volumes from distribution tarball."""
+"""Per-pod preparation: tmp directories, app/Config rendering, GPG key import.
+
+Every entrypoint (configure, web, worker) calls prepare() at start. app/Config
+is a per-pod volume rendered from the image defaults, settings.yaml and env.
+app/files ships in the image; only app/files/{scripts/tmp,certs,terms,img/orgs}
+are volumes.
+"""
 
 import os
 import re
 import shutil
-import stat
 import subprocess
-import tarfile
 from pathlib import Path
 
-from . import MISP_BASE, DIST_TARBALL, DIST_VERSION_FILE
-from .env import env, apply_defaults
+from . import MISP_BASE, CONFIG_DEFAULTS
+from .env import env
 from .log import get as getlog
 
-log = getlog("init")
+log = getlog("prepare")
 
-MISP_FILES = f"{MISP_BASE}/app/files"
 MISP_CONFIG = f"{MISP_BASE}/app/Config"
 MISP_TMP = f"{MISP_BASE}/app/tmp"
 GNUPG_KEY_FILE = "/etc/misp-docker/gnupg/private.asc"
 
-# Directories where user customizations should not be overwritten
-NO_CLOBBER_DIRS = {"certs", "img", "terms"}
-
-# shutil.copy2 and shutil.copytree copy extended attributes, including the
-# SELinux label of the init container's private staging directory, which other
-# containers cannot read. shutil.copy copies mode bits only, and _copy_tree
-# never calls copystat on directories.
+# shutil.copy2 copies extended attributes, including the SELinux label of the
+# source, which other containers cannot read. shutil.copy copies mode bits only.
 _copy = shutil.copy
-
-
-def _copy_tree(src, dst):
-    """Copy a directory tree, overwriting files, without extended attributes."""
-    dst.mkdir(parents=True, exist_ok=True)
-    for item in src.iterdir():
-        target = dst / item.name
-        if item.is_dir():
-            _copy_tree(item, target)
-        else:
-            _copy(item, target)
 
 AUTH_PLUGIN_PATCH = """
 /**
@@ -52,94 +39,44 @@ if (Configure::read('ShibbAuth')) { CakePlugin::load('ShibbAuth'); }
 """
 
 
-def populate_files():
-    """Extract distribution files from tarball into the files/ volume."""
-    image_version = _read_file(DIST_VERSION_FILE, "unknown")
-    version_file = Path(MISP_FILES) / "VERSION"
-    current_version = _read_file(str(version_file), "")
-
-    if current_version == image_version:
-        log.info("app/files/ already at version %s, skipping", image_version)
-        return
-
-    log.info("extracting distribution files (%s -> %s)", current_version or "empty", image_version)
-
-    staging = Path("/tmp/misp-dist-staging")
-    staging.mkdir(parents=True, exist_ok=True)
-
-    with tarfile.open(DIST_TARBALL, "r:gz") as tar:
-        tar.extractall(staging)
-
-    # Ensure target is writable (Docker Compose pre-populates named volumes
-    # from the image layer with restrictive permissions)
-    _make_writable(MISP_FILES)
-
-    files_src = staging / "files"
-    if files_src.is_dir():
-        for child in sorted(files_src.iterdir()):
-            if not child.is_dir():
-                continue
-            dest = Path(MISP_FILES) / child.name
-            if child.name in NO_CLOBBER_DIRS:
-                log.info("  %s (no-clobber)", child.name)
-                dest.mkdir(parents=True, exist_ok=True)
-                _copy_no_clobber(child, dest)
-            else:
-                log.info("  %s (full sync)", child.name)
-                if dest.exists():
-                    shutil.rmtree(dest)
-                _copy_tree(child, dest)
-
-        # Copy top-level files
-        for f in files_src.iterdir():
-            if f.is_file():
-                _copy(f, Path(MISP_FILES) / f.name)
-
-    # Write version marker
-    version_file.write_text(image_version)
-
-    shutil.rmtree(staging, ignore_errors=True)
-    log.info("app/files/ populated")
+def prepare():
+    """Everything a pod needs on disk before MISP runs."""
+    setup_tmp()
+    prepare_config()
+    populate_gnupg()
 
 
-def populate_config():
-    """Generate CakePHP config files from templates + env vars."""
-    log.info("generating app/Config/ files")
+def setup_tmp():
+    """Create required tmp directory structure."""
+    log.info("creating tmp directory structure")
+    for d in ("cache", "cache/models", "cache/persistent", "cache/views", "logs"):
+        Path(MISP_TMP, d).mkdir(parents=True, exist_ok=True)
+    Path(MISP_BASE, "app/webroot/img/orgs").mkdir(parents=True, exist_ok=True)
+    Path(MISP_BASE, "app/webroot/img/custom").mkdir(parents=True, exist_ok=True)
 
-    staging = Path("/tmp/misp-config-staging")
-    staging.mkdir(parents=True, exist_ok=True)
 
-    with tarfile.open(DIST_TARBALL, "r:gz") as tar:
-        members = [m for m in tar.getmembers() if m.name.startswith("Config/")]
-        tar.extractall(staging, members=members)
-
-    config_src = staging / "Config"
+def prepare_config():
+    """Render app/Config from the image defaults, settings.yaml and env vars."""
+    log.info("rendering app/Config")
+    defaults = Path(env("MISP_CONFIG_DEFAULTS", CONFIG_DEFAULTS))
     config_dst = Path(MISP_CONFIG)
+    config_dst.mkdir(parents=True, exist_ok=True)
 
-    _make_writable(MISP_CONFIG)
-
-    # Static config files
-    for name, defaults in [("core.php", "core.default.php"), ("routes.php", "routes.php")]:
+    # Static CakePHP files, once per volume
+    for name, source in (("core.php", "core.default.php"), ("routes.php", "routes.php")):
         dst = config_dst / name
         if not dst.exists() or dst.stat().st_size == 0:
-            log.info("  %s from defaults", name)
-            src = config_src / defaults
-            if not src.exists():
-                src = config_src / name
+            src = defaults / source
             if src.exists():
+                log.info("  %s from defaults", name)
                 _copy(src, dst)
 
-    # bootstrap.php with auth plugin patch
     bootstrap = config_dst / "bootstrap.php"
     if not bootstrap.exists() or bootstrap.stat().st_size == 0:
-        log.info("  bootstrap.php from defaults (with auth plugin patch)")
-        src = config_src / "bootstrap.default.php"
-        if not src.exists():
-            src = config_src / "bootstrap.php"
+        src = defaults / "bootstrap.default.php"
         if src.exists():
+            log.info("  bootstrap.php from defaults")
             _copy(src, bootstrap)
-
-    _make_writable(MISP_CONFIG)
 
     if bootstrap.exists() and "Detect what auth modules" not in bootstrap.read_text():
         log.info("  patching bootstrap.php with auth plugin detection")
@@ -150,30 +87,14 @@ def populate_config():
         content += AUTH_PLUGIN_PATCH
         bootstrap.write_text(content)
 
-    # config.php from settings.yaml + env, every start: env is the source of
-    # truth for bootstrap settings, and each pod has its own Config volume.
+    # Rendered on every start: env is the source of truth for these
     log.info("  config.php from settings.yaml")
     _generate_config_php(config_dst)
-
-    # database.php from env vars
-    log.info("  database.php from template")
+    log.info("  database.php from env")
     _generate_database_config(config_dst)
-
-    # email.php from env vars
-    log.info("  email.php from template")
+    log.info("  email.php from env")
     _generate_email_config(config_dst)
-
-    shutil.rmtree(staging, ignore_errors=True)
-    log.info("config generation complete")
-
-
-def setup_tmp():
-    """Create required tmp directory structure."""
-    log.info("creating tmp directory structure")
-    for d in ("cache", "cache/models", "cache/persistent", "cache/views", "logs"):
-        Path(MISP_TMP, d).mkdir(parents=True, exist_ok=True)
-    Path(MISP_BASE, "app/webroot/img/orgs").mkdir(parents=True, exist_ok=True)
-    Path(MISP_BASE, "app/webroot/img/custom").mkdir(parents=True, exist_ok=True)
+    log.info("app/Config ready")
 
 
 def populate_gnupg():
@@ -223,6 +144,18 @@ def check_writable(path, purpose):
         log.error("%s directory %s is not writable: %s", purpose, path, e)
         log.error("mount a volume there, or set PLUGIN_S3_BUCKET_NAME to use S3 for attachments")
         raise SystemExit(1)
+
+
+def _generate_config_php(config_dst):
+    """Render config.php from settings.yaml (bootstrap groups) and env vars.
+
+    Regenerated on every start in every pod, so all replicas and workers share
+    the same bootstrap and BLOCKED settings (redis, supervisor, salt, paths).
+    """
+    from .config import load_settings_yaml, config_php_specs, render_config_php
+
+    specs = config_php_specs(load_settings_yaml())
+    (config_dst / "config.php").write_text(render_config_php(specs))
 
 
 def _generate_database_config(config_dst):
@@ -292,53 +225,7 @@ class EmailConfig {{
     (config_dst / "email.php").write_text(content)
 
 
-def _generate_config_php(config_dst):
-    """Render config.php from settings.yaml (bootstrap groups) and env vars.
-
-    Regenerated on every start in every pod, so all replicas and workers share
-    the same bootstrap and BLOCKED settings (redis, supervisor, salt, paths).
-    """
-    from .config import load_settings_yaml, config_php_specs, render_config_php
-
-    specs = config_php_specs(load_settings_yaml())
-    (config_dst / "config.php").write_text(render_config_php(specs))
-
-
 def _int_env(key, default):
     """An integer env var, or the default when unset or not numeric."""
     value = env(key)
     return int(value) if value.isdigit() else default
-
-
-def _copy_no_clobber(src, dst):
-    """Copy files from src to dst without overwriting existing files."""
-    for item in src.iterdir():
-        target = dst / item.name
-        if item.is_dir():
-            target.mkdir(parents=True, exist_ok=True)
-            _copy_no_clobber(item, target)
-        elif not target.exists():
-            _copy(item, target)
-
-
-def _make_writable(path):
-    """Ensure a directory tree is writable by the owner."""
-    p = Path(path)
-    if not p.exists():
-        return
-    for item in p.rglob("*"):
-        try:
-            item.chmod(item.stat().st_mode | stat.S_IWUSR)
-        except OSError:
-            pass
-    try:
-        p.chmod(p.stat().st_mode | stat.S_IWUSR)
-    except OSError:
-        pass
-
-
-def _read_file(path, default=""):
-    try:
-        return Path(path).read_text().strip()
-    except (OSError, IOError):
-        return default

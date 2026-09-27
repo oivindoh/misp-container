@@ -16,7 +16,7 @@ mise run test-all      # unit + integration
 
 | Suite | Tests | What it covers |
 |-------|-------|----------------|
-| Unit | 211 | Config engine, config.php rendering, advisory lock, init logic, sync engine, metrics exporter |
+| Unit | 215 | Config engine, config.php rendering, advisory lock, app/Config preparation, task runner, sync engine, metrics exporter |
 | Integration | 99 | Full Compose stack: HTTP, auth, settings, PHP-FPM, workers, S3, org sync, metrics, modules enrichment |
 | Hub-spoke sync | 12 | 3 isolated MISP instances: pull, push, tag-filtered sync |
 
@@ -71,25 +71,23 @@ CI runs tests, scans, pushes images, and creates a GitHub Release with:
 
 All MISP settings are defined in `files/misp-config/settings.yaml`. Each setting has a group, type, and value.
 
-### Adding a new enforced setting
+### Adding a setting
+
+Every setting has a group and a default value. The env var that overrides it is derived from
+its name (`MISP.my_setting` -> `MISP_MY_SETTING`); nothing else to declare.
 
 ```yaml
 MISP.my_setting:
   group: optional
-  type: envar
-  value: "${MY_ENV_VAR}"
-```
-
-Then add `MY_ENV_VAR` to `files/misp_container/env.py` DEFAULTS dict.
-
-### Adding a new default
-
-```yaml
-MISP.my_setting:
-  group: optional
-  type: default
   value: some-default
 ```
+
+- With the env var set and non-empty, the value is enforced on every configure run.
+- Without it, the default is applied once when the setting is missing; the user then owns it
+  through the MISP UI.
+
+The YAML type of `value` (bool, int, string) is the type rendered into `config.php` for the
+`minimum_config` and `db_enable` groups; env overrides are cast to it.
 
 ### Version-gated defaults
 
@@ -98,35 +96,30 @@ Re-apply a default when upgrading past a specific image version:
 ```yaml
 MISP.my_setting:
   group: critical
-  type: default
   value: new-secure-value
   since: v2.5.40
 ```
 
 The version gate only triggers once per image version. Env vars always take precedence.
 
-### Setting types
+### Optional fields
 
-- **`type: envar`** -- enforced from environment variables on every startup. `${VAR}` is expanded at runtime. Only changed values trigger a `cake Admin setSetting` call.
-- **`type: default`** -- applied once when the setting doesn't exist. User changes via the MISP UI are preserved.
+- `force: true` -- pass `-f` to `cake Admin setSetting`
+- `blank_protection: true` -- skip if the value is empty (and leave the key out of `config.php`)
+- `sensitive: true` -- redact the value in logs
+- `since: v2.5.40` -- version-gated default
 
 ### Groups
 
 | Group | Where it lands | Who applies it |
 |-------|----------------|----------------|
-| `minimum_config`, `db_enable` | `app/Config/config.php`, rendered from the YAML value type (bool, int, string) | The init container, in every pod, on every start |
-| `s3` | `config.php` as well, when `PLUGIN_S3_BUCKET_NAME` is set | The init container |
+| `minimum_config`, `db_enable` | `app/Config/config.php`, rendered from the YAML value type (bool, int, string) | Every entrypoint, in every pod, on every start |
+| `s3` | `config.php` as well, when `PLUGIN_S3_BUCKET_NAME` is set | Every entrypoint |
 | all other groups | the `system_settings` table, in order `initialisation` -> `critical` -> `optional` -> `gpg` -> `s3` -> `proxy` | The configure Job |
 
 MISP never reads `SystemSetting::BLOCKED_SETTINGS` (salt, encryption key, password policy,
 `python_bin`, `ca_path`, `tmpdir`, `attachments_dir`, `system_setting_db` and a few more) from
 the database. Those settings must stay in `minimum_config`.
-
-### Optional fields
-
-- `force: true` -- pass `-f` to `cake Admin setSetting`
-- `blank_protection: true` -- skip if the value is empty
-- `since: v2.5.40` -- version-gated default
 
 ## Project Structure
 
@@ -140,14 +133,13 @@ files/
     config.py               # Settings diff engine (SettingSpec, SettingsCache)
     db.py                   # MySQL queries via pymysql
     env.py                  # Environment variable defaults
-    init.py                 # Init container volume population
+    init.py                 # Per-pod preparation: app/Config rendering, GPG key import
     configure.py            # One-shot configuration (configure Job)
     log.py                  # Logging setup
     metrics.py              # Prometheus metrics collection
     sync.py                 # Declarative org/team/server sync engine
   misp-config/
     settings.yaml           # All MISP settings in one file
-  entrypoint-init.py        # Init container entrypoint
   entrypoint-configure.py   # Configure Job entrypoint
   entrypoint-web.py         # PHP-FPM entrypoint
   entrypoint-worker.py      # Worker/scheduler entrypoint

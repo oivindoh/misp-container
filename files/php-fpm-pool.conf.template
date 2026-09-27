@@ -20,6 +20,11 @@ pm.min_spare_servers = ${PHP_FCGI_SPARE_SERVERS}
 pm.max_spare_servers = ${PHP_FCGI_START_SERVERS}
 pm.max_requests = ${PHP_FCGI_MAX_REQUESTS}
 
+; Liveness and readiness probes hit this through caddy (/fpm-ping): it proves
+; the FPM master and a worker answer, without touching the database.
+ping.path = /fpm-ping
+ping.response = pong
+
 ; Error logging -- log to stderr, never display in output (corrupts JSON API)
 php_admin_value[error_log] = /dev/stderr
 php_admin_flag[log_errors] = on

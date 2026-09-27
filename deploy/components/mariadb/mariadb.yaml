@@ -18,6 +18,15 @@ spec:
         app: mysql
         app.kubernetes.io/name: mysql
     spec:
+      # The official image runs mysqld as its mysql user (999) when started as
+      # that user; fsGroup makes the PVC writable for it.
+      securityContext:
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: mariadb
           image: docker.io/library/mariadb
@@ -72,6 +81,10 @@ spec:
             exec:
               command: ["healthcheck.sh", "--connect", "--innodb_initialized"]
             periodSeconds: 30
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
   volumeClaimTemplates:
     - metadata:
         name: mysql-data

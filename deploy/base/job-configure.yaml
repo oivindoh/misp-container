@@ -35,42 +35,6 @@ spec:
         seccompProfile:
           type: RuntimeDefault
 
-      initContainers:
-        - name: init-misp-files
-          image: ghcr.io/oivindoh/misp-container
-          command: ["/usr/bin/tini", "--", "python3", "/entrypoint-init.py"]
-          envFrom:
-            - configMapRef:
-                name: misp-env
-            - secretRef:
-                name: misp-secrets
-          volumeMounts:
-            - name: misp-files
-              mountPath: /var/www/MISP/app/files
-            - name: misp-config
-              mountPath: /var/www/MISP/app/Config
-            - name: misp-tmp
-              mountPath: /var/www/MISP/app/tmp
-            - name: misp-gnupg
-              mountPath: /var/www/MISP/.gnupg
-            - name: gnupg-key
-              mountPath: /etc/misp-docker/gnupg
-              readOnly: true
-            - name: init-tmp
-              mountPath: /tmp
-          resources:
-            requests:
-              cpu: 50m
-              memory: 128Mi
-            limits:
-              cpu: 500m
-              memory: 512Mi
-          securityContext:
-            allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: true
-            capabilities:
-              drop: [ALL]
-
       containers:
         - name: configure
           image: ghcr.io/oivindoh/misp-container
@@ -81,14 +45,23 @@ spec:
             - secretRef:
                 name: misp-secrets
           volumeMounts:
-            - name: misp-files
-              mountPath: /var/www/MISP/app/files
+            - name: files-scripts-tmp
+              mountPath: /var/www/MISP/app/files/scripts/tmp
+            - name: files-certs
+              mountPath: /var/www/MISP/app/files/certs
+            - name: files-terms
+              mountPath: /var/www/MISP/app/files/terms
+            - name: files-img-orgs
+              mountPath: /var/www/MISP/app/files/img/orgs
             - name: misp-config
               mountPath: /var/www/MISP/app/Config
             - name: misp-tmp
               mountPath: /var/www/MISP/app/tmp
             - name: misp-gnupg
               mountPath: /var/www/MISP/.gnupg
+            - name: gnupg-key
+              mountPath: /etc/misp-docker/gnupg
+              readOnly: true
             - name: configure-tmp
               mountPath: /tmp
           resources:
@@ -105,9 +78,18 @@ spec:
               drop: [ALL]
 
       volumes:
-        - name: misp-files
+        - name: files-scripts-tmp
           emptyDir:
-            sizeLimit: 2Gi
+            sizeLimit: 500Mi
+        - name: files-certs
+          emptyDir:
+            sizeLimit: 10Mi
+        - name: files-terms
+          emptyDir:
+            sizeLimit: 10Mi
+        - name: files-img-orgs
+          emptyDir:
+            sizeLimit: 100Mi
         - name: misp-config
           emptyDir:
             sizeLimit: 10Mi
@@ -120,9 +102,6 @@ spec:
         - name: configure-tmp
           emptyDir:
             sizeLimit: 100Mi
-        - name: init-tmp
-          emptyDir:
-            sizeLimit: 500Mi
         - name: gnupg-key
           secret:
             secretName: misp-gnupg

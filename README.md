@@ -5,7 +5,7 @@ A container image for [MISP](https://www.misp-project.org/) 2.5, designed for Ku
 ## Goals
 
 1. **No root, no privileges, no writable filesystem** -- runs as UID 1000, read-only root filesystem, all capabilities dropped
-2. **Smaller image** -- ~550 MB for the main image (~50% smaller than upstream, accounting for extra containers)
+2. **Smaller image** -- ~680 MB for the main image, with the MISP distribution files baked in and nothing extracted at start
 3. **Scalable** -- multiple web and worker replicas in Kubernetes, MySQL advisory lock prevents configuration races
 4. **Easy to consume as a Kustomize base** -- `deploy/base/` is a complete, opinionated Kustomize base with overlay examples for environment-specific config
 5. **Enterprise-ready** -- declarative user/org/server management, Prometheus metrics, S3 storage, OIDC/LDAP/header auth, CiliumNetworkPolicies
@@ -16,7 +16,7 @@ Built from a single Dockerfile with three targets:
 
 | Target | Image | Size | Purpose |
 |--------|-------|------|---------|
-| `final` | `misp` | ~550 MB | PHP-FPM, background workers, init, configure, org sync, metrics exporter (one entrypoint per role) |
+| `final` | `misp` | ~680 MB | PHP-FPM, background workers, configure, org sync, metrics exporter (one entrypoint per role); `app/files` ships in the image |
 | `caddy` | `misp-caddy` | ~64 MB | Static files + reverse proxy (scratch image) |
 | `modules` | `misp-modules` | ~296 MB | MISP enrichment/import/export modules (distroless) |
 
@@ -36,28 +36,27 @@ Default login: `admin@admin.test` / `ChangeMe-Str0ng!Pass#2026`
 ```
   configure Job (runs first, once per rollout)
 +---------------------------------------------------------------+
-| init -> schema, settings, admin, GPG, auth -> MISP.live=true   |
+| schema, settings, admin, GPG, auth -> MISP.live=true           |
 +---------------------------------------------------------------+
 
   web Pod (scalable)                worker Deployment (scalable)
 +----------------------------+     +----------------------------+
-| init -> caddy + php-fpm    |     | init -> supervisord        |
-|        :8080    :9002      |     |   default, prio, email,    |
+| caddy + php-fpm            |     | supervisord                |
+| :8080    :9002             |     |   default, prio, email,    |
 +----------------------------+     |   cache, update workers    |
          |            |            +----------------------------+
          |            |
          |    +-------+--------+    scheduler (1 replica)
          |    |                |   +----------------------------+
-    +----+----+          +----+---+| init -> supervisord        |
+    +----+----+          +----+---+| supervisord                |
     | MariaDB |          |  Redis ||   scheduler_worker only    |
     +---------+          +--------++----------------------------+
 ```
 
-The `misp` image serves seven roles (same image, different entrypoint):
+The `misp` image serves six roles (same image, different entrypoint). Every entrypoint renders `app/Config` and imports the GPG key at start:
 
 | Role | Entrypoint | Description |
 |------|------------|-------------|
-| **init** | `entrypoint-init.py` | Init container in every pod: extracts files into volumes, renders config, imports the GPG key. |
 | **configure** | `entrypoint-configure.py` | One-shot Job per rollout: schema migrations, settings, admin user, GPG, auth. Sets `MISP.live=true` last. |
 | **web** | `entrypoint-web.py` | PHP-FPM on port 9002. Waits for `MISP.live=true`, then serves. Safe to scale. |
 | **worker** | `entrypoint-worker.py` | Background job workers via supervisord. Waits for `MISP.live=true`, then processes jobs. Safe to scale. |
@@ -69,9 +68,9 @@ Additional images: **caddy** (reverse proxy) and **modules** (enrichment/import/
 
 ### Scaling
 
-- **Workers**: freely scalable. Redis `BRPOP` delivers each job to exactly one worker.
+- **Workers**: freely scalable. Redis `BRPOP` delivers each job to exactly one worker. A stopping worker gets `WORKER_STOP_GRACE` seconds (default 300) to finish its job; a job on a worker that dies is lost.
 - **Web**: freely scalable. Web pods never run configuration; the configure Job does, under a MySQL advisory lock.
-- **Scheduler**: must remain at 1 replica.
+- **Scheduler**: must remain at 1 replica. It serves MISP-internal scheduling (workflows). Periodic tasks belong to the `cronjobs` component; do not enable the same tasks under MISP's Scheduled tasks, or both run them.
 
 ---
 
@@ -113,6 +112,8 @@ touch the schema or the settings, so they start in seconds and scale freely.
 | `ADMIN_PASSWORD` | Admin password |
 | `SECURITY_SALT` | Password hashing salt. Must be 32+ chars, identical across replicas, stable across restarts. |
 | `MISP_UUID` | Instance UUID for server sync. Must be unique and stable. |
+
+The configure step refuses to run with a placeholder secret (`change-me`, `override-me`, an all-zero salt), a salt shorter than 32 characters, or an empty `MISP_UUID`.
 
 ```bash
 python3 -c "import secrets; print(secrets.token_hex(32))"  # generate salt
@@ -201,8 +202,7 @@ gpg --armor --export-secret-keys misp@example.com > private.asc
 kubectl -n misp create secret generic misp-gnupg --from-file=private.asc
 ```
 
-The init container imports `private.asc` from the optional Secret `misp-gnupg` into every
-pod. `GNUPG_PASSWORD` must match the key passphrase. Set `GNUPG_SIGN=true` once the key is
+Every entrypoint imports `private.asc` from the optional Secret `misp-gnupg` at start. `GNUPG_PASSWORD` must match the key passphrase. Set `GNUPG_SIGN=true` once the key is
 in place. Compose sets `AUTOCONF_GPG=true` instead, which generates a key in the
 `misp-gnupg` volume on first start.
 
@@ -265,10 +265,11 @@ configMapGenerator:
       - ADMIN_EMAIL=admin@example.com
 ```
 
-Secrets are `.env` files consumable by both Kustomize and Compose. Encrypt with SOPS for production:
-```bash
-sops -e -i deploy/base/secrets.env
-```
+Secrets are `.env` files consumable by both Kustomize and Compose. `deploy/base/secrets.env`
+holds placeholders that the configure step refuses. For production, supply the real Secret
+from your overlay through KSOPS, as `deploy/overlays/prod` does: an encrypted `secrets.sops.yaml`
+with `kustomize.config.k8s.io/behavior: replace`. Kustomize's `secretGenerator` cannot decrypt,
+so do not encrypt `secrets.env` in place.
 
 ### Storage
 

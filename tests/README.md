@@ -15,15 +15,16 @@ All integration tests build the images with compose, start full MISP stacks, and
 
 ## Unit tests
 
-**211 tests** covering the Python entrypoint library (`files/misp_container/`).
+**215 tests** covering the Python entrypoint library (`files/misp_container/`).
 
 | File | What it tests |
 |------|---------------|
 | `test_config.py` | Settings diff engine, version comparison, YAML loading, env var expansion, settings cache |
 | `test_env.py` | Environment variable defaults, `apply_defaults()`, worker config derivation, derived variables |
+| `test_task.py` | Periodic task runner (cronjob entrypoint) |
 | `test_db.py` | Advisory lock holds one connection until release |
 | `test_config_php.py` | config.php rendering from settings.yaml, PHP escaping and typing |
-| `test_init.py` | File copy (no-clobber), make-writable, database.php/email.php generation, GPG key import, writable check |
+| `test_init.py` | app/Config rendering, database.php/email.php generation, GPG key import, writable check |
 | `test_admin.py` | SQL escape function |
 | `test_sync.py` | Org sync engine: config normalization, merge logic, UUID validation, env expansion, role/org/tag/user/server/taxonomy/warninglist/sharing group apply logic, build rules (pull vs push tag format), allow_external user placement, default_role, disable unmanaged resources, full orchestrator flow |
 
@@ -31,9 +32,9 @@ Run with: `mise run test` or `PYTHONPATH=files python -m pytest tests/ -v`
 
 ## Integration tests
 
-**99 tests** verifying the full MISP stack in Compose.
+**102 tests** verifying the full MISP stack in Compose.
 
-**Stack:** 1 MISP instance (init + configure + web x2 + caddy + worker + MySQL + Redis + Garage S3)
+**Stack:** 1 MISP instance (configure + web x2 + caddy + worker + MySQL + Redis + Garage S3)
 
 | Suite | Tests | What it verifies |
 |-------|-------|------------------|
@@ -44,7 +45,7 @@ Run with: `mise run test` or `PYTHONPATH=files python -m pytest tests/ -v`
 | Workers | 6 | All supervisor queues running (default, prio, email, cache, update, scheduler) |
 | Background jobs | 1 | Event publish triggers job, worker completes it (status=4) |
 | PHP-FPM | 1 | Listening on port 9002 |
-| Init container | 5 | VERSION file, taxonomies populated, bootstrap.php patch, database.php host |
+| Distribution files and app/Config | 4 | taxonomies in the image, bootstrap.php patch, database.php host, config.php content |
 | GPG | 1 | Auto-generated key in .gnupg volume |
 | MISP API | 2 | Version endpoint, event create via API |
 | Warm restart | 2 | Settings cache reload, minimum_config unchanged |

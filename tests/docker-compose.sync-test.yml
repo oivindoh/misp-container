@@ -63,31 +63,18 @@ services:
     <<: *redis
     env_file: [sync-test-secrets.env]
 
-  a-init:
-    <<: *misp-image
-    env_file: [../deploy/base/base.env, sync-test-a.env, sync-test-secrets.env]
-    user: "1000:1000"
-    command: ["python3", "/entrypoint-init.py"]
-    volumes:
-      - a-files:/var/www/MISP/app/files
-      - a-config:/var/www/MISP/app/Config
-      - a-tmp:/var/www/MISP/app/tmp
-      - a-gnupg:/var/www/MISP/.gnupg
-    depends_on:
-      a-mysql: { condition: service_healthy }
-
   a-configure:
     <<: *misp-image
     env_file: [../deploy/base/base.env, sync-test-a.env, sync-test-secrets.env]
     user: "1000:1000"
     command: ["python3", "/entrypoint-configure.py"]
     volumes:
-      - a-files:/var/www/MISP/app/files
+      - a-files-scripts-tmp:/var/www/MISP/app/files/scripts/tmp
+      - a-files-certs:/var/www/MISP/app/files/certs
       - a-config:/var/www/MISP/app/Config
       - a-tmp:/var/www/MISP/app/tmp
       - a-gnupg:/var/www/MISP/.gnupg
     depends_on:
-      a-init: { condition: service_completed_successfully }
       a-mysql: { condition: service_healthy }
       a-redis: { condition: service_healthy }
 
@@ -97,7 +84,8 @@ services:
     user: "1000:1000"
     command: ["python3", "/entrypoint-web.py"]
     volumes:
-      - a-files:/var/www/MISP/app/files
+      - a-files-scripts-tmp:/var/www/MISP/app/files/scripts/tmp
+      - a-files-certs:/var/www/MISP/app/files/certs
       - a-config:/var/www/MISP/app/Config
       - a-tmp:/var/www/MISP/app/tmp
       - a-gnupg:/var/www/MISP/.gnupg
@@ -121,7 +109,8 @@ services:
     user: "1000:1000"
     command: ["python3", "/entrypoint-worker.py"]
     volumes:
-      - a-files:/var/www/MISP/app/files
+      - a-files-scripts-tmp:/var/www/MISP/app/files/scripts/tmp
+      - a-files-certs:/var/www/MISP/app/files/certs
       - a-config:/var/www/MISP/app/Config
       - a-worker-tmp:/var/www/MISP/app/tmp
       - a-gnupg:/var/www/MISP/.gnupg
@@ -143,31 +132,18 @@ services:
     <<: *redis
     env_file: [sync-test-secrets.env]
 
-  b-init:
-    <<: *misp-image
-    env_file: [../deploy/base/base.env, sync-test-b.env, sync-test-secrets.env]
-    user: "1000:1000"
-    command: ["python3", "/entrypoint-init.py"]
-    volumes:
-      - b-files:/var/www/MISP/app/files
-      - b-config:/var/www/MISP/app/Config
-      - b-tmp:/var/www/MISP/app/tmp
-      - b-gnupg:/var/www/MISP/.gnupg
-    depends_on:
-      b-mysql: { condition: service_healthy }
-
   b-configure:
     <<: *misp-image
     env_file: [../deploy/base/base.env, sync-test-b.env, sync-test-secrets.env]
     user: "1000:1000"
     command: ["python3", "/entrypoint-configure.py"]
     volumes:
-      - b-files:/var/www/MISP/app/files
+      - b-files-scripts-tmp:/var/www/MISP/app/files/scripts/tmp
+      - b-files-certs:/var/www/MISP/app/files/certs
       - b-config:/var/www/MISP/app/Config
       - b-tmp:/var/www/MISP/app/tmp
       - b-gnupg:/var/www/MISP/.gnupg
     depends_on:
-      b-init: { condition: service_completed_successfully }
       b-mysql: { condition: service_healthy }
       b-redis: { condition: service_healthy }
 
@@ -177,7 +153,8 @@ services:
     user: "1000:1000"
     command: ["python3", "/entrypoint-web.py"]
     volumes:
-      - b-files:/var/www/MISP/app/files
+      - b-files-scripts-tmp:/var/www/MISP/app/files/scripts/tmp
+      - b-files-certs:/var/www/MISP/app/files/certs
       - b-config:/var/www/MISP/app/Config
       - b-tmp:/var/www/MISP/app/tmp
       - b-gnupg:/var/www/MISP/.gnupg
@@ -201,7 +178,8 @@ services:
     user: "1000:1000"
     command: ["python3", "/entrypoint-worker.py"]
     volumes:
-      - b-files:/var/www/MISP/app/files
+      - b-files-scripts-tmp:/var/www/MISP/app/files/scripts/tmp
+      - b-files-certs:/var/www/MISP/app/files/certs
       - b-config:/var/www/MISP/app/Config
       - b-worker-tmp:/var/www/MISP/app/tmp
       - b-gnupg:/var/www/MISP/.gnupg
@@ -223,31 +201,18 @@ services:
     <<: *redis
     env_file: [sync-test-secrets.env]
 
-  c-init:
-    <<: *misp-image
-    env_file: [../deploy/base/base.env, sync-test-c.env, sync-test-secrets.env]
-    user: "1000:1000"
-    command: ["python3", "/entrypoint-init.py"]
-    volumes:
-      - c-files:/var/www/MISP/app/files
-      - c-config:/var/www/MISP/app/Config
-      - c-tmp:/var/www/MISP/app/tmp
-      - c-gnupg:/var/www/MISP/.gnupg
-    depends_on:
-      c-mysql: { condition: service_healthy }
-
   c-configure:
     <<: *misp-image
     env_file: [../deploy/base/base.env, sync-test-c.env, sync-test-secrets.env]
     user: "1000:1000"
     command: ["python3", "/entrypoint-configure.py"]
     volumes:
-      - c-files:/var/www/MISP/app/files
+      - c-files-scripts-tmp:/var/www/MISP/app/files/scripts/tmp
+      - c-files-certs:/var/www/MISP/app/files/certs
       - c-config:/var/www/MISP/app/Config
       - c-tmp:/var/www/MISP/app/tmp
       - c-gnupg:/var/www/MISP/.gnupg
     depends_on:
-      c-init: { condition: service_completed_successfully }
       c-mysql: { condition: service_healthy }
       c-redis: { condition: service_healthy }
 
@@ -257,7 +222,8 @@ services:
     user: "1000:1000"
     command: ["python3", "/entrypoint-web.py"]
     volumes:
-      - c-files:/var/www/MISP/app/files
+      - c-files-scripts-tmp:/var/www/MISP/app/files/scripts/tmp
+      - c-files-certs:/var/www/MISP/app/files/certs
       - c-config:/var/www/MISP/app/Config
       - c-tmp:/var/www/MISP/app/tmp
       - c-gnupg:/var/www/MISP/.gnupg
@@ -281,7 +247,8 @@ services:
     user: "1000:1000"
     command: ["python3", "/entrypoint-worker.py"]
     volumes:
-      - c-files:/var/www/MISP/app/files
+      - c-files-scripts-tmp:/var/www/MISP/app/files/scripts/tmp
+      - c-files-certs:/var/www/MISP/app/files/certs
       - c-config:/var/www/MISP/app/Config
       - c-worker-tmp:/var/www/MISP/app/tmp
       - c-gnupg:/var/www/MISP/.gnupg
@@ -301,7 +268,8 @@ services:
 
 volumes:
   a-mysql-data:
-  a-files:
+  a-files-scripts-tmp:
+  a-files-certs:
   a-config:
   a-tmp:
   a-gnupg:
@@ -309,7 +277,8 @@ volumes:
   a-worker-tmp:
   a-worker-sys-tmp:
   b-mysql-data:
-  b-files:
+  b-files-scripts-tmp:
+  b-files-certs:
   b-config:
   b-tmp:
   b-gnupg:
@@ -317,7 +286,8 @@ volumes:
   b-worker-tmp:
   b-worker-sys-tmp:
   c-mysql-data:
-  c-files:
+  c-files-scripts-tmp:
+  c-files-certs:
   c-config:
   c-tmp:
   c-gnupg:
