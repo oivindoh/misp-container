@@ -2,7 +2,7 @@
 #
 # Traffic flow:
 #   haproxy-controller ns --> caddy :8080
-#   cronjobs              --> caddy :8080
+#   cronjobs              --> caddy :8080, metrics :9191
 #   caddy                 --> php-fpm :9002  (localhost in same pod)
 #   php-fpm               --> mariadb :3306, redis :6379
 #   worker                --> mariadb :3306, redis :6379
@@ -245,6 +245,14 @@ spec:
         - ports:
             - port: "8080"
               protocol: TCP
+    # Backlog check before dispatching (misp_jobs_queued)
+    - toEndpoints:
+        - matchLabels:
+            app.kubernetes.io/name: metrics
+      toPorts:
+        - ports:
+            - port: "9191"
+              protocol: TCP
     - toEndpoints:
         - matchLabels:
             io.kubernetes.pod.namespace: kube-system
@@ -362,6 +370,24 @@ spec:
     - fromEndpoints:
         - matchLabels:
             io.kubernetes.pod.namespace: monitoring
+      toPorts:
+        - ports:
+            - port: "9191"
+              protocol: TCP
+    # The task runner reads the queue depth before dispatching
+    - fromEndpoints:
+        - matchExpressions:
+            - key: app.kubernetes.io/name
+              operator: In
+              values:
+                - cache-feeds
+                - fetch-feeds
+                - pull-servers
+                - push-servers
+                - update-galaxies
+                - update-taxonomies
+                - update-warninglists
+                - update-noticelists
       toPorts:
         - ports:
             - port: "9191"

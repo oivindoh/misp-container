@@ -56,8 +56,8 @@ Scrape `/metrics`; `/healthz` and `/ready` answer 200.
 **Org sync container:**
 | Metric | Type | Description |
 |--------|------|-------------|
-| `misp_sync_runs_24h{operation,status}` | gauge | Org sync runs (from sync log table) |
-| `misp_sync_last_success_timestamp_seconds` | gauge | Last successful org sync |
+| `misp_sync_runs_24h{operation,status}` | gauge | Container runs in the last 24 hours: `org-sync` and `configure`, by `success` or `error` |
+| `misp_sync_last_success_timestamp_seconds{operation}` | gauge | Last successful run per operation |
 
 **Self-monitoring:**
 | Metric | Type | Description |
@@ -92,6 +92,10 @@ Scrape `/metrics`; `/healthz` and `/ready` answer 200.
 - alert: MISPJobQueueBacklog
   expr: misp_jobs_queued > 50
   for: 5m
+
+# A configure run failed in the last day
+- alert: MISPConfigureFailed
+  expr: misp_sync_runs_24h{operation="configure",status="error"} > 0
 ```
 
 ## Consuming in Kubernetes

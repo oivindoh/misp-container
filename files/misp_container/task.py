@@ -37,6 +37,33 @@ TASKS = tuple(ENDPOINTS) + tuple(SERVER_TASKS)
 # still take a while on a busy instance.
 REQUEST_TIMEOUT = 600
 
+# Backlog protection: with this many jobs queued or running (misp_jobs_queued
+# from the metrics exporter), a run dispatches nothing and exits 0. An
+# unreachable exporter does not block dispatch.
+DEFAULT_MAX_QUEUED = 200
+DEFAULT_METRICS_URL = "http://metrics:9191/metrics"
+
+
+def queued_jobs(metrics_url: str, timeout: int = 5):
+    """Sum of misp_jobs_queued from the exporter, or None when it cannot be read."""
+    import urllib.request
+    try:
+        with urllib.request.urlopen(metrics_url, timeout=timeout) as resp:
+            text = resp.read().decode()
+    except Exception as e:
+        log.warning("cannot read %s (%s); dispatching without the backlog check", metrics_url, e)
+        return None
+    total = 0
+    seen = False
+    for line in text.splitlines():
+        if line.startswith("misp_jobs_queued"):
+            try:
+                total += int(float(line.rsplit(" ", 1)[1]))
+                seen = True
+            except ValueError:
+                pass
+    return total if seen else None
+
 
 def run_task(client, name: str) -> dict:
     """Run one task. Returns {"calls": n, "errors": [...]}."""
@@ -84,6 +111,14 @@ def main(argv: list[str]) -> None:
         log.error("ADMIN_KEY is not set; the task runner needs an admin API key")
         sys.exit(1)
     base_url = env("SYNC_BASE_URL", env("MISP_BASEURL"))
+
+    max_queued = int(env("TASK_MAX_QUEUED", str(DEFAULT_MAX_QUEUED)))
+    if max_queued > 0:
+        queued = queued_jobs(env("TASK_METRICS_URL", DEFAULT_METRICS_URL))
+        if queued is not None and queued >= max_queued:
+            log.warning("%d jobs queued or running (limit %d); %s dispatches nothing this run",
+                        queued, max_queued, name)
+            sys.exit(0)
 
     client = MISPClient(base_url, api_key)
     client.timeout = REQUEST_TIMEOUT

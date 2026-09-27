@@ -1,7 +1,8 @@
 # MISP periodic tasks through the API, run by the task runner in the main image:
 #   python3 -m misp_container.task <task>
 # ADMIN_KEY must be set in misp-admin; the runner exits 1 with a clear
-# message when it is empty.
+# message when it is empty. A run dispatches nothing while the queue holds
+# TASK_MAX_QUEUED jobs or more (read from the metrics exporter).
 # -- Cache all configured feeds --
 apiVersion: batch/v1
 kind: CronJob
@@ -37,6 +38,10 @@ spec:
               env:
                 - name: SYNC_BASE_URL
                   value: http://web:8080
+                - name: TASK_METRICS_URL
+                  value: http://metrics:9191/metrics
+                - name: TASK_MAX_QUEUED
+                  value: "200"
                 - name: ADMIN_KEY
                   valueFrom:
                     secretKeyRef:
@@ -91,6 +96,10 @@ spec:
               env:
                 - name: SYNC_BASE_URL
                   value: http://web:8080
+                - name: TASK_METRICS_URL
+                  value: http://metrics:9191/metrics
+                - name: TASK_MAX_QUEUED
+                  value: "200"
                 - name: ADMIN_KEY
                   valueFrom:
                     secretKeyRef:
@@ -145,6 +154,10 @@ spec:
               env:
                 - name: SYNC_BASE_URL
                   value: http://web:8080
+                - name: TASK_METRICS_URL
+                  value: http://metrics:9191/metrics
+                - name: TASK_MAX_QUEUED
+                  value: "200"
                 - name: ADMIN_KEY
                   valueFrom:
                     secretKeyRef:
@@ -199,6 +212,10 @@ spec:
               env:
                 - name: SYNC_BASE_URL
                   value: http://web:8080
+                - name: TASK_METRICS_URL
+                  value: http://metrics:9191/metrics
+                - name: TASK_MAX_QUEUED
+                  value: "200"
                 - name: ADMIN_KEY
                   valueFrom:
                     secretKeyRef:
@@ -253,6 +270,10 @@ spec:
               env:
                 - name: SYNC_BASE_URL
                   value: http://web:8080
+                - name: TASK_METRICS_URL
+                  value: http://metrics:9191/metrics
+                - name: TASK_MAX_QUEUED
+                  value: "200"
                 - name: ADMIN_KEY
                   valueFrom:
                     secretKeyRef:
@@ -307,6 +328,10 @@ spec:
               env:
                 - name: SYNC_BASE_URL
                   value: http://web:8080
+                - name: TASK_METRICS_URL
+                  value: http://metrics:9191/metrics
+                - name: TASK_MAX_QUEUED
+                  value: "200"
                 - name: ADMIN_KEY
                   valueFrom:
                     secretKeyRef:
@@ -361,6 +386,10 @@ spec:
               env:
                 - name: SYNC_BASE_URL
                   value: http://web:8080
+                - name: TASK_METRICS_URL
+                  value: http://metrics:9191/metrics
+                - name: TASK_MAX_QUEUED
+                  value: "200"
                 - name: ADMIN_KEY
                   valueFrom:
                     secretKeyRef:
@@ -415,6 +444,10 @@ spec:
               env:
                 - name: SYNC_BASE_URL
                   value: http://web:8080
+                - name: TASK_METRICS_URL
+                  value: http://metrics:9191/metrics
+                - name: TASK_MAX_QUEUED
+                  value: "200"
                 - name: ADMIN_KEY
                   valueFrom:
                     secretKeyRef:

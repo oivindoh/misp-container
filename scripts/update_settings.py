@@ -121,6 +121,31 @@ def render_catalogue(entries: dict) -> str:
     return HEADER + body
 
 
+LEVELS = {0: "critical", 1: "recommended", 2: "optional"}
+
+
+def render_summary(new: list[str], stale: list[str], entries: dict) -> str:
+    """Markdown for the PR: new settings by level, stale curated names."""
+    lines = []
+    if new:
+        lines.append(f"### New settings ({len(new)})\n")
+        lines.append("Level 0 and 1 settings may need a curated default in `settings.yaml`.\n")
+        lines.append("| Setting | Level | Default | Description |")
+        lines.append("|---------|-------|---------|-------------|")
+        for name in sorted(new, key=lambda n: (entries.get(n, {}).get("level", 9), n)):
+            e = entries.get(name, {})
+            level = LEVELS.get(e.get("level"), str(e.get("level", "")))
+            desc = str(e.get("description", "")).replace("|", "\\|")[:100]
+            lines.append(f"| `{name}` | {level} | `{e.get('value', '')}` | {desc} |")
+    else:
+        lines.append("No new settings.")
+    if stale:
+        lines.append("")
+        lines.append(f"### Stale in settings.yaml ({len(stale)})\n")
+        lines.extend(f"- `{name}`" for name in stale)
+    return "\n".join(lines) + "\n"
+
+
 def diff(live: list[dict], curated: set[str], catalogue: set[str]) -> tuple[list[str], list[str]]:
     """(new settings tracked nowhere, curated settings MISP no longer defines)."""
     live_names = {item.get("setting") for item in live if item.get("setting")}
@@ -137,6 +162,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--url", help="MISP base URL")
     parser.add_argument("--key", help="admin API key")
     parser.add_argument("--json", help="output of 'cake Admin getSetting all' (or a saved API response)")
+    parser.add_argument("--summary", help="with --write: file for a Markdown summary of the new settings (for a PR)")
     args = parser.parse_args(argv)
 
     if args.json:
@@ -168,6 +194,8 @@ def main(argv: list[str] | None = None) -> int:
             print("added:")
             for name in new:
                 print(f"  {name}")
+        if args.summary:
+            Path(args.summary).write_text(render_summary(new, stale, entries))
         return 1 if stale else 0
 
     if new:

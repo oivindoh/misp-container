@@ -268,8 +268,11 @@ file header of `deploy/components/netpol-cilium/networkpolicy.yaml` lists every 
 The task runner in the main image calls the MISP API for the periodic work:
 `cache-feeds`, `fetch-feeds`, `pull-servers`, `push-servers`, `update-galaxies`,
 `update-taxonomies`, `update-warninglists`, `update-noticelists`. The `cronjobs` component
-schedules them; `ADMIN_KEY` must be set. A partner that refuses a pull or push is logged and
-shows in the metrics; a run exits 1 only when no call succeeded. On demand:
+schedules them; `ADMIN_KEY` must be set. Before dispatching, a run reads the queue depth from
+the metrics exporter and dispatches nothing while `TASK_MAX_QUEUED` jobs (default 200) or more
+are queued or running, so a slow worker pool does not pile up work. A partner that refuses a
+pull or push is logged and shows in the metrics; a run exits 1 only when no call succeeded.
+On demand:
 
 ```bash
 kubectl -n misp create job --from=cronjob/pull-servers pull-now
@@ -343,7 +346,8 @@ Two hook points for custom Python, mounted as files, skipped when absent:
 ## Metrics
 
 The metrics Deployment exposes Prometheus metrics on port 9191: instance health, content
-counts, sync server status and certificate expiry, job queues, org sync runs. See
+counts, sync server status and certificate expiry, job queues, and the outcome of configure
+and org-sync runs. See
 [docs/metrics.md](docs/metrics.md) for the reference and example alerts.
 
 ## Migration

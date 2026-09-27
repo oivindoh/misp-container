@@ -73,7 +73,7 @@ jobs:
         run: |
           pip install --quiet pyyaml
           scripts/update-composer-lock.sh
-          scripts/update-settings.sh
+          SETTINGS_SUMMARY="$RUNNER_TEMP/settings-summary.md" scripts/update-settings.sh
 
       - name: Commit and open PR
         if: steps.misp.outputs.changed == 'true' && steps.bump.outputs.skip != 'true'
@@ -95,7 +95,9 @@ jobs:
           CI builds and tests automatically. After merging, tag and push to release:
 
               git tag ${NEW}
-              git push origin ${NEW}"
+              git push origin ${NEW}
+
+          $(cat "$RUNNER_TEMP/settings-summary.md" 2>/dev/null || echo "(no settings summary)")"
 
           gh pr create \
             --title "bump MISP to ${NEW}" \

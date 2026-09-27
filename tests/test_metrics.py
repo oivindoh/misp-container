@@ -452,7 +452,7 @@ class TestCollectDbMetrics:
                 {"operation": "org-sync", "status": "error", "runs": 1,
                  "last_run": "2026-05-15 09:00:00", "avg_duration": 1.0},
             ],
-            "UNIX_TIMESTAMP": [{"ts": 1747310400}],
+            "UNIX_TIMESTAMP": [{"operation": "org-sync", "ts": 1747310400}],
         })
         output, _ = _collect_db_metrics()
         parsed = _parse_metrics(output)
@@ -462,7 +462,7 @@ class TestCollectDbMetrics:
         assert by_status["success"] == "5"
         assert by_status["error"] == "1"
 
-        assert parsed["misp_sync_last_success_timestamp_seconds"][0] == ({}, "1747310400")
+        assert parsed["misp_sync_last_success_timestamp_seconds"][0] == ({"operation": "org-sync"}, "1747310400")
 
     @patch("misp_container.metrics._connect")
     def test_sync_log_table_missing(self, mock_connect):

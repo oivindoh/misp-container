@@ -39,8 +39,10 @@ bumps `CORE_TAG`, resolves `files/composer.lock` for that release, builds the im
 the Compose stack, regenerates the settings catalogue from that MISP, and opens a PR with
 all three changes. CI then builds, scans and runs
 every suite on the PR, with the strict settings check and the rejected-`cake` check as the
-early warning for changed settings and defaults. Review the catalogue diff in the PR: a
-setting that appears there with a value this image should enforce moves to `settings.yaml`.
+early warning for changed settings and defaults. The PR body lists the new settings by level. A
+setting that appears there with a value this image should enforce moves to `settings.yaml`;
+when a release changes a secure default we already curate, give it `since: <that tag>` so
+existing instances pick the new value up once.
 
 ## Releases
 

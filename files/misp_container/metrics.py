@@ -331,25 +331,25 @@ def _collect_db_metrics() -> tuple[str, list[dict]]:
                     blocks.append(
                         _metric(
                             "misp_sync_runs_24h",
-                            "Org sync runs in the last 24 hours",
+                            "Container runs (org-sync, configure) in the last 24 hours by outcome",
                             "gauge",
                             run_samples,
                         )
                     )
 
-                # Last successful sync timestamp
+                # Last successful run per operation (org-sync, configure)
                 cur.execute(
-                    "SELECT UNIX_TIMESTAMP(MAX(timestamp)) AS ts "
-                    "FROM misp_container_sync_log WHERE status = 'success'"
+                    "SELECT operation, UNIX_TIMESTAMP(MAX(timestamp)) AS ts "
+                    "FROM misp_container_sync_log WHERE status = 'success' GROUP BY operation"
                 )
-                row = cur.fetchone()
-                if row and row["ts"]:
+                last = [({"operation": r["operation"]}, int(r["ts"])) for r in cur.fetchall() if r.get("ts")]
+                if last:
                     blocks.append(
                         _metric(
                             "misp_sync_last_success_timestamp_seconds",
-                            "Unix timestamp of last successful org sync",
+                            "Unix timestamp of the last successful run per operation",
                             "gauge",
-                            [({}, int(row["ts"]))],
+                            last,
                         )
                     )
             except Exception:

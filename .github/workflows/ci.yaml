@@ -24,50 +24,42 @@ env:
   IMAGE_MODULES: ghcr.io/${{ github.repository }}-modules
 
 jobs:
-  # Builds the three images into the layer cache once; the suite jobs rebuild
-  # from that cache in seconds and run against the images they loaded.
+  # Builds each image into its own layer cache scope, in parallel. The suite
+  # jobs rebuild from those caches in seconds and run against the images they
+  # loaded.
   build:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    strategy:
+      matrix:
+        include:
+          - name: misp
+            target: final
+            image: ghcr.io/oivindoh/misp-container
+            scope: misp
+          - name: caddy
+            target: caddy
+            image: ghcr.io/oivindoh/misp-container-caddy
+            scope: caddy
+          - name: modules
+            target: modules
+            image: ghcr.io/oivindoh/misp-container-modules
+            scope: modules
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
-      - name: Build misp image
+      - name: Build ${{ matrix.name }} image
         uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
         with:
           context: .
-          target: final
+          target: ${{ matrix.target }}
           load: true
-          tags: ${{ env.IMAGE_MISP }}:ci
+          tags: ${{ matrix.image }}:ci
           cache-from: |
             type=gha,scope=misp
-            type=gha,scope=misp
-          cache-to: type=gha,mode=max,scope=misp
-
-      - name: Build caddy image
-        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
-        with:
-          context: .
-          target: caddy
-          load: true
-          tags: ${{ env.IMAGE_CADDY }}:ci
-          cache-from: |
-            type=gha,scope=misp
-            type=gha,scope=caddy
-          cache-to: type=gha,mode=max,scope=caddy
-
-      - name: Build modules image
-        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
-        with:
-          context: .
-          target: modules
-          load: true
-          tags: ${{ env.IMAGE_MODULES }}:ci
-          cache-from: |
-            type=gha,scope=misp
-            type=gha,scope=modules
-          cache-to: type=gha,mode=max,scope=modules
+            type=gha,scope=${{ matrix.scope }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.scope }}
 
   unit:
     runs-on: ubuntu-latest

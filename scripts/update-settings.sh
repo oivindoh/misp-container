@@ -55,4 +55,5 @@ DUMP="$(mktemp)"
 trap 'rm -f "$DUMP"; cleanup' EXIT
 ${COMPOSE} exec -T web /var/www/MISP/app/Console/cake Admin getSetting all > "$DUMP"
 cd "$REPO"
-PYTHONPATH=files python3 scripts/update_settings.py --write --json "$DUMP"
+# SETTINGS_SUMMARY: optional path for a Markdown summary of the new settings (the release PR)
+PYTHONPATH=files python3 scripts/update_settings.py --write --json "$DUMP" ${SETTINGS_SUMMARY:+--summary "$SETTINGS_SUMMARY"}

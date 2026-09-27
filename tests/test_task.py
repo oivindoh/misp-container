@@ -74,3 +74,34 @@ class TestMain:
         with pytest.raises(SystemExit) as exc:
             task.main([])
         assert exc.value.code == 2
+
+
+class TestBacklogGate:
+    METRICS = "misp_jobs_queued{worker=\"default\"} 150\nmisp_jobs_queued{worker=\"prio\"} 70\nother 1\n"
+
+    def test_queued_jobs_sums_the_gauge(self):
+        import io
+        with patch("urllib.request.urlopen", return_value=io.BytesIO(self.METRICS.encode())):
+            assert task.queued_jobs("http://m/metrics") == 220
+
+    def test_unreachable_exporter_returns_none(self):
+        with patch("urllib.request.urlopen", side_effect=OSError("down")):
+            assert task.queued_jobs("http://m/metrics") is None
+
+    def test_backlog_skips_dispatch(self):
+        with patch.dict(os.environ, {"ADMIN_KEY": "k" * 40, "SYNC_BASE_URL": "http://web:8080", "TASK_MAX_QUEUED": "100"}), \
+                patch("misp_container.task.queued_jobs", return_value=150), \
+                patch("misp_container.task.run_task") as run:
+            with pytest.raises(SystemExit) as exc:
+                task.main(["update-galaxies"])
+        assert exc.value.code == 0
+        run.assert_not_called()
+
+    def test_below_limit_dispatches(self):
+        with patch.dict(os.environ, {"ADMIN_KEY": "k" * 40, "SYNC_BASE_URL": "http://web:8080", "TASK_MAX_QUEUED": "100"}), \
+                patch("misp_container.task.queued_jobs", return_value=10), \
+                patch("misp_container.task.run_task", return_value={"calls": 1, "errors": []}) as run:
+            with pytest.raises(SystemExit) as exc:
+                task.main(["update-galaxies"])
+        assert exc.value.code == 0
+        run.assert_called_once()

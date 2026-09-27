@@ -67,3 +67,19 @@ class TestEngineLoadsCatalogue:
         (tmp_path / "settings.yaml").write_text("settings:\n  optional:\n    MISP.baseurl:\n      value: x\n")
         groups = load_settings_yaml(str(tmp_path / "settings.yaml"))
         assert "upstream" not in groups
+
+
+class TestRenderSummary:
+    def test_table_sorted_by_level(self):
+        entries = {
+            "MISP.b": {"value": True, "level": 2, "description": "b"},
+            "MISP.a": {"value": "", "level": 0, "description": "a | pipe"},
+        }
+        text = upd.render_summary(["MISP.b", "MISP.a"], ["MISP.gone"], entries)
+        assert text.index("`MISP.a`") < text.index("`MISP.b`")
+        assert "| critical |" in text and "| optional |" in text
+        assert "a \\| pipe" in text
+        assert "- `MISP.gone`" in text
+
+    def test_no_new_settings(self):
+        assert upd.render_summary([], [], {}).startswith("No new settings.")

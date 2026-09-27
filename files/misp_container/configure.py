@@ -109,7 +109,21 @@ def configure_misp() -> None:
         db.release_config_lock()
 
 
+def record_run(status: str, started: float, error: str = "") -> None:
+    """Write the run to misp_container_sync_log for the metrics exporter."""
+    from .metrics import init_sync_log_table, log_sync_result
+    import time
+    try:
+        init_sync_log_table()
+        log_sync_result(operation="configure", status=status,
+                        duration_seconds=time.monotonic() - started, error_message=error[:1000])
+    except Exception as e:
+        log.warning("could not record the configure run: %s", e)
+
+
 def run() -> None:
+    import time
+    started = time.monotonic()
     check_identity()
     db.wait_for_mysql()
     db.init_schema()
@@ -117,7 +131,11 @@ def run() -> None:
     # Early custom hook: after the DB is ready, before MISP configuration.
     run_custom_script(CUSTOM_SETUP_SCRIPT, "setup")
 
-    configure_misp()
-
-    log.info("setting MISP.live = true")
-    cake.set_setting("MISP.live", "true")
+    try:
+        configure_misp()
+        log.info("setting MISP.live = true")
+        cake.set_setting("MISP.live", "true")
+    except BaseException as e:
+        record_run("error", started, repr(e))
+        raise
+    record_run("success", started)
