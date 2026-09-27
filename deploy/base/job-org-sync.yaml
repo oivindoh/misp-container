@@ -2,9 +2,9 @@
 # the MISP API once the web Deployment serves (sync wave 3). Exits 0 at once
 # when ADMIN_KEY is empty or orgs.yaml has nothing to apply.
 #
-# Argo CD recreates the Job on every sync (BeforeHookCreation). With plain
-# kubectl, delete the finished Job before applying a changed spec:
-#   kubectl delete job org-sync
+# The Job removes itself ten minutes after it finishes, so the next apply or
+# reconcile creates it again. Argo CD: a Sync hook in wave 3, recreated on
+# every sync. Other tools ignore these annotations.
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -18,7 +18,7 @@ metadata:
     argocd.argoproj.io/sync-wave: "3"
 spec:
   backoffLimit: 2
-  ttlSecondsAfterFinished: 3600
+  ttlSecondsAfterFinished: 600
   template:
     metadata:
       labels:

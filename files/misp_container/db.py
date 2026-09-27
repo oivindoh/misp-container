@@ -92,16 +92,37 @@ def wait_for_mysql(retries: int = 100, wait_seconds: int = 5) -> None:
 
 
 def wait_for_live(retries: int = 120, wait_seconds: int = 3) -> None:
-    """Wait for the configure step to set MISP.live=true."""
-    log.info("waiting for MISP.live=true (configure step)")
+    """Wait for the configure step of this image version.
+
+    The step sets MISP.live=true and records the image version it configured
+    (misp_docker.defaults_version). A pod of a newer image waits for its own
+    configure run, whatever tool applied the manifests and in whatever order.
+    """
+    from . import DIST_VERSION_FILE
+    try:
+        image_version = open(DIST_VERSION_FILE).read().strip()
+    except OSError:
+        image_version = ""
+    log.info("waiting for the configure step of image %s", image_version or "unknown")
     for i in range(retries, 0, -1):
-        result = query("SELECT value FROM system_settings WHERE setting='MISP.live';").strip().strip('"')
-        if result == "true":
-            log.info("MISP is live")
+        rows = query(
+            "SELECT setting, value FROM system_settings "
+            "WHERE setting IN ('MISP.live', 'misp_docker.defaults_version');"
+        )
+        state = {}
+        for line in rows.splitlines():
+            key, _, value = line.partition("\t")
+            state[key] = value.strip().strip('"')
+        live = state.get("MISP.live") == "true"
+        configured = state.get("misp_docker.defaults_version", "")
+        if live and (not image_version or configured == image_version):
+            log.info("MISP is live and configured for %s", configured or "this image")
             return
-        log.info("waiting for MISP.live=true (%d retries left)", i)
+        log.info("waiting: live=%s, configured for %s, this image is %s (%d retries left)",
+                 live, configured or "nothing", image_version or "unknown", i)
         time.sleep(wait_seconds)
-    log.error("MISP.live was not set within the timeout; is the configure job running?")
+    log.error("the configure step for image %s did not finish within the timeout; "
+              "is the configure job running?", image_version or "unknown")
     sys.exit(1)
 
 

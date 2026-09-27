@@ -94,24 +94,25 @@ as you like.
 
 ### Rollout order
 
+Ordering does not depend on the tool that applies the manifests. The Job records the image
+version it configured next to `MISP.live`, and a web or worker pod waits until both match its
+own image, so a pod of a new version never serves before its migrations ran. A finished Job
+removes itself after ten minutes, so the next apply or reconcile creates it again.
+
 | Event | What happens |
 |-------|--------------|
-| First install | The Job imports the schema and configures MISP. Web and worker pods wait for `MISP.live=true` (up to 6 minutes, then restart and wait again). |
-| Later rollouts | The Job runs migrations and setting changes for the new image. `MISP.live` is already true, so pods of the old version keep serving until the new ones replace them. |
-| The Job fails | With Argo CD the sync stops in wave 1: the Deployments stay on the old version. Read the Job's log, fix the cause, sync again. |
-| Nothing changed | The Job runs, finds nothing to do, and exits 0. |
+| First install | The Job imports the schema and configures MISP. Web and worker pods wait (up to 6 minutes, then restart and wait again). |
+| Later rollouts | Pods of the old version keep serving. Pods of the new version wait for the new Job to record their version, then serve. |
+| The Job fails | New pods keep waiting and restarting; old pods keep serving. Read the Job's log, fix the cause, apply again. |
+| Nothing changed | The Job runs, finds nothing to do, and exits 0 in seconds. |
+| Rollback | Apply the previous revision: its Job records its version and the pods of that version serve. A `kubectl rollout undo` alone leaves the pods waiting. |
 
-The Jobs carry Argo CD annotations: `configure` is a Sync hook in wave 1, the Deployments
-are wave 2, `org-sync` is a Sync hook in wave 3, and both Jobs are recreated on every sync
-(`BeforeHookCreation`). With plain `kubectl apply`, a finished Job blocks a changed spec:
-
-```bash
-kubectl delete job configure org-sync
-kubectl apply -k your-overlay
-```
-
-Compose runs the same sequence: the `configure` service is a one-shot, and `web` and
-`worker` depend on its completion.
+| Tool | Notes |
+|------|-------|
+| Argo CD | The Jobs are Sync hooks (`configure` in wave 1, the Deployments in wave 2, `org-sync` in wave 3), recreated on every sync. The Deployments do not even roll before the Job succeeded. |
+| Flux | Nothing to add. Every reconcile recreates the Job once it has removed itself; the idempotent run costs a few seconds. |
+| `kubectl apply -k` | Nothing to add. A changed Job spec within ten minutes of the last run needs `kubectl delete job configure org-sync` first. |
+| Compose | The `configure` service is a one-shot; `web` and `worker` depend on its completion. |
 
 ### Scaling
 

@@ -114,3 +114,45 @@ class TestSplitSqlStatements:
 
     def test_empty_and_comment_only_input(self):
         assert db.split_sql_statements("-- only; a comment\n/* and; this */\n") == []
+
+
+class TestWaitForLive:
+    """Pods wait for MISP.live and for the configure run of their own image version."""
+
+    def _rows(self, live, version):
+        rows = []
+        if live is not None:
+            rows.append(("MISP.live", live))
+        if version is not None:
+            rows.append(("misp_docker.defaults_version", version))
+        return rows
+
+    def _run(self, tmp_path, monkeypatch, sequences, image_version="v2.5.47"):
+        marker = tmp_path / "version"
+        marker.write_text(image_version)
+        monkeypatch.setattr("misp_container.DIST_VERSION_FILE", str(marker))
+        calls = iter(sequences)
+        outputs = []
+        def fake_query(sql, check=False):
+            rows = next(calls)
+            return "\n".join(f"{k}\t{v}" for k, v in rows)
+        monkeypatch.setattr(db, "query", fake_query)
+        monkeypatch.setattr(db.time, "sleep", lambda s: None)
+        return db.wait_for_live(retries=len(sequences), wait_seconds=0)
+
+    def test_waits_for_own_version(self, tmp_path, monkeypatch):
+        self._run(tmp_path, monkeypatch, [
+            self._rows('"true"', '"v2.5.37"'),   # old configure run: keep waiting
+            self._rows('"true"', '"v2.5.47"'),   # this image's run: go
+        ])
+
+    def test_live_alone_is_not_enough(self, tmp_path, monkeypatch):
+        with pytest.raises(SystemExit):
+            self._run(tmp_path, monkeypatch, [self._rows('"true"', '"v2.5.37"')] * 2)
+
+    def test_unknown_image_version_waits_for_live_only(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("misp_container.DIST_VERSION_FILE", str(tmp_path / "absent"))
+        outputs = iter([self._rows('"true"', '"v2.5.37"')])
+        monkeypatch.setattr(db, "query", lambda sql, check=False: "\n".join(f"{k}\t{v}" for k, v in next(outputs)))
+        monkeypatch.setattr(db.time, "sleep", lambda s: None)
+        db.wait_for_live(retries=1, wait_seconds=0)

@@ -1,11 +1,12 @@
 # One-shot configuration: schema, settings, admin user, GPG, auth.
-# Runs before the web and worker Deployments roll (sync wave 1; the
-# Deployments are wave 2). Web and worker pods wait for MISP.live=true,
-# which this Job sets last.
+# Web and worker pods wait until this Job has set MISP.live=true and recorded
+# their image version, so the order of the rollout does not depend on the
+# tool that applies the manifests. The Job removes itself ten minutes after
+# it finishes (ttlSecondsAfterFinished), so the next apply or reconcile
+# creates it again; a run on a configured instance takes seconds.
 #
-# Argo CD recreates the Job on every sync (BeforeHookCreation). With plain
-# kubectl, delete the finished Job before applying a changed spec:
-#   kubectl delete job configure
+# Argo CD: a Sync hook in wave 1 (the Deployments are wave 2), recreated on
+# every sync. Other tools ignore these annotations.
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -19,7 +20,7 @@ metadata:
     argocd.argoproj.io/sync-wave: "1"
 spec:
   backoffLimit: 3
-  ttlSecondsAfterFinished: 3600
+  ttlSecondsAfterFinished: 600
   template:
     metadata:
       labels:
