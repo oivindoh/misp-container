@@ -20,7 +20,9 @@ ARG PHP_VER=20240924
 FROM debian:trixie-slim@sha256:b6e2a152f22a40ff69d92cb397223c906017e1391a73c952b588e51af8883bf8 AS php-base
 ENV DEBIAN_FRONTEND=noninteractive
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
+    rm -f /etc/apt/apt.conf.d/docker-clean && apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
         tini \
         gettext \
@@ -56,12 +58,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         uuid-runtime \
         jq \
         python3-minimal \
-    && apt-get autoremove -y && apt-get clean -y && rm -rf /var/lib/apt/lists/*
+    && apt-get autoremove -y
 
 # =============================================================================
-# Stage 2: composer-build - PHP dependencies via Composer
+# Stage 2: composer - PHP dependencies, pinned by files/composer.lock
 # =============================================================================
-FROM php-base AS composer-build
+# composer-prep downloads upstream composer.json and adds our extra packages.
+# composer-lock resolves it (scripts/update-composer-lock.sh writes the result
+# to files/composer.lock). composer-build installs exactly the lock; an
+# out-of-date lock fails the build.
+FROM php-base AS composer-prep
 ARG CORE_TAG
 ARG CORE_COMMIT
 ENV COMPOSER_ALLOW_SUPERUSER=1
@@ -73,15 +79,23 @@ RUN sed -i '/cake-resque/d' /tmp/composer.json && \
 
 # composer:2.9.8
 COPY --from=composer:2@sha256:1364b5b9132ab4c42ea3be53e894572c32fe75a512cb3b1c3903fcc9bce53dcc /usr/bin/composer /usr/bin/composer
-# The composer download cache survives across builds (buildah and BuildKit)
-RUN --mount=type=cache,target=/root/.composer/cache \
-    composer config --no-interaction allow-plugins.composer/installers true && \
-    composer install && \
-    composer require --with-all-dependencies --no-interaction \
+RUN composer config --no-interaction allow-plugins.composer/installers true && \
+    composer require --no-update --no-interaction \
         elasticsearch/elasticsearch:8.19.0 \
         jakub-onderka/openid-connect-php:1.5.0 \
         certmichelin/openid-connect-php:1.3.0 \
         aws/aws-sdk-php:3.398.1
+
+FROM composer-prep AS composer-lock
+RUN --mount=type=cache,target=/root/.composer/cache \
+    composer update --no-install --no-interaction --with-all-dependencies
+
+FROM composer-prep AS composer-build
+COPY files/composer.lock /tmp/composer.lock
+# The composer download cache survives across builds (buildah and BuildKit)
+RUN --mount=type=cache,target=/root/.composer/cache \
+    composer validate --no-check-all --no-check-publish --no-interaction && \
+    composer install --no-interaction
 
 # =============================================================================
 # Stage 3: php-build - Native PHP PECL extensions
@@ -90,10 +104,12 @@ FROM php-base AS php-build
 ARG PHP_VER
 ENV TZ=Etc/UTC
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
+    rm -f /etc/apt/apt.conf.d/docker-clean && apt-get update && apt-get install -y --no-install-recommends \
         gcc g++ git make php8.4-dev php-pear \
         libbrotli-dev libfuzzy-dev librdkafka-dev libsimdjson-dev libzstd-dev \
-    && apt-get autoremove -y && apt-get clean -y && rm -rf /var/lib/apt/lists/*
+    && apt-get autoremove -y
 
 RUN update-alternatives --set php /usr/bin/php8.4 && \
     update-alternatives --set php-config /usr/bin/php-config8.4 && \
@@ -125,8 +141,9 @@ ARG CORE_COMMIT
 ARG MISP_UID=1000
 ARG MISP_GID=1000
 
-RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates \
-    && apt-get clean -y && rm -rf /var/lib/apt/lists/*
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
+    rm -f /etc/apt/apt.conf.d/docker-clean && apt-get update && apt-get install -y --no-install-recommends git ca-certificates
 
 # Initialise only the submodules the image ships: PyMISP and the STIX helpers
 # under app/files/scripts are removed below, so they are never fetched.
@@ -192,7 +209,9 @@ ARG MISP_GID=1000
 # - perl: pulled in by adduser/debconf, only needed during apt install
 # - gconv: libc6 charset converters, not needed by PHP/MISP
 # - systemd libs, python test suite, docs/man pages
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
+    rm -f /etc/apt/apt.conf.d/docker-clean && apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
         tini \
         gettext \
@@ -228,8 +247,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         jq \
         python3-minimal \
         libpython3.13-stdlib \
-    && apt-get autoremove -y && apt-get clean -y \
-    && rm -rf /var/lib/apt/lists/* /root/.cache \
+    && apt-get autoremove -y \
+    && rm -rf /root/.cache \
               /usr/lib/*/gconv \
               /usr/lib/*/perl \
               /usr/lib/*/perl-base \
@@ -360,9 +379,10 @@ CMD ["caddy", "run", "--config", "/etc/caddy/Caddyfile"]
 FROM debian:trixie-slim@sha256:b6e2a152f22a40ff69d92cb397223c906017e1391a73c952b588e51af8883bf8 AS modules-build
 ENV DEBIAN_FRONTEND=noninteractive
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        python3-minimal libpython3.13-stdlib python3-dev gcc g++ \
-    && rm -rf /var/lib/apt/lists/*
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
+    rm -f /etc/apt/apt.conf.d/docker-clean && apt-get update && apt-get install -y --no-install-recommends \
+        python3-minimal libpython3.13-stdlib python3-dev gcc g++
 
 COPY --from=uv /uv /tmp/uv
 COPY files/requirements-modules.txt /tmp/requirements.txt

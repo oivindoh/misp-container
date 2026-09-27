@@ -45,12 +45,12 @@ spec:
             - name: MYSQL_USER
               valueFrom:
                 secretKeyRef:
-                  name: misp-secrets
+                  name: misp-db
                   key: MYSQL_USER
             - name: MYSQL_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: misp-secrets
+                  name: misp-db
                   key: MYSQL_PASSWORD
           resources:
             requests:

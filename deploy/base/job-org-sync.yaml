@@ -43,7 +43,9 @@ spec:
             - configMapRef:
                 name: misp-env
             - secretRef:
-                name: misp-secrets
+                name: misp-db
+            - secretRef:
+                name: misp-admin
           volumeMounts:
             - name: orgs
               mountPath: /etc/misp-docker/orgs.yaml

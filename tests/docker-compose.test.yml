@@ -4,7 +4,9 @@
 x-test-env: &test-env
   env_file:
     - base/base.env
-    - base/secrets.env
+    - base/secrets-db.env
+    - base/secrets-app.env
+    - base/secrets-admin.env
     - ../tests/test-compose.env
     - ../tests/test-compose-secrets.env
 
@@ -31,7 +33,9 @@ services:
     read_only: true
     env_file:
       - base/base.env
-      - base/secrets.env
+      - base/secrets-db.env
+      - base/secrets-app.env
+      - base/secrets-admin.env
       - ../tests/test-compose.env
       - ../tests/test-compose-secrets.env
 
@@ -39,7 +43,9 @@ services:
     read_only: true
     env_file:
       - base/base.env
-      - base/secrets.env
+      - base/secrets-db.env
+      - base/secrets-app.env
+      - base/secrets-admin.env
       - ../tests/test-compose.env
       - ../tests/test-compose-secrets.env
     ports:
@@ -52,7 +58,7 @@ services:
 
   mysql:
     env_file:
-      - base/secrets.env
+      - base/secrets-db.env
       - ../tests/test-compose-secrets.env
     environment:
       MARIADB_DATABASE: misp

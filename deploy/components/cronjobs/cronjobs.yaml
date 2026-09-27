@@ -1,6 +1,6 @@
 # MISP periodic tasks through the API, run by the task runner in the main image:
 #   python3 -m misp_container.task <task>
-# ADMIN_KEY must be set in misp-secrets; the runner exits 1 with a clear
+# ADMIN_KEY must be set in misp-admin; the runner exits 1 with a clear
 # message when it is empty.
 # -- Cache all configured feeds --
 apiVersion: batch/v1
@@ -40,7 +40,7 @@ spec:
                 - name: ADMIN_KEY
                   valueFrom:
                     secretKeyRef:
-                      name: misp-secrets
+                      name: misp-admin
                       key: ADMIN_KEY
                       optional: true
               resources:
@@ -94,7 +94,7 @@ spec:
                 - name: ADMIN_KEY
                   valueFrom:
                     secretKeyRef:
-                      name: misp-secrets
+                      name: misp-admin
                       key: ADMIN_KEY
                       optional: true
               resources:
@@ -148,7 +148,7 @@ spec:
                 - name: ADMIN_KEY
                   valueFrom:
                     secretKeyRef:
-                      name: misp-secrets
+                      name: misp-admin
                       key: ADMIN_KEY
                       optional: true
               resources:
@@ -202,7 +202,7 @@ spec:
                 - name: ADMIN_KEY
                   valueFrom:
                     secretKeyRef:
-                      name: misp-secrets
+                      name: misp-admin
                       key: ADMIN_KEY
                       optional: true
               resources:
@@ -256,7 +256,7 @@ spec:
                 - name: ADMIN_KEY
                   valueFrom:
                     secretKeyRef:
-                      name: misp-secrets
+                      name: misp-admin
                       key: ADMIN_KEY
                       optional: true
               resources:
@@ -310,7 +310,7 @@ spec:
                 - name: ADMIN_KEY
                   valueFrom:
                     secretKeyRef:
-                      name: misp-secrets
+                      name: misp-admin
                       key: ADMIN_KEY
                       optional: true
               resources:
@@ -364,7 +364,7 @@ spec:
                 - name: ADMIN_KEY
                   valueFrom:
                     secretKeyRef:
-                      name: misp-secrets
+                      name: misp-admin
                       key: ADMIN_KEY
                       optional: true
               resources:
@@ -418,7 +418,7 @@ spec:
                 - name: ADMIN_KEY
                   valueFrom:
                     secretKeyRef:
-                      name: misp-secrets
+                      name: misp-admin
                       key: ADMIN_KEY
                       optional: true
               resources:

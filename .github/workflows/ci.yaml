@@ -24,22 +24,25 @@ env:
   IMAGE_MODULES: ghcr.io/${{ github.repository }}-modules
 
 jobs:
-  test:
+  # Builds the three images into the layer cache once; the suite jobs rebuild
+  # from that cache in seconds and run against the images they loaded.
+  build:
     runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
-
       - name: Build misp image
         uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
         with:
           context: .
           target: final
           load: true
-          tags: misp:latest
-          cache-from: type=gha,scope=misp
+          tags: ${{ env.IMAGE_MISP }}:ci
+          cache-from: |
+            type=gha,scope=misp
+            type=gha,scope=misp
           cache-to: type=gha,mode=max,scope=misp
 
       - name: Build caddy image
@@ -48,7 +51,7 @@ jobs:
           context: .
           target: caddy
           load: true
-          tags: misp-caddy:latest
+          tags: ${{ env.IMAGE_CADDY }}:ci
           cache-from: |
             type=gha,scope=misp
             type=gha,scope=caddy
@@ -60,26 +63,122 @@ jobs:
           context: .
           target: modules
           load: true
-          tags: misp-modules:latest
-          cache-from: type=gha,scope=modules
+          tags: ${{ env.IMAGE_MODULES }}:ci
+          cache-from: |
+            type=gha,scope=misp
+            type=gha,scope=modules
           cache-to: type=gha,mode=max,scope=modules
 
+  unit:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Unit tests
         run: |
           pip install --quiet uv
           uv sync
           PYTHONPATH=files .venv/bin/python -m pytest tests/ -v
 
+  integration:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      MISP_IMAGE_TAG: ci
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
+      - name: Build misp image
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
+        with:
+          context: .
+          target: final
+          load: true
+          tags: ${{ env.IMAGE_MISP }}:ci
+          cache-from: |
+            type=gha,scope=misp
+            type=gha,scope=misp
+
+      - name: Build caddy image
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
+        with:
+          context: .
+          target: caddy
+          load: true
+          tags: ${{ env.IMAGE_CADDY }}:ci
+          cache-from: |
+            type=gha,scope=misp
+            type=gha,scope=caddy
+
+      - name: Build modules image
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
+        with:
+          context: .
+          target: modules
+          load: true
+          tags: ${{ env.IMAGE_MODULES }}:ci
+          cache-from: |
+            type=gha,scope=misp
+            type=gha,scope=modules
+
       - name: Integration tests
-        timeout-minutes: 10
-        run: tests/run-integration-tests.sh --skip-build
+        timeout-minutes: 15
+        run: |
+          pip install --quiet pyyaml
+          tests/run-integration-tests.sh --skip-build
+
+  hub-spoke:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      MISP_IMAGE_TAG: ci
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
+      - name: Build misp image
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
+        with:
+          context: .
+          target: final
+          load: true
+          tags: ${{ env.IMAGE_MISP }}:ci
+          cache-from: |
+            type=gha,scope=misp
+            type=gha,scope=misp
+
+      - name: Build caddy image
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
+        with:
+          context: .
+          target: caddy
+          load: true
+          tags: ${{ env.IMAGE_CADDY }}:ci
+          cache-from: |
+            type=gha,scope=misp
+            type=gha,scope=caddy
+
+      - name: Build modules image
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
+        with:
+          context: .
+          target: modules
+          load: true
+          tags: ${{ env.IMAGE_MODULES }}:ci
+          cache-from: |
+            type=gha,scope=misp
+            type=gha,scope=modules
 
       - name: Hub-spoke sync tests
-        timeout-minutes: 10
+        timeout-minutes: 15
         run: tests/run-sync-test.sh --skip-build
 
   scan:
-    needs: test
+    needs: build
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -128,7 +227,7 @@ jobs:
           category: ${{ matrix.target }}
 
   release:
-    needs: [test, scan]
+    needs: [unit, integration, hub-spoke, scan]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:

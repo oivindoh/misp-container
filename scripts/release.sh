@@ -71,15 +71,26 @@ done
 
 # --- Update docker-compose.yml image tags ---
 echo "Updating deploy/docker-compose.yml..."
-python3 -c "
-import re, glob
-tag = '$IMAGE_TAG'
-for path in ['deploy/docker-compose.yml'] + glob.glob('tests/docker-compose*.yml'):
+IMAGE_TAG="$IMAGE_TAG" python3 - <<'PYEOF'
+import glob, os, re
+tag = os.environ["IMAGE_TAG"]
+for path in ["deploy/docker-compose.yml"] + glob.glob("tests/docker-compose*.yml"):
     text = open(path).read()
-    text = re.sub(r'(ghcr\.io/oivindoh/misp-container(?:-[a-z]+)?):[^\s]+', rf'\1:{tag}', text)
-    open(path, 'w').write(text)
-    print(f'  {path}')
-"
+    # image: ghcr.io/oivindoh/misp-container-caddy:${MISP_IMAGE_TAG:-2.5.37}
+    text = re.sub(r"(ghcr\.io/oivindoh/misp-container(?:-[a-z]+)?):\$\{MISP_IMAGE_TAG:-[^}]+\}",
+                  lambda m: f"{m.group(1)}:${{MISP_IMAGE_TAG:-{tag}}}", text)
+    open(path, "w").write(text)
+    print(f"  {path}")
+PYEOF
+
+# --- ArgoCD overlay: pin the remote base and components to this release ---
+# The overlay is a local, untracked copy of the deployment repo's; edit it in
+# place and leave it out of the commit.
+ARGOCD_OVERLAY="argocd/overlay/kustomization.yaml"
+if [ -f "$ARGOCD_OVERLAY" ]; then
+    echo "Updating ${ARGOCD_OVERLAY} refs to ${NEXT_TAG} (not committed)..."
+    sed -i '' "s#\(misp-container\.git//[^?]*?ref=\)[^ ]*#\1${NEXT_TAG}#" "$ARGOCD_OVERLAY"
+fi
 
 # --- Verify ---
 echo ""

@@ -8,21 +8,24 @@
 #   podman compose up -d
 #
 # Default login: admin@admin.test / ChangeMe-Str0ng!Pass#2026
+#
+# MISP_IMAGE_TAG selects the image tag (default: the current release); CI sets
+# it to the tag it built so the suites run the images from the checkout.
 
 x-misp-image: &misp-image
-  image: ghcr.io/oivindoh/misp-container:2.5.37
+  image: ghcr.io/oivindoh/misp-container:${MISP_IMAGE_TAG:-2.5.37}
   build:
     context: ..
     target: final
 
 x-misp-caddy-image: &misp-caddy-image
-  image: ghcr.io/oivindoh/misp-container-caddy:2.5.37
+  image: ghcr.io/oivindoh/misp-container-caddy:${MISP_IMAGE_TAG:-2.5.37}
   build:
     context: ..
     target: caddy
 
 x-misp-modules-image: &misp-modules-image
-  image: ghcr.io/oivindoh/misp-container-modules:2.5.37
+  image: ghcr.io/oivindoh/misp-container-modules:${MISP_IMAGE_TAG:-2.5.37}
   build:
     context: ..
     target: modules
@@ -31,7 +34,9 @@ x-misp-common: &misp-common
   <<: *misp-image
   env_file:
     - base/base.env
-    - base/secrets.env
+    - base/secrets-db.env
+    - base/secrets-app.env
+    - base/secrets-admin.env
     - compose.env
     - compose-secrets.env
   user: "1000:1000"
@@ -161,6 +166,14 @@ services:
       mysql:
         condition: service_healthy
 
+  # -- Tools (podman compose --profile tools run --rm composer-lock) ---------
+  composer-lock:
+    profiles: [tools]
+    build:
+      context: ..
+      target: composer-lock
+    command: ["cat", "/tmp/composer.lock"]
+
   # -- MariaDB -------------------------------------------------------------
   mysql:
     image: docker.io/library/mariadb:11.8.6@sha256:78a5047d3ba33975f183f183c2464cc7f1eab13ec8667e57cc9a5821d6da7577
@@ -169,7 +182,7 @@ services:
       - --collation-server=utf8mb4_unicode_ci
       - --max-allowed-packet=1G
     env_file:
-      - base/secrets.env
+      - base/secrets-db.env
       - compose-secrets.env
     environment:
       MARIADB_DATABASE: misp

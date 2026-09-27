@@ -44,19 +44,19 @@ spec:
             - name: MARIADB_ROOT_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: misp-secrets
+                  name: misp-db
                   key: MYSQL_ROOT_PASSWORD
             - name: MARIADB_DATABASE
               value: misp
             - name: MARIADB_USER
               valueFrom:
                 secretKeyRef:
-                  name: misp-secrets
+                  name: misp-db
                   key: MYSQL_USER
             - name: MARIADB_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: misp-secrets
+                  name: misp-db
                   key: MYSQL_PASSWORD
           volumeMounts:
             - name: mysql-data

@@ -59,7 +59,7 @@ Run with: `mise run test` or `PYTHONPATH=files python -m pytest tests/ -v`
 - `run-integration-tests.sh` -- test script
 - `docker-compose.test.yml` -- overlay on `deploy/docker-compose.yml` (test ports, env, Garage S3)
 - `test-compose.env` -- test env overrides (BASE_URL, ADMIN_EMAIL, etc.)
-- `test-compose-secrets.env` -- test secrets (passwords, Redis key)
+- `test-compose-secrets.env` -- test secrets (passwords, Redis key), layered over `deploy/base/secrets-*.env`
 - `garage.toml` -- Garage S3 config for attachment testing
 
 Run with: `mise run test-integration`

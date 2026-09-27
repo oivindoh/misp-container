@@ -25,8 +25,9 @@ Integration tests run all containers with `read_only: true` (except web, which n
 ## New MISP releases
 
 `.github/workflows/track-misp-releases.yaml` checks upstream daily. For a new release it
-bumps `CORE_TAG`, builds the image, starts the Compose stack, regenerates the settings
-catalogue from that MISP, and opens a PR with both changes. CI then builds, scans and runs
+bumps `CORE_TAG`, resolves `files/composer.lock` for that release, builds the image, starts
+the Compose stack, regenerates the settings catalogue from that MISP, and opens a PR with
+all three changes. CI then builds, scans and runs
 every suite on the PR, with the strict settings check and the rejected-`cake` check as the
 early warning for changed settings and defaults. Review the catalogue diff in the PR: a
 setting that appears there with a value this image should enforce moves to `settings.yaml`.
@@ -129,7 +130,12 @@ them and makes every MISP setting overridable through its derived env var.
 ```bash
 mise run settings-update              # build the stack, regenerate, tear down
 mise run settings-update -- --skip-build
+mise run composer-lock                # resolve files/composer.lock for the current CORE_TAG
 ```
+
+`files/composer.lock` pins MISP's PHP dependencies plus this image's extra packages. The
+build installs exactly that lock and fails when it no longer matches upstream's
+`composer.json`, which is the signal to run `mise run composer-lock` after a bump.
 
 The integration suite runs `scripts/update_settings.py --check` and fails when MISP defines a
 setting neither file names, or when `settings.yaml` names one MISP no longer defines. It also
@@ -172,6 +178,7 @@ files/
 scripts/
   update-settings.sh        # Regenerates the catalogue from a live stack
   update_settings.py        # The catalogue tool (--check in the integration suite)
+  update-composer-lock.sh   # Resolves files/composer.lock through the composer-lock stage
   entrypoint-configure.py   # Configure Job entrypoint
   entrypoint-web.py         # PHP-FPM entrypoint
   entrypoint-worker.py      # Worker/scheduler entrypoint
@@ -179,6 +186,7 @@ scripts/
   entrypoint-metrics.py     # Prometheus metrics HTTP server (metrics Deployment)
   Caddyfile                 # Caddy configuration
   requirements-*.txt        # Pinned Python dependencies (final, modules)
+  composer.lock             # Resolved PHP dependencies for the current CORE_TAG (generated)
 tests/
   test_config.py            # Unit tests for settings engine
   test_env.py               # Unit tests for env handling

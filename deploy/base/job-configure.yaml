@@ -43,7 +43,11 @@ spec:
             - configMapRef:
                 name: misp-env
             - secretRef:
-                name: misp-secrets
+                name: misp-db
+            - secretRef:
+                name: misp-app
+            - secretRef:
+                name: misp-admin
           volumeMounts:
             - name: files-scripts-tmp
               mountPath: /var/www/MISP/app/files/scripts/tmp

@@ -3,7 +3,7 @@ kind: Component
 
 # Periodic MISP tasks through the API: feed caching and fetching, server pull
 # and push, galaxy, taxonomy, warninglist and noticelist updates.
-# ADMIN_KEY must be set in misp-secrets.
+# ADMIN_KEY must be set in misp-admin.
 resources:
   - cronjobs.yaml
 # The task image tag follows the base's images transformer only inside the

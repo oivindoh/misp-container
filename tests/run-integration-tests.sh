@@ -59,6 +59,21 @@ assert_not_contains() {
     fi
 }
 
+
+# Section header with the previous section's wall time, for finding slow parts
+SECTION_START=$(date +%s)
+SECTION_NAME=""
+section() {
+    local now=$(date +%s)
+    if [ -n "$SECTION_NAME" ]; then
+        echo "  ($SECTION_NAME: $((now - SECTION_START))s)"
+    fi
+    SECTION_NAME="$1"
+    SECTION_START=$now
+    echo ""
+    echo "--- $1 ---"
+}
+
 web_exec() { ${COMPOSE} exec -T web bash -c "$1" 2>/dev/null; }
 # Container IDs of a compose service; both compose runners set this label
 container_ids() { ${ENGINE} ps -q --filter "label=com.docker.compose.project=deploy" --filter "label=com.docker.compose.service=$1" 2>/dev/null; }
@@ -103,6 +118,7 @@ if [ "${1:-}" != "--skip-build" ]; then
     ${COMPOSE} build 2>&1
 fi
 
+section "Stack startup"
 echo "Starting stack (cold start)..."
 ${COMPOSE} up -d 2>&1
 wait_for_misp
@@ -151,7 +167,7 @@ echo ""
 
 # --- Test Suite -------------------------------------------------------------
 
-echo "--- Non-root operation ---"
+section "Non-root operation"
 
 # All containers must run as non-root (UID 1000) for security and OpenShift compat
 uid=$(${COMPOSE} exec -T web id -u 2>/dev/null | tr -d '[:space:]')
@@ -164,8 +180,7 @@ assert_eq "worker runs as UID 1000" "1000" "$uid"
 caddy_uid=$(${ENGINE} inspect "$(container_ids caddy | head -1)" --format '{{.Config.User}}' 2>/dev/null | cut -d: -f1 | tr -d '[:space:]')
 assert_eq "caddy runs as UID 1000" "1000" "$caddy_uid"
 
-echo ""
-echo "--- HTTP / caddy ---"
+section "HTTP / caddy"
 
 # The pod probes hit PHP-FPM's ping through caddy
 fpm_ping=$(curl -s "http://localhost:${TEST_PORT}/fpm-ping" 2>/dev/null | tr -d '[:space:]')
@@ -183,8 +198,7 @@ assert_eq "static CSS served by caddy" "200" "$http_code"
 http_code=$(curl -s -o /dev/null -w '%{http_code}' --max-redirs 0 "http://localhost:${TEST_PORT}/" 2>/dev/null || true)
 assert_eq "root returns redirect (302)" "302" "$http_code"
 
-echo ""
-echo "--- Admin user configuration ---"
+section "Admin user configuration"
 
 user_json=$(api_get "$ADMIN_KEY" "/users/view/me")
 
@@ -208,8 +222,7 @@ assert_eq "admin org UUID matches" "2399b00e-b7f4-4fdb-aeb9-03d28e83a210" "$org_
 last_pw=$(db_query "SELECT last_pw_change FROM users WHERE id=1;")
 assert_not_contains "last_pw_change is set" "$last_pw" "NULL"
 
-echo ""
-echo "--- Database settings storage ---"
+section "Database settings storage"
 
 # With ENABLE_DB_SETTINGS=true, settings should be persisted in the system_settings table
 db_settings_count=$(db_query "SELECT COUNT(*) FROM system_settings;")
@@ -220,8 +233,7 @@ assert_contains "settings stored in DB" "$db_settings_count" "[0-9]"
 baseurl=$(db_query "SELECT value FROM system_settings WHERE setting='MISP.baseurl';")
 assert_eq "BASE_URL stored in DB" "\"http://localhost:${TEST_PORT}\"" "$baseurl"
 
-echo ""
-echo "--- Workers ---"
+section "Workers"
 
 # Background workers are managed by supervisord in the worker container.
 # Wait for the supervisor socket to appear (workers need to configure first).
@@ -258,8 +270,7 @@ print('OK' if resp.status == 200 else f'HTTP {resp.status}')
 " 2>/dev/null)
 assert_eq "web -> worker supervisord TCP connectivity" "OK" "$sv_status"
 
-echo ""
-echo "--- Background job processing ---"
+section "Background job processing"
 
 # Create an event and publish it to trigger background jobs (cache, correlation).
 # Then verify that a job was actually picked up and completed by the worker.
@@ -311,15 +322,13 @@ else
     fail "could not create event for background job test"
 fi
 
-echo ""
-echo "--- PHP-FPM ---"
+section "PHP-FPM"
 
 # PHP-FPM should be listening on TCP port 9002 (0x232A in /proc/net/tcp6)
 fpm_listening=$(web_exec "cat /proc/net/tcp6 2>/dev/null | grep ':232A'" || true)
 assert_contains "PHP-FPM listens on port 9002" "$fpm_listening" "232A"
 
-echo ""
-echo "--- Distribution files and app/Config rendering ---"
+section "Distribution files and app/Config rendering"
 
 
 # Taxonomy definitions ship in the image
@@ -349,15 +358,13 @@ assert_contains "worker config.php has Redis host" "$worker_config" "redis_host"
 assert_contains "worker config.php has Redis password" "$worker_config" "redis_password"
 assert_contains "worker config.php has SimpleBackgroundJobs" "$worker_config" "SimpleBackgroundJobs"
 
-echo ""
-echo "--- GPG ---"
+section "GPG"
 
 # AUTOCONF_GPG=true should auto-generate a GPG key in the .gnupg volume
 gpg_key=$(web_exec "ls /var/www/MISP/.gnupg/trustdb.gpg 2>/dev/null" | tr -d '[:space:]')
 assert_contains "GPG key generated" "$gpg_key" "trustdb.gpg"
 
-echo ""
-echo "--- MISP API functional ---"
+section "MISP API functional"
 
 # The MISP API should report a 2.5.x version
 server_info=$(api_get "$ADMIN_KEY" "/servers/getVersion.json")
@@ -379,8 +386,7 @@ else
     fail "create event via API"
 fi
 
-echo ""
-echo "--- Warm restart behaviour ---"
+section "Warm restart behaviour"
 
 # Run configure-misp manually and verify the warm-start fast path.
 # This is more reliable than parsing container logs after a restart.
@@ -403,8 +409,7 @@ finally:
 assert_contains "warm start loads DB settings" "$warm_output" "DB settings"
 assert_contains "warm start: minimum_config unchanged" "$warm_output" "minimum_config: 0 changed"
 
-echo ""
-echo "--- Version-gated defaults ---"
+section "Version-gated defaults"
 
 PY="python3 -c"
 PY_INIT="import sys; sys.path.insert(0, '/opt'); from misp_container.env import apply_defaults; from misp_container import cake, db; from misp_container.config import SettingsCache, apply_settings_fast, load_settings_yaml; import yaml, os, shutil; apply_defaults()"
@@ -460,8 +465,7 @@ os.chmod('${YAML_SRC}', 0o440); os.chmod('/etc/misp-docker', 0o550)
 ext_baseurl=$(db_query "SELECT value FROM system_settings WHERE setting='MISP.external_baseurl';")
 assert_eq "envar wins over version-gated default" "\"http://localhost:${TEST_PORT}\"" "$ext_baseurl"
 
-echo ""
-echo "--- S3 attachment storage ---"
+section "S3 attachment storage"
 
 # Configure MISP to use the Garage S3 endpoint for attachments.
 # Then create an event with an attachment and verify it works.
@@ -546,8 +550,7 @@ if [ -n "$s3_event_id" ]; then
     # the event lets you inspect the S3 attachment in the UI during test runs.
 fi
 
-echo ""
-echo "--- Custom auth (reverse proxy header login) ---"
+section "Custom auth (reverse proxy header login)"
 
 # Enable CustomAuth and create a test user, then verify that passing the
 # X-Forwarded-Email header through caddy logs the user in automatically.
@@ -597,8 +600,7 @@ rm -f ${WORK_DIR}/misp-header-cookies
 
 # --- Task runner (cronjob entrypoint) ---------------------------------------
 
-echo ""
-echo "--- Task runner ---"
+section "Task runner"
 
 # update-taxonomies is quick and idempotent; pull-servers with no servers makes no call
 task_output=$(${COMPOSE} run --rm --no-deps -T -e ADMIN_KEY="${ADMIN_KEY}" -e SYNC_BASE_URL="http://caddy:8080" \
@@ -612,8 +614,7 @@ task_output=$(${COMPOSE} run --rm --no-deps -T -e ADMIN_KEY="" sync python3 -m m
 assert_eq "task: missing ADMIN_KEY exits 1" "1" "$task_rc"
 
 
-echo ""
-echo "--- Org sync ---"
+section "Org sync"
 
 # Create a test orgs.yaml with org, users, tags, taxonomies, warninglists, server
 cat > ${WORK_DIR}/test-orgs.yaml <<'ORGSEOF'
@@ -862,8 +863,7 @@ rm -f ${WORK_DIR}/test-orgs.yaml ${WORK_DIR}/test-orgs-v2.yaml
 # Metrics exporter
 # ============================================================================
 
-echo ""
-echo "--- Metrics exporter ---"
+section "Metrics exporter"
 
 METRICS_PORT=19191
 
@@ -945,8 +945,7 @@ fi
 # ============================================================================
 
 
-echo ""
-echo "--- MISP modules ---"
+section "MISP modules"
 
 MODULES_PORT=16666
 
@@ -1023,8 +1022,7 @@ fi
 
 # --- Multi-replica web ------------------------------------------------------
 
-echo ""
-echo "--- Multi-replica web ---"
+section "Multi-replica web"
 
 # The configure service owns schema and settings; web replicas only wait for MISP.live.
 configure_logs=$(${COMPOSE} logs configure 2>/dev/null || true)
@@ -1053,8 +1051,7 @@ extra_web=$(container_ids web | tail -n +2)
 
 # --- Settings coverage ------------------------------------------------------
 
-echo ""
-echo "--- Settings coverage ---"
+section "Settings coverage"
 settings_dump="${WORK_DIR}/misp-settings.json"
 ${COMPOSE} exec -T web /var/www/MISP/app/Console/cake Admin getSetting all > "$settings_dump" 2>/dev/null || true
 if PYTHONPATH="${SCRIPT_DIR}/../files" python3 "${SCRIPT_DIR}/../scripts/update_settings.py" --check --json "$settings_dump"; then
@@ -1068,6 +1065,7 @@ cake_failures=$(${COMPOSE} logs configure 2>/dev/null | grep -c "WARNING \[cake\
 assert_eq "configure: no rejected cake settings" "0" "$cake_failures"
 
 # --- Results ----------------------------------------------------------------
+section "Results"
 
 echo ""
 echo "============================================="

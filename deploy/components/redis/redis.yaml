@@ -44,7 +44,7 @@ spec:
             - name: MISP_REDIS_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: misp-secrets
+                  name: misp-app
                   key: MISP_REDIS_PASSWORD
           ports:
             - name: redis

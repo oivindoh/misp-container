@@ -23,13 +23,20 @@ resources:
   - service-worker.yaml
   - pvc-attachments.yaml
 
-# Configuration from .env files.
-# Overlays add their own .env files with behavior:merge for overrides.
-# Secret .env files can be encrypted with: sops -e -i k8s/base/secrets.env
+# Configuration from .env files. Overlays merge their own values on top.
+# The three Secrets follow their consumers: web and worker pods get misp-db
+# and misp-app, never misp-admin; metrics gets two keys of misp-db.
+# Production overlays replace them through KSOPS (deploy/overlays/prod).
 secretGenerator:
-  - name: misp-secrets
+  - name: misp-db
     envs:
-      - secrets.env
+      - secrets-db.env
+  - name: misp-app
+    envs:
+      - secrets-app.env
+  - name: misp-admin
+    envs:
+      - secrets-admin.env
 
 configMapGenerator:
   - name: misp-env

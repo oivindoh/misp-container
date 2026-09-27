@@ -5,7 +5,7 @@ A container image for [MISP](https://www.misp-project.org/) 2.5, designed for Ku
 ## Goals
 
 1. **No root, no privileges, no writable filesystem** -- runs as UID 1000, read-only root filesystem, all capabilities dropped
-2. **Smaller image** -- ~680 MB for the main image, with the MISP distribution files baked in and nothing extracted at start
+2. **One image** -- about 900 MB with the MISP distribution files baked in (360 MB of lists, galaxies and geolocation data); nothing is extracted at start
 3. **Scalable** -- multiple web and worker replicas in Kubernetes, MySQL advisory lock prevents configuration races
 4. **Easy to consume as a Kustomize base** -- `deploy/base/` is a complete, opinionated Kustomize base with overlay examples for environment-specific config
 5. **Enterprise-ready** -- declarative user/org/server management, Prometheus metrics, S3 storage, OIDC/LDAP/header auth, CiliumNetworkPolicies
@@ -16,7 +16,7 @@ Built from a single Dockerfile with three targets:
 
 | Target | Image | Size | Purpose |
 |--------|-------|------|---------|
-| `final` | `misp` | ~680 MB | PHP-FPM, background workers, configure, org sync, metrics exporter (one entrypoint per role); `app/files` ships in the image |
+| `final` | `misp` | ~900 MB | PHP-FPM, background workers, configure, org sync, metrics exporter (one entrypoint per role); `app/files` ships in the image |
 | `caddy` | `misp-caddy` | ~64 MB | Static files + reverse proxy (scratch image) |
 | `modules` | `misp-modules` | ~296 MB | MISP enrichment/import/export modules (distroless) |
 
@@ -89,7 +89,7 @@ If the env var exists and is non-empty, the setting is enforced on every startup
 
 Settings that `settings.yaml` does not name are listed in the generated `settings-upstream.yaml` with MISP's own default. The image never applies those, but the same env var convention overrides any of them.
 
-See `deploy/base/base.env` for the container-level defaults and `deploy/base/secrets.env` for secrets.
+See `deploy/base/base.env` for the container-level defaults and `deploy/base/secrets-{db,app,admin}.env` for secrets.
 
 ### Startup behaviour
 
@@ -218,7 +218,7 @@ into place at start:
 kubectl -n misp create secret generic misp-certs --from-file=3.pem --from-file=7.pem
 ```
 
-A certificate uploaded through the UI lands on one replica only.
+A certificate uploaded through the UI lands on one replica only; org logos and custom images are on the shared attachments claim and reach every replica.
 
 ### Custom scripts
 
@@ -253,6 +253,8 @@ deploy/
 | `housekeeping` | Nightly deletes in `jobs`, `logs`, `audit_logs` | Retention is handled elsewhere |
 | `pdb` | PodDisruptionBudgets for web and worker | One replica of each |
 
+Compose is the single-host development stack: it runs the scheduler inside the worker container and has no housekeeping CronJobs; everything else matches the Kubernetes base.
+
 The `configure` and `org-sync` Jobs carry Argo CD sync annotations: configure runs in sync
 wave 1, the Deployments in wave 2, org-sync in wave 3, and Argo CD recreates both Jobs on
 every sync. With plain `kubectl apply`, delete a finished Job before applying a changed spec:
@@ -279,11 +281,18 @@ configMapGenerator:
       - ADMIN_EMAIL=admin@example.com
 ```
 
-Secrets are `.env` files consumable by both Kustomize and Compose. `deploy/base/secrets.env`
-holds placeholders that the configure step refuses. For production, supply the real Secret
-from your overlay through KSOPS, as `deploy/overlays/prod` does: an encrypted `secrets.sops.yaml`
-with `kustomize.config.k8s.io/behavior: replace`. Kustomize's `secretGenerator` cannot decrypt,
-so do not encrypt `secrets.env` in place.
+Secrets are `.env` files consumable by both Kustomize and Compose, split by consumer:
+
+| Secret | File | Keys | Who gets it |
+|--------|------|------|-------------|
+| `misp-db` | `secrets-db.env` | `MYSQL_USER`, `MYSQL_PASSWORD`, `MYSQL_ROOT_PASSWORD` | configure, web, worker, scheduler, org-sync, mariadb, housekeeping; metrics gets user and password only |
+| `misp-app` | `secrets-app.env` | `MISP_REDIS_PASSWORD`, `GNUPG_PASSWORD`, `SECURITY_ENCRYPTION_KEY`, `SECURITY_SALT` | configure, web, worker, scheduler, redis |
+| `misp-admin` | `secrets-admin.env` | `ADMIN_PASSWORD`, `ADMIN_KEY` | configure, org-sync, cronjobs |
+
+The base files hold placeholders that the configure step refuses. For production, supply the
+real Secrets from your overlay through KSOPS, as `deploy/overlays/prod` does: an encrypted
+`secrets.sops.yaml` with the three Secrets and `kustomize.config.k8s.io/behavior: replace`.
+Kustomize's `secretGenerator` cannot decrypt, so do not encrypt the `.env` files in place.
 
 ### Storage
 
