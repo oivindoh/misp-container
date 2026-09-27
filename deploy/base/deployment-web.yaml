@@ -5,6 +5,9 @@ metadata:
   labels:
     app: web
     app.kubernetes.io/name: web
+  annotations:
+    # After the configure Job (wave 1)
+    argocd.argoproj.io/sync-wave: "2"
 spec:
   replicas: 1
   strategy:
@@ -48,6 +51,9 @@ spec:
               mountPath: /var/www/MISP/app/tmp
             - name: misp-gnupg
               mountPath: /var/www/MISP/.gnupg
+            - name: gnupg-key
+              mountPath: /etc/misp-docker/gnupg
+              readOnly: true
             - name: misp-img-orgs
               mountPath: /var/www/MISP/app/webroot/img/orgs
             - name: misp-img-custom
@@ -135,6 +141,8 @@ spec:
               mountPath: /var/www/MISP/app/tmp
             - name: misp-gnupg
               mountPath: /var/www/MISP/.gnupg
+            - name: attachments
+              mountPath: /var/www/MISP/app/attachments
             - name: misp-img-orgs
               mountPath: /var/www/MISP/app/webroot/img/orgs
             - name: misp-img-custom
@@ -150,24 +158,18 @@ spec:
             limits:
               cpu: 2000m
               memory: 4Gi
-          # FPM startup can take 30s+ on cold start (DB init, configure).
-          # tcpSocket for startup/liveness (is FPM alive?), exec for readiness
-          # (is the application actually serving? checks MISP.live in DB).
+          # PHP-FPM only listens after the configure Job has set MISP.live=true,
+          # so a TCP probe is enough. The startup budget covers a first install
+          # where the Job imports the schema and applies every setting.
           startupProbe:
             tcpSocket:
               port: 9002
-            failureThreshold: 60
-            periodSeconds: 2
+            failureThreshold: 150
+            periodSeconds: 4
           readinessProbe:
-            exec:
-              command:
-                - python3
-                - -c
-                - |
-                  from misp_container.db import query
-                  v = query("SELECT value FROM system_settings WHERE setting='MISP.live'").strip().strip('"')
-                  exit(0 if v == 'true' else 1)
-            periodSeconds: 3
+            tcpSocket:
+              port: 9002
+            periodSeconds: 5
           livenessProbe:
             tcpSocket:
               port: 9002
@@ -206,3 +208,10 @@ spec:
         - name: init-tmp
           emptyDir:
             sizeLimit: 500Mi
+        - name: gnupg-key
+          secret:
+            secretName: misp-gnupg
+            optional: true
+        - name: attachments
+          persistentVolumeClaim:
+            claimName: attachments

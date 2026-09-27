@@ -56,3 +56,34 @@ class TestApplyDefaults:
         with patch.dict(os.environ, {"NUM_WORKERS_DEFAULT": "3"}, clear=False):
             apply_defaults()
             assert os.environ["NUM_WORKERS_DEFAULT"] == "3"
+
+
+class TestDerivedDefaults:
+    """Secondary settings inherit from the primary env var unless set."""
+
+    def test_redis_mirrors_inherit(self):
+        env = {"MISP_REDIS_HOST": "cache", "MISP_REDIS_PORT": "6380", "MISP_REDIS_PASSWORD": "pw"}
+        with patch.dict(os.environ, env, clear=False):
+            for key in ("SIMPLEBACKGROUNDJOBS_REDIS_HOST", "SIMPLEBACKGROUNDJOBS_REDIS_PASSWORD",
+                        "PLUGIN_ZEROMQ_REDIS_PORT"):
+                os.environ.pop(key, None)
+            apply_defaults()
+            assert os.environ["SIMPLEBACKGROUNDJOBS_REDIS_HOST"] == "cache"
+            assert os.environ["SIMPLEBACKGROUNDJOBS_REDIS_PASSWORD"] == "pw"
+            assert os.environ["PLUGIN_ZEROMQ_REDIS_PORT"] == "6380"
+
+    def test_explicit_value_wins(self):
+        env = {"MISP_REDIS_HOST": "cache", "SIMPLEBACKGROUNDJOBS_REDIS_HOST": "jobs-cache"}
+        with patch.dict(os.environ, env, clear=False):
+            apply_defaults()
+            assert os.environ["SIMPLEBACKGROUNDJOBS_REDIS_HOST"] == "jobs-cache"
+
+    def test_email_and_baseurl_inherit(self):
+        env = {"MISP_BASEURL": "https://m", "ADMIN_EMAIL": "a@x"}
+        with patch.dict(os.environ, env, clear=False):
+            for key in ("MISP_EXTERNAL_BASEURL", "MISP_CONTACT", "GNUPG_EMAIL", "MISP_EMAIL"):
+                os.environ.pop(key, None)
+            apply_defaults()
+            assert os.environ["MISP_EXTERNAL_BASEURL"] == "https://m"
+            assert os.environ["MISP_CONTACT"] == "a@x"
+            assert os.environ["GNUPG_EMAIL"] == "a@x"

@@ -1,4 +1,4 @@
-# Test overlay -- overrides docker-compose.yml with test-specific values.
+# Test overlay -- overrides deploy/docker-compose.yml with test-specific values.
 # Used by tests/run-integration-tests.sh
 
 x-test-env: &test-env
@@ -12,6 +12,9 @@ services:
   # read_only on all our containers to catch filesystem write issues
   # before they hit Kubernetes (readOnlyRootFilesystem: true)
   init:
+    <<: *test-env
+    read_only: true
+  configure:
     <<: *test-env
     read_only: true
   web:
@@ -57,18 +60,11 @@ services:
     environment:
       MARIADB_DATABASE: misp
 
+  # command and healthcheck come from the base file; repeating a list here
+  # makes podman-compose concatenate it
   redis:
     env_file:
       - ../tests/test-compose-secrets.env
-    command: >
-      sh -c 'redis-server
-      --requirepass "$$MISP_REDIS_PASSWORD"
-      --maxmemory 128mb
-      --maxmemory-policy noeviction
-      --save ""
-      --appendonly no'
-    healthcheck:
-      test: ["CMD-SHELL", "redis-cli -a $$MISP_REDIS_PASSWORD --no-auth-warning ping"]
 
   # S3-compatible storage for attachment testing
   garage:

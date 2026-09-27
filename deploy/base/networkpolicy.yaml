@@ -6,7 +6,7 @@
 #   caddy                 --> php-fpm :9002  (localhost in same pod)
 #   php-fpm               --> mariadb :3306, redis :6379
 #   worker                --> mariadb :3306, redis :6379
-#   init                  --> mariadb :3306  (for config generation)
+#   configure job         --> mariadb :3306, redis :6379
 #   housekeeping          --> mariadb :3306
 #   all pods              --> kube-dns :53
 #
@@ -78,6 +78,43 @@ spec:
             - port: "9001"
               protocol: TCP
     # DNS
+    - toEndpoints:
+        - matchLabels:
+            io.kubernetes.pod.namespace: kube-system
+            k8s-app: kube-dns
+      toPorts:
+        - ports:
+            - port: "53"
+              protocol: UDP
+            - port: "53"
+              protocol: TCP
+---
+# -- configure job --
+# One-shot configuration. Egress to MariaDB, Redis and DNS.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: configure
+spec:
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: configure
+  ingress: []
+  egress:
+    - toEndpoints:
+        - matchLabels:
+            app.kubernetes.io/name: mysql
+      toPorts:
+        - ports:
+            - port: "3306"
+              protocol: TCP
+    - toEndpoints:
+        - matchLabels:
+            app.kubernetes.io/name: redis
+      toPorts:
+        - ports:
+            - port: "6379"
+              protocol: TCP
     - toEndpoints:
         - matchLabels:
             io.kubernetes.pod.namespace: kube-system
@@ -342,6 +379,8 @@ spec:
             app.kubernetes.io/name: worker
         - matchLabels:
             app.kubernetes.io/name: scheduler
+        - matchLabels:
+            app.kubernetes.io/name: configure
         - matchExpressions:
             - key: app.kubernetes.io/name
               operator: In
@@ -385,6 +424,8 @@ spec:
             app.kubernetes.io/name: worker
         - matchLabels:
             app.kubernetes.io/name: scheduler
+        - matchLabels:
+            app.kubernetes.io/name: configure
       toPorts:
         - ports:
             - port: "6379"

@@ -16,7 +16,10 @@ set -euo pipefail
 #   ./tests/run-sync-test.sh --skip-build
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-COMPOSE="docker compose -f ${SCRIPT_DIR}/docker-compose.sync-test.yml"
+COMPOSE="${COMPOSE_CMD:-podman compose} -f ${SCRIPT_DIR}/docker-compose.sync-test.yml"
+# Host-side scratch files, mounted into the sync container. Physical path: a podman
+# machine on macOS shares /private, not the /tmp symlink.
+WORK_DIR="$(cd "${TMPDIR:-/tmp}" && pwd -P)"
 
 PASSED=0
 FAILED=0
@@ -88,7 +91,7 @@ ${COMPOSE} down -v 2>/dev/null || true
 
 if [ "${1:-}" != "--skip-build" ]; then
     echo "Building images..."
-    ${COMPOSE} build --quiet 2>&1
+    ${COMPOSE} build 2>&1
 fi
 
 echo "Starting 3 MISP instances..."
@@ -153,7 +156,7 @@ api_post "$ADMIN_KEY_C" 18093 "/events/publish/${EVENT_C_ID}" '{}' > /dev/null
 echo "  C: created + published event $EVENT_C_ID (with attribute)"
 
 # Configure sync via YAML on each instance
-cat > /tmp/sync-test-a.yaml <<EOF
+cat > ${WORK_DIR}/sync-test-a.yaml <<EOF
 teams:
   - uuid: "${ORG_A_UUID}"
     name: "Org-A"
@@ -173,7 +176,7 @@ teams:
           - "release-to:A"
 EOF
 
-cat > /tmp/sync-test-b.yaml <<EOF
+cat > ${WORK_DIR}/sync-test-b.yaml <<EOF
 tags:
   - name: "release-to:A"
     colour: "#0000ff"
@@ -204,7 +207,7 @@ teams:
         push: false
 EOF
 
-cat > /tmp/sync-test-c.yaml <<EOF
+cat > ${WORK_DIR}/sync-test-c.yaml <<EOF
 teams:
   - uuid: "${ORG_C_UUID}"
     name: "Org-C"
@@ -225,11 +228,11 @@ teams:
 EOF
 
 echo "  configuring A via sync..."
-run_sync "a" "$ADMIN_KEY_A" "/tmp/sync-test-a.yaml"
+run_sync "a" "$ADMIN_KEY_A" "${WORK_DIR}/sync-test-a.yaml"
 echo "  configuring B via sync..."
-run_sync "b" "$ADMIN_KEY_B" "/tmp/sync-test-b.yaml"
+run_sync "b" "$ADMIN_KEY_B" "${WORK_DIR}/sync-test-b.yaml"
 echo "  configuring C via sync..."
-run_sync "c" "$ADMIN_KEY_C" "/tmp/sync-test-c.yaml"
+run_sync "c" "$ADMIN_KEY_C" "${WORK_DIR}/sync-test-c.yaml"
 pass "all instances configured via sync container"
 
 echo ""
@@ -379,7 +382,7 @@ echo ""
 echo "--- Phase 6: Reconfigure to hub-push layout ---"
 
 # A: remove server entries, keep sync user for B
-cat > /tmp/sync-test-a2.yaml <<EOF
+cat > ${WORK_DIR}/sync-test-a2.yaml <<EOF
 teams:
   - uuid: "${ORG_A_UUID}"
     name: "Org-A"
@@ -392,7 +395,7 @@ teams:
 EOF
 
 # B: pull all from A+C, push to A with release-to:A, push to C with release-to:C
-cat > /tmp/sync-test-b2.yaml <<EOF
+cat > ${WORK_DIR}/sync-test-b2.yaml <<EOF
 tags:
   - name: "release-to:A"
     colour: "#0000ff"
@@ -428,7 +431,7 @@ teams:
 EOF
 
 # C: remove server entries, keep sync user for B
-cat > /tmp/sync-test-c2.yaml <<EOF
+cat > ${WORK_DIR}/sync-test-c2.yaml <<EOF
 teams:
   - uuid: "${ORG_C_UUID}"
     name: "Org-C"
@@ -441,11 +444,11 @@ teams:
 EOF
 
 echo "  reconfiguring A (no servers, passive)..."
-run_sync "a" "$ADMIN_KEY_A" "/tmp/sync-test-a2.yaml"
+run_sync "a" "$ADMIN_KEY_A" "${WORK_DIR}/sync-test-a2.yaml"
 echo "  reconfiguring B (pull+push hub)..."
-run_sync "b" "$ADMIN_KEY_B" "/tmp/sync-test-b2.yaml"
+run_sync "b" "$ADMIN_KEY_B" "${WORK_DIR}/sync-test-b2.yaml"
 echo "  reconfiguring C (no servers, passive)..."
-run_sync "c" "$ADMIN_KEY_C" "/tmp/sync-test-c2.yaml"
+run_sync "c" "$ADMIN_KEY_C" "${WORK_DIR}/sync-test-c2.yaml"
 
 # Verify A and C have no active servers
 A_ACTIVE_SERVERS=$(api_get "$ADMIN_KEY_A" 18091 "/servers" | jq '[.[] | select(.Server.push==true or .Server.pull==true)] | length')
@@ -537,8 +540,8 @@ if [ ${FAILED} -gt 0 ]; then
     for f in "${FAILURES[@]}"; do echo "  - $f"; done
 fi
 
-rm -f /tmp/sync-test-a.yaml /tmp/sync-test-b.yaml /tmp/sync-test-c.yaml
-rm -f /tmp/sync-test-a2.yaml /tmp/sync-test-b2.yaml /tmp/sync-test-c2.yaml
+rm -f ${WORK_DIR}/sync-test-a.yaml ${WORK_DIR}/sync-test-b.yaml ${WORK_DIR}/sync-test-c.yaml
+rm -f ${WORK_DIR}/sync-test-a2.yaml ${WORK_DIR}/sync-test-b2.yaml ${WORK_DIR}/sync-test-c2.yaml
 
 if [ "${KEEP_RUNNING:-}" != "true" ]; then
     echo ""

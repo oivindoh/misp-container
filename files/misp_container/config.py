@@ -52,6 +52,7 @@ class SettingSpec:
     blank_protection: bool = False
     since: str = ""
     sensitive: bool = False
+    kind: str = "str"
 
     @property
     def env_var(self) -> str:
@@ -90,14 +91,36 @@ class SettingSpec:
         """Backward compat for code that checks setting_type."""
         return "envar" if self.is_envar else "default"
 
+    @property
+    def typed_value(self):
+        """The effective value cast to the type the YAML default has.
+
+        Env values arrive as strings; MISP reads config.php with PHP types,
+        and a string "false" is truthy there.
+        """
+        value = self.effective_value
+        if self.kind == "bool":
+            return value.strip().lower() in ("1", "true", "yes", "on")
+        if self.kind == "int":
+            try:
+                return int(value)
+            except ValueError:
+                return value
+        return value
+
     @classmethod
     def from_dict(cls, name: str, spec: dict) -> SettingSpec:
         """Create from a raw YAML dict entry."""
         raw_value = spec.get("value", "")
         if isinstance(raw_value, bool):
             value = "true" if raw_value else "false"
+            kind = "bool"
+        elif isinstance(raw_value, int):
+            value = str(raw_value)
+            kind = "int"
         else:
             value = str(raw_value)
+            kind = "str"
         return cls(
             name=name,
             default_value=value,
@@ -105,6 +128,7 @@ class SettingSpec:
             blank_protection=bool(spec.get("blank_protection")),
             since=spec.get("since", ""),
             sensitive=bool(spec.get("sensitive")),
+            kind=kind,
         )
 
 
@@ -295,21 +319,61 @@ def apply_settings_fast(group: str, cache: SettingsCache, all_specs: dict[str, l
         cache.apply_defaults(defaults, group)
 
 
-def needs_minimum_config_write(cache: SettingsCache, all_specs: dict[str, list[SettingSpec]] | None = None) -> bool:
-    """Check if minimum_config has any changes that need writing."""
-    if all_specs is None:
-        all_specs = load_settings_yaml()
+# Groups that MISP must read from config.php before the database is available.
+# MISP ignores the database for SystemSetting::BLOCKED_SETTINGS (salt,
+# encryption key, python_bin, attachments_dir, system_setting_db and others),
+# so every pod renders these from settings.yaml and env at start.
+CONFIG_PHP_GROUPS = ("minimum_config", "db_enable")
 
-    for spec in all_specs.get("minimum_config", []):
-        if spec.is_envar:
-            db_value = cache.normalise(cache.get(spec.name)) if cache.has(spec.name) else "__UNSET__"
-            if db_value != spec.effective_value:
-                return True
+
+def php_literal(value) -> str:
+    """Render a Python value as a PHP literal, escaping single-quoted strings."""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int):
+        return str(value)
+    escaped = str(value).replace("\\", "\\\\").replace("'", "\\'")
+    return f"'{escaped}'"
+
+
+def render_config_php(specs: list[SettingSpec]) -> str:
+    """Render config.php from SettingSpecs.
+
+    Setting names split on the first dot into section and key; a name without
+    a dot is a top-level key. Blank values with blank_protection are left out
+    so MISP applies its own default (for example an auto-generated salt).
+    """
+    tree: dict = {}
+    for spec in specs:
+        if spec.blank_protection and not spec.effective_value:
+            continue
+        section, _, key = spec.name.partition(".")
+        if key:
+            tree.setdefault(section, {})[key] = spec.typed_value
         else:
-            if not cache.has(spec.name):
-                return True
+            tree[section] = spec.typed_value
 
-    return False
+    lines = ["<?php", "$config = array("]
+    for section, value in tree.items():
+        if isinstance(value, dict):
+            lines.append(f"    '{section}' => array(")
+            for key, val in value.items():
+                lines.append(f"        '{key}' => {php_literal(val)},")
+            lines.append("    ),")
+        else:
+            lines.append(f"    '{section}' => {php_literal(value)},")
+    lines.append(");")
+    return "\n".join(lines) + "\n"
+
+
+def config_php_specs(all_specs: dict[str, list[SettingSpec]]) -> list[SettingSpec]:
+    """The specs that belong in config.php: bootstrap groups, plus S3 when enabled."""
+    specs: list[SettingSpec] = []
+    for group in CONFIG_PHP_GROUPS:
+        specs.extend(all_specs.get(group, []))
+    if os.environ.get("PLUGIN_S3_BUCKET_NAME"):
+        specs.extend(all_specs.get("s3", []))
+    return specs
 
 
 def _version_newer(version: str, reference: str) -> bool:

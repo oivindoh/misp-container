@@ -275,6 +275,7 @@ RUN for dir in app/files app/attachments app/tmp app/tmp/cache app/tmp/cache/mod
 # Copy Python entrypoint package and scripts
 COPY --chown=${MISP_UID}:${MISP_GID} files/misp_container/ /opt/misp_container/
 COPY --chown=${MISP_UID}:${MISP_GID} --chmod=0550 files/entrypoint-init.py /entrypoint-init.py
+COPY --chown=${MISP_UID}:${MISP_GID} --chmod=0550 files/entrypoint-configure.py /entrypoint-configure.py
 COPY --chown=${MISP_UID}:${MISP_GID} --chmod=0550 files/entrypoint-web.py /entrypoint-web.py
 COPY --chown=${MISP_UID}:${MISP_GID} --chmod=0550 files/entrypoint-worker.py /entrypoint-worker.py
 

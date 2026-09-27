@@ -1,16 +1,13 @@
-# Docker Compose for running MISP.
+# Compose stack for running MISP with podman.
 #
 # Pull and run (no build required):
-#   docker compose up -d
+#   podman compose up -d
 #
 # Build from source and run:
-#   docker compose build
-#   docker compose up -d
+#   podman compose build
+#   podman compose up -d
 #
 # Default login: admin@admin.test / ChangeMe-Str0ng!Pass#2026
-#
-# Set MISP_IMAGE_TAG to pin a version, e.g.:
-#   MISP_IMAGE_TAG=2.5.37 docker compose up -d
 
 x-misp-image: &misp-image
   image: ghcr.io/oivindoh/misp-container:2.5.37
@@ -69,7 +66,25 @@ services:
       mysql:
         condition: service_healthy
 
-  # -- PHP-FPM -------------------------------------------------------------
+  # -- One-shot configure: schema, settings, admin, GPG, sets MISP.live -----
+  configure:
+    <<: *misp-common
+    command: ["python3", "/entrypoint-configure.py"]
+    volumes:
+      - misp-files:/var/www/MISP/app/files
+      - misp-config:/var/www/MISP/app/Config
+      - misp-tmp:/var/www/MISP/app/tmp
+      - misp-gnupg:/var/www/MISP/.gnupg
+      - configure-tmp:/tmp
+    depends_on:
+      init:
+        condition: service_completed_successfully
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # -- PHP-FPM (scale freely: podman compose up -d --scale web=2) ------------
   web:
     <<: *misp-common
     command: ["python3", "/entrypoint-web.py"]
@@ -83,7 +98,7 @@ services:
       - misp-img-custom:/var/www/MISP/app/webroot/img/custom
       - php-tmp:/tmp
     depends_on:
-      init:
+      configure:
         condition: service_completed_successfully
       mysql:
         condition: service_healthy
@@ -123,7 +138,7 @@ services:
       - misp-gnupg:/var/www/MISP/.gnupg
       - worker-tmp:/tmp
     depends_on:
-      init:
+      configure:
         condition: service_completed_successfully
       mysql:
         condition: service_healthy
@@ -226,6 +241,7 @@ volumes:
   misp-img-orgs:
   misp-img-custom:
   init-tmp:
+  configure-tmp:
   php-tmp:
   worker-misp-tmp:
   worker-tmp:

@@ -91,6 +91,20 @@ def wait_for_mysql(retries: int = 100, wait_seconds: int = 5) -> None:
     sys.exit(1)
 
 
+def wait_for_live(retries: int = 120, wait_seconds: int = 3) -> None:
+    """Wait for the configure step to set MISP.live=true."""
+    log.info("waiting for MISP.live=true (configure step)")
+    for i in range(retries, 0, -1):
+        result = query("SELECT value FROM system_settings WHERE setting='MISP.live';").strip().strip('"')
+        if result == "true":
+            log.info("MISP is live")
+            return
+        log.info("waiting for MISP.live=true (%d retries left)", i)
+        time.sleep(wait_seconds)
+    log.error("MISP.live was not set within the timeout; is the configure job running?")
+    sys.exit(1)
+
+
 def init_schema() -> None:
     """Import MISP database schema if not already initialized."""
     if query_ok("DESCRIBE attributes"):
@@ -111,15 +125,42 @@ def init_schema() -> None:
         conn.close()
 
 
-def acquire_config_lock() -> None:
-    """Acquire a MySQL advisory lock for configuration."""
+# MySQL releases a named lock when its connection closes, so the lock
+# connection stays open from acquire until release.
+_lock_conn = None
+
+
+def acquire_config_lock(timeout: int = 300) -> None:
+    """Acquire the MySQL advisory lock for configuration and hold its connection."""
+    global _lock_conn
     log.info("acquiring configuration lock")
-    result = query("SELECT GET_LOCK('misp_configure', 300);").strip()
-    if result != "1":
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT GET_LOCK('misp_configure', %s);", (timeout,))
+            row = cur.fetchone()
+        result = row[0] if row else None
+    except Exception as e:
+        conn.close()
+        log.error("could not acquire configuration lock: %s", e)
+        sys.exit(1)
+    if result != 1:
+        conn.close()
         log.error("could not acquire configuration lock (result: %s)", result)
         sys.exit(1)
+    _lock_conn = conn
 
 
 def release_config_lock() -> None:
-    """Release the MySQL advisory lock."""
-    query("SELECT RELEASE_LOCK('misp_configure');")
+    """Release the MySQL advisory lock and close its connection."""
+    global _lock_conn
+    if _lock_conn is None:
+        return
+    try:
+        with _lock_conn.cursor() as cur:
+            cur.execute("SELECT RELEASE_LOCK('misp_configure');")
+    except Exception as e:
+        log.warning("could not release configuration lock: %s", e)
+    finally:
+        _lock_conn.close()
+        _lock_conn = None

@@ -6,6 +6,7 @@ labels:
       app.kubernetes.io/instance: misp-base
 
 resources:
+  - job-configure.yaml
   - deployment-web.yaml
   - deployment-worker.yaml
   - deployment-scheduler.yaml
@@ -22,6 +23,7 @@ resources:
   - cronjobs.yaml
   - networkpolicy.yaml
   - pdb.yaml
+  - pvc-attachments.yaml
 
 # Configuration from .env files.
 # Overlays add their own .env files with behavior:merge for overrides.

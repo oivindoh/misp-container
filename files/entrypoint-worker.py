@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
 """Background worker entrypoint.
 
-Waits for web container to finish configuring (MISP.live=true),
+Waits for the configure step to finish (MISP.live=true),
 generates supervisord config, then exec's supervisord.
 Runs as UID 1000 (misp) - no root operations.
 """
 
 import os
 import sys
-import time
 from pathlib import Path
 
 from misp_container import CAKE, MISP_BASE
 from misp_container.env import apply_defaults, env
 from misp_container import db
+from misp_container.init import check_writable
 from misp_container.log import setup as setup_logging, get as getlog
 
 SUPERVISORD_CONF = "/tmp/supervisord-workers.conf"
@@ -106,28 +106,6 @@ password={sv_pass}
     Path(SUPERVISORD_CONF).write_text("".join(sections))
 
 
-def wait_for_web():
-    """Wait for the web container to finish configuring (MISP.live=true)."""
-    log.info("waiting for web container to finish configuring")
-    db.wait_for_mysql(retries=60, wait_seconds=5)
-
-    for i in range(120, 0, -1):
-        try:
-            result = db.query(
-                "SELECT value FROM system_settings WHERE setting='MISP.live';"
-            ).strip().strip('"')
-            if result == "true":
-                log.info("MISP is live, web configuration complete")
-                return
-        except Exception:
-            pass
-        log.info("waiting for MISP.live=true (%d retries left)", i)
-        time.sleep(3)
-
-    log.error("web container did not set MISP.live=true after timeout")
-    sys.exit(1)
-
-
 # -- Main --
 
 setup_logging("worker")
@@ -136,7 +114,10 @@ log = getlog("worker")
 log.info("MISP worker container starting")
 
 apply_defaults()
-wait_for_web()
+if not env("PLUGIN_S3_BUCKET_NAME"):
+    check_writable(env("MISP_ATTACHMENTS_DIR"), "attachments")
+db.wait_for_mysql(retries=60, wait_seconds=5)
+db.wait_for_live()
 generate_supervisord_config()
 
 log.info("starting background workers via supervisord")

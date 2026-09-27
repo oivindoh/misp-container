@@ -16,12 +16,17 @@
 #   If the env var exists and is non-empty, the setting is enforced every startup.
 #   If no env var, the default is applied once (then user owns it via the UI).
 #
-# Groups are applied in order:
-#   minimum_config -> db_enable -> initialisation -> critical -> optional -> gpg -> s3 -> proxy -> kafka -> linotp
+# minimum_config and db_enable are rendered into config.php by the init container.
+# The configure step applies the other groups to the database in this order:
+#   initialisation -> critical -> optional -> gpg -> s3 -> proxy -> kafka -> linotp
 
 settings:
 
-  # -- minimum_config: bootstrap settings written to config.php ----------------
+  # -- minimum_config: rendered into config.php by init, in every pod ----------
+  # MISP never reads SystemSetting::BLOCKED_SETTINGS from the database (salt,
+  # encryption key, password policy, python_bin, ca_path, tmpdir,
+  # attachments_dir, self_update, online_version_check, system_setting_db,
+  # GnuPG.binary, disable_local_feed_access), so those live here.
   minimum_config:
 
     # Redis connection
@@ -132,16 +137,25 @@ settings:
     MISP.osuser:
       description: "The Unix user MISP (php) is running as"
       value: misp
-    MISP.uuid:
-      description: "The MISP instance UUID. This UUID is used to identify this instance"
-      value: ""
-      force: true
 
-    # Security bootstrap
+    # Security bootstrap (BLOCKED_SETTINGS: only config.php counts)
     Security.salt:
       value: ""
       sensitive: true
       force: true
+      blank_protection: true
+    Security.encryption_key:
+      value: ""
+      sensitive: true
+      force: true
+      blank_protection: true
+    Security.password_policy_length:
+      description: "Password length requirement. If it is not set or it is set to 0, then the default value is assumed (12)"
+      value: 12
+    # 12-15 must be "complex" - after 16 characters anything goes
+    Security.password_policy_complexity:
+      description: "Password complexity requirement. Leave it empty for the default setting (3 out of 4, with either a digit or a special..."
+      value: '/^((?=.*\d)|(?=.*\W+))(?![\n])(?=.*[A-Z])(?=.*[a-z]).*$|.{16,}/'
     Security.rest_client_enable_arbitrary_urls:
       description: "Enable this setting if you wish for users to be able to query any arbitrary URL via the rest client. Keep in mind tha..."
       value: false
@@ -195,9 +209,6 @@ settings:
     MISP.contact:
       description: "The e-mail address that MISP should include as a contact address for the instance's support team"
       value: admin@admin.test
-    MISP.attachments_dir:
-      description: "Directory where attachments are stored. MISP will NOT migrate the existing data if you change this setting. The only ..."
-      value: /var/www/MISP/app/attachments
     MISP.uuid:
       description: "The MISP instance UUID. This UUID is used to identify this instance"
       value: ""
@@ -207,16 +218,6 @@ settings:
       value: eng
 
     # Security
-    Security.encryption_key:
-      value: ""
-      sensitive: true
-      force: true
-      blank_protection: true
-    Security.salt:
-      value: ""
-      sensitive: true
-      force: true
-      blank_protection: true
     Security.advanced_authkeys:
       description: "Advanced authkeys will allow each user to create and manage a set of authkeys for themselves, each with individual ex..."
       value: true
@@ -248,14 +249,6 @@ settings:
       description: "The duration (in seconds) of how long the user will be locked out when the allowed number of login attempts are exhau..."
       value: 300
 
-    # Password policy
-    Security.password_policy_length:
-      description: "Password length requirement. If it is not set or it is set to 0, then the default value is assumed (12)"
-      value: 12
-    # 12-15 must be "complex" - after 16 characters anything goes
-    Security.password_policy_complexity:
-      description: "Password complexity requirement. Leave it empty for the default setting (3 out of 4, with either a digit or a special..."
-      value: '/^((?=.*\d)|(?=.*\W+))(?![\n])(?=.*[A-Z])(?=.*[a-z]).*$|.{16,}/'
     Security.api_key_quick_lookup_expiration:
       description: "If the api key quick lookup is enabled, this setting will allow you to tune the expiration of the keys in redis. A lo..."
       value: 180
@@ -700,7 +693,7 @@ settings:
       value: false
     GnuPG.sign:
       description: "Enable the signing of GnuPG emails. By default, GnuPG emails are signed"
-      value: true
+      value: false
     SMIME.enabled:
       description: "Enable S/MIME encryption. The encryption posture of the GnuPG.onlyencrypted and GnuPG.bodyonlyencrypted settings are ..."
       value: false

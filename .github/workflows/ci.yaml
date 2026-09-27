@@ -15,6 +15,9 @@ on:
 permissions: {}
 
 env:
+  # Images are built with buildx, so the test scripts must use docker compose here
+  COMPOSE_CMD: docker compose
+  CONTAINER_CMD: docker
   REGISTRY: ghcr.io
   IMAGE_MISP: ghcr.io/${{ github.repository }}
   IMAGE_CADDY: ghcr.io/${{ github.repository }}-caddy

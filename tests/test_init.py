@@ -119,3 +119,88 @@ class TestGenerateEmailConfig:
         assert "smtp.example.com" in content
         assert "587" in content
         assert "misp@example.com" in content
+
+
+class TestCopyTree:
+    """Full-sync copy used for app/files directories (no copystat, so no xattrs)."""
+
+    def test_copies_nested_and_overwrites(self, tmp_path):
+        from misp_container.init import _copy_tree
+        src = tmp_path / "src"
+        dst = tmp_path / "dst"
+        (src / "sub").mkdir(parents=True)
+        (src / "sub" / "a.txt").write_text("new")
+        (src / "top.txt").write_text("top")
+        (dst / "sub").mkdir(parents=True)
+        (dst / "sub" / "a.txt").write_text("old")
+        _copy_tree(src, dst)
+        assert (dst / "sub" / "a.txt").read_text() == "new"
+        assert (dst / "top.txt").read_text() == "top"
+
+
+class TestCheckWritable:
+    """The entrypoints refuse to start when the attachments directory is read-only."""
+
+    def test_writable_dir_passes(self, tmp_path):
+        from misp_container.init import check_writable
+        check_writable(str(tmp_path), "attachments")
+        assert not (tmp_path / ".write-check").exists()
+
+    def test_missing_dir_exits(self, tmp_path):
+        from misp_container.init import check_writable
+        with pytest.raises(SystemExit):
+            check_writable(str(tmp_path / "missing"), "attachments")
+
+
+class TestPopulateGnupg:
+    """Import of the instance key from the mounted Secret."""
+
+    def _env(self, tmp_path, key_file):
+        return {
+            "GNUPG_KEY_FILE": str(key_file),
+            "GNUPG_HOMEDIR": str(tmp_path / "gnupg"),
+            "GNUPG_BINARY": "gpg",
+        }
+
+    def test_no_key_file_is_noop(self, tmp_path):
+        from misp_container.init import populate_gnupg
+        with patch.dict(os.environ, self._env(tmp_path, tmp_path / "absent.asc")), \
+                patch("misp_container.init.subprocess.run") as run:
+            populate_gnupg()
+        run.assert_not_called()
+
+    def test_existing_homedir_is_kept(self, tmp_path):
+        from misp_container.init import populate_gnupg
+        key = tmp_path / "private.asc"
+        key.write_text("key")
+        homedir = tmp_path / "gnupg"
+        homedir.mkdir()
+        (homedir / "trustdb.gpg").write_text("")
+        with patch.dict(os.environ, self._env(tmp_path, key)), \
+                patch("misp_container.init.subprocess.run") as run:
+            populate_gnupg()
+        run.assert_not_called()
+
+    def test_imports_and_trusts_key(self, tmp_path):
+        from misp_container.init import populate_gnupg
+        key = tmp_path / "private.asc"
+        key.write_text("key")
+        calls = []
+
+        def fake_run(cmd, **kwargs):
+            calls.append((cmd, kwargs))
+            result = type("R", (), {})()
+            result.stdout = "sec:u:3072:1:AAAA::::::::::\nfpr:::::::::ABCDEF0123456789:\n"
+            return result
+
+        with patch.dict(os.environ, self._env(tmp_path, key)), \
+                patch("misp_container.init.subprocess.run", side_effect=fake_run):
+            populate_gnupg()
+
+        assert (tmp_path / "gnupg").is_dir()
+        assert "--import" in calls[0][0] and str(key) in calls[0][0]
+        assert "--list-secret-keys" in calls[1][0]
+        assert "--import-ownertrust" in calls[2][0]
+        assert calls[2][1]["input"] == "ABCDEF0123456789:6:\n"
+        for cmd, _ in calls:
+            assert cmd[:4] == ["gpg", "--batch", "--homedir", str(tmp_path / "gnupg")]

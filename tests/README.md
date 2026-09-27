@@ -11,17 +11,19 @@ mise run test-sync           # hub-spoke sync test with 3 instances (~90s)
 mise run test-all            # unit + integration (not sync)
 ```
 
-All integration tests build Docker images, start full MISP stacks, and tear them down automatically. Pass `--skip-build` to reuse existing images.
+All integration tests build the images with compose, start full MISP stacks, and tear them down automatically. Pass `--skip-build` to reuse existing images.
 
 ## Unit tests
 
-**153 tests** covering the Python entrypoint library (`files/misp_container/`).
+**211 tests** covering the Python entrypoint library (`files/misp_container/`).
 
 | File | What it tests |
 |------|---------------|
 | `test_config.py` | Settings diff engine, version comparison, YAML loading, env var expansion, settings cache |
-| `test_env.py` | Environment variable defaults, `apply_defaults()`, worker config derivation |
-| `test_init.py` | File copy (no-clobber), make-writable, database.php/email.php generation |
+| `test_env.py` | Environment variable defaults, `apply_defaults()`, worker config derivation, derived variables |
+| `test_db.py` | Advisory lock holds one connection until release |
+| `test_config_php.py` | config.php rendering from settings.yaml, PHP escaping and typing |
+| `test_init.py` | File copy (no-clobber), make-writable, database.php/email.php generation, GPG key import, writable check |
 | `test_admin.py` | SQL escape function |
 | `test_sync.py` | Org sync engine: config normalization, merge logic, UUID validation, env expansion, role/org/tag/user/server/taxonomy/warninglist/sharing group apply logic, build rules (pull vs push tag format), allow_external user placement, default_role, disable unmanaged resources, full orchestrator flow |
 
@@ -29,9 +31,9 @@ Run with: `mise run test` or `PYTHONPATH=files python -m pytest tests/ -v`
 
 ## Integration tests
 
-**59 tests** verifying the full MISP stack in Docker Compose.
+**99 tests** verifying the full MISP stack in Compose.
 
-**Stack:** 1 MISP instance (web + caddy + worker + init + MySQL + Redis + Garage S3)
+**Stack:** 1 MISP instance (init + configure + web x2 + caddy + worker + MySQL + Redis + Garage S3)
 
 | Suite | Tests | What it verifies |
 |-------|-------|------------------|
@@ -49,6 +51,7 @@ Run with: `mise run test` or `PYTHONPATH=files python -m pytest tests/ -v`
 | Version-gated defaults | 3 | Defaults version saved, version gate stability, envar precedence |
 | S3 attachment storage | 4 | Garage S3 bootstrap, upload, download, bucket verification |
 | Custom auth | 2 | Header login (200), no-header redirect (302) |
+| Multi-replica web | 6 | configure service ran once, two web replicas serve without configuring |
 | Org sync | 11 | Org/user/tag/server creation, server authkey (DB verify), sync user authkey prefix, taxonomy enable, disabled user, custom warninglist create/update, warm run idempotency |
 
 **Files:**
@@ -101,8 +104,8 @@ GitHub Actions runs all three test suites on every push to master and on PRs:
 2. Integration tests (single instance, ~70s)
 3. Hub-spoke sync tests (3 instances, ~90s)
 
-Trivy scans all three images (misp, caddy, sync) in parallel after tests pass.
+Trivy scans all five images in parallel after tests pass.
 
 ## Environment
 
-All tests require Docker and Docker Compose. Unit tests additionally need Python 3.13 + uv (managed by mise). The `mise.toml` auto-creates a venv on `cd` into the repo.
+All tests require podman with a compose provider (`podman compose`). Set `COMPOSE_CMD` and `CONTAINER_CMD` to use another runner, as CI does with `docker compose` and `docker`. Unit tests additionally need Python 3.13 + uv (managed by mise). The `mise.toml` auto-creates a venv on `cd` into the repo.

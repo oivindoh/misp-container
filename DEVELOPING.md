@@ -7,7 +7,7 @@
 ```bash
 cd misp-container      # mise creates .venv on enter
 mise run test          # unit tests (~0.3s)
-mise run test-integration  # full Docker Compose stack (~90s)
+mise run test-integration  # full Compose stack with podman (~90s)
 mise run test-sync     # hub-spoke 3-instance sync (~60s)
 mise run test-all      # unit + integration
 ```
@@ -16,8 +16,8 @@ mise run test-all      # unit + integration
 
 | Suite | Tests | What it covers |
 |-------|-------|----------------|
-| Unit | 193 | Config engine, init logic, sync engine, metrics exporter |
-| Integration | ~90 | Full Compose stack: HTTP, auth, settings, PHP-FPM, workers, S3, org sync, metrics, modules enrichment |
+| Unit | 211 | Config engine, config.php rendering, advisory lock, init logic, sync engine, metrics exporter |
+| Integration | 99 | Full Compose stack: HTTP, auth, settings, PHP-FPM, workers, S3, org sync, metrics, modules enrichment |
 | Hub-spoke sync | 12 | 3 isolated MISP instances: pull, push, tag-filtered sync |
 
 Integration tests run all containers with `read_only: true` (except web, which needs to patch settings.yaml for version-gate tests) to catch filesystem write issues before they hit Kubernetes.
@@ -114,9 +114,15 @@ The version gate only triggers once per image version. Env vars always take prec
 
 ### Groups
 
-Applied in order: `minimum_config` -> `db_enable` -> `initialisation` -> `critical` -> `optional` -> `gpg` -> `s3` -> `proxy`.
+| Group | Where it lands | Who applies it |
+|-------|----------------|----------------|
+| `minimum_config`, `db_enable` | `app/Config/config.php`, rendered from the YAML value type (bool, int, string) | The init container, in every pod, on every start |
+| `s3` | `config.php` as well, when `PLUGIN_S3_BUCKET_NAME` is set | The init container |
+| all other groups | the `system_settings` table, in order `initialisation` -> `critical` -> `optional` -> `gpg` -> `s3` -> `proxy` | The configure Job |
 
-The `minimum_config` group writes to `config.php` (bootstrap settings like Redis host, Python path). All other groups write to the `system_settings` table.
+MISP never reads `SystemSetting::BLOCKED_SETTINGS` (salt, encryption key, password policy,
+`python_bin`, `ca_path`, `tmpdir`, `attachments_dir`, `system_setting_db` and a few more) from
+the database. Those settings must stay in `minimum_config`.
 
 ### Optional fields
 
@@ -137,12 +143,14 @@ files/
     db.py                   # MySQL queries via pymysql
     env.py                  # Environment variable defaults
     init.py                 # Init container volume population
+    configure.py            # One-shot configuration (configure Job)
     log.py                  # Logging setup
     metrics.py              # Prometheus metrics collection
     sync.py                 # Declarative org/team/server sync engine
   misp-config/
     settings.yaml           # All MISP settings in one file
   entrypoint-init.py        # Init container entrypoint
+  entrypoint-configure.py   # Configure Job entrypoint
   entrypoint-web.py         # PHP-FPM entrypoint
   entrypoint-worker.py      # Worker/scheduler entrypoint
   entrypoint-sync.py        # Org sync entrypoint
@@ -155,10 +163,10 @@ tests/
   test_init.py              # Unit tests for file operations
   test_sync.py              # Unit tests for sync engine
   test_metrics.py           # Unit tests for metrics exporter
-  run-integration-tests.sh  # Dockerized integration test suite
+  run-integration-tests.sh  # Containerised integration test suite
   run-sync-test.sh          # Hub-spoke 3-instance sync tests
 deploy/
-  docker-compose.yml        # Local development stack
+  docker-compose.yml        # Local development stack (podman compose)
   base/                     # Kustomize base
   overlays/                 # Kustomize overlays
 argocd/

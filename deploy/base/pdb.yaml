@@ -1,6 +1,7 @@
-# PodDisruptionBudgets -- prevent all replicas from being evicted during node drains.
+# PodDisruptionBudgets -- limit voluntary disruptions to one pod at a time.
+# maxUnavailable (not minAvailable) so a single-replica deployment never
+# blocks a node drain.
 
-# Web pod: at least 1 must stay available during voluntary disruptions
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
@@ -8,12 +9,11 @@ metadata:
   labels:
     app.kubernetes.io/name: web
 spec:
-  minAvailable: 1
+  maxUnavailable: 1
   selector:
     matchLabels:
       app.kubernetes.io/name: web
 ---
-# Worker: at least 1 must stay available
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
@@ -21,7 +21,7 @@ metadata:
   labels:
     app.kubernetes.io/name: worker
 spec:
-  minAvailable: 1
+  maxUnavailable: 1
   selector:
     matchLabels:
       app.kubernetes.io/name: worker

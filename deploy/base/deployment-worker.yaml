@@ -8,6 +8,9 @@ metadata:
   labels:
     app: worker
     app.kubernetes.io/name: worker
+  annotations:
+    # After the configure Job (wave 1)
+    argocd.argoproj.io/sync-wave: "2"
 spec:
   replicas: 1
   selector:
@@ -46,6 +49,9 @@ spec:
               mountPath: /var/www/MISP/app/tmp
             - name: misp-gnupg
               mountPath: /var/www/MISP/.gnupg
+            - name: gnupg-key
+              mountPath: /etc/misp-docker/gnupg
+              readOnly: true
             - name: init-tmp
               mountPath: /tmp
           resources:
@@ -82,6 +88,8 @@ spec:
               mountPath: /var/www/MISP/app/tmp
             - name: misp-gnupg
               mountPath: /var/www/MISP/.gnupg
+            - name: attachments
+              mountPath: /var/www/MISP/app/attachments
             - name: worker-tmp
               mountPath: /tmp
           resources:
@@ -129,3 +137,10 @@ spec:
         - name: init-tmp
           emptyDir:
             sizeLimit: 500Mi
+        - name: gnupg-key
+          secret:
+            secretName: misp-gnupg
+            optional: true
+        - name: attachments
+          persistentVolumeClaim:
+            claimName: attachments

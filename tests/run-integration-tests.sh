@@ -3,17 +3,23 @@ set -euo pipefail
 
 
 #
-# Dockerized integration test suite for the MISP image.
+# Containerised integration test suite for the MISP image.
 # Runs the full compose stack and verifies each feature.
 #
 # Usage:
 #   ./tests/run-tests.sh          # run all tests
-#   ./tests/run-tests.sh --skip-build  # skip docker compose build
+#   ./tests/run-tests.sh --skip-build  # skip the compose build
 #
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 DEPLOY_DIR="$(cd "$SCRIPT_DIR/../deploy" && pwd)"
-COMPOSE="docker compose -f ${DEPLOY_DIR}/docker-compose.yml -f ${SCRIPT_DIR}/docker-compose.test.yml"
+# COMPOSE_CMD selects the compose runner: podman compose (default) or docker compose (CI)
+COMPOSE="${COMPOSE_CMD:-podman compose} -f ${DEPLOY_DIR}/docker-compose.yml -f ${SCRIPT_DIR}/docker-compose.test.yml"
+# CONTAINER_CMD is the engine behind it: podman (default) or docker (CI)
+ENGINE="${CONTAINER_CMD:-podman}"
+# Host-side scratch files (mounted into the sync container, so the path must be shared with the VM)
+# Physical path: a podman machine on macOS shares /private, not the /tmp symlink
+WORK_DIR="$(cd "${TMPDIR:-/tmp}" && pwd -P)"
 
 PASSED=0
 FAILED=0
@@ -54,6 +60,8 @@ assert_not_contains() {
 }
 
 web_exec() { ${COMPOSE} exec -T web bash -c "$1" 2>/dev/null; }
+# Container IDs of a compose service; both compose runners set this label
+container_ids() { ${ENGINE} ps -q --filter "label=com.docker.compose.project=deploy" --filter "label=com.docker.compose.service=$1" 2>/dev/null; }
 # Run SQL queries via the MySQL container (mariadb-client not in the MISP image)
 mysql_exec() { ${COMPOSE} exec -T mysql mariadb -u misp -pmisp-test-pw -N misp -e "$1" 2>/dev/null; }
 db_query() { mysql_exec "$1" | tr -d '[:space:]'; }
@@ -82,7 +90,7 @@ wait_for_misp() {
 TEST_PORT=18080  # use a non-standard port to avoid conflicts
 
 echo "============================================="
-echo " MISP Docker Integration Tests"
+echo " MISP Container Integration Tests"
 echo "============================================="
 echo ""
 
@@ -91,7 +99,7 @@ ${COMPOSE} down -v 2>/dev/null || true
 
 if [ "${1:-}" != "--skip-build" ]; then
     echo "Building images..."
-    ${COMPOSE} build --quiet 2>&1
+    ${COMPOSE} build 2>&1
 fi
 
 echo "Starting stack (cold start)..."
@@ -151,8 +159,8 @@ assert_eq "web runs as UID 1000" "1000" "$uid"
 uid=$(${COMPOSE} exec -T worker id -u 2>/dev/null | tr -d '[:space:]')
 assert_eq "worker runs as UID 1000" "1000" "$uid"
 
-# Caddy runs on scratch (no shell), verify via docker inspect
-caddy_uid=$(docker inspect $(${COMPOSE} ps -q caddy) --format '{{.Config.User}}' 2>/dev/null | cut -d: -f1 | tr -d '[:space:]')
+# Caddy runs on scratch (no shell), verify via inspect
+caddy_uid=$(${ENGINE} inspect "$(container_ids caddy | head -1)" --format '{{.Config.User}}' 2>/dev/null | cut -d: -f1 | tr -d '[:space:]')
 assert_eq "caddy runs as UID 1000" "1000" "$caddy_uid"
 
 echo ""
@@ -567,7 +575,7 @@ mysql_exec "UPDATE users SET external_auth_required=1, external_auth_key='header
 # MISP creates a session and serves the page (200) instead of redirecting
 # to login (302). We use a fresh cookie jar per request.
 header_code=$(curl -s -o /dev/null -w '%{http_code}' --max-redirs 0 \
-  -c /tmp/misp-header-cookies \
+  -c ${WORK_DIR}/misp-header-cookies \
   -H "X-Forwarded-Email: headeruser@example.com" \
   "http://localhost:${TEST_PORT}/events/index" 2>/dev/null || true)
 assert_eq "custom auth: header login gets 200 (logged in)" "200" "$header_code"
@@ -581,7 +589,7 @@ assert_eq "custom auth: no header gets 302 (login redirect)" "302" "$no_header_c
 ${COMPOSE} exec -T web bash -c '
   /var/www/MISP/app/Console/cake Admin setSetting -q "Plugin.CustomAuth_enable" false
 ' >/dev/null 2>&1
-rm -f /tmp/misp-header-cookies
+rm -f ${WORK_DIR}/misp-header-cookies
 
 # --- Org sync -----------------------------------------------------------------
 
@@ -589,7 +597,7 @@ echo ""
 echo "--- Org sync ---"
 
 # Create a test orgs.yaml with org, users, tags, taxonomies, warninglists, server
-cat > /tmp/test-orgs.yaml <<'ORGSEOF'
+cat > ${WORK_DIR}/test-orgs.yaml <<'ORGSEOF'
 taxonomies:
   - admiralty-scale
   - tlp
@@ -645,7 +653,7 @@ ORGSEOF
 ${COMPOSE} run --rm -T \
     -e ADMIN_KEY="${ADMIN_KEY}" \
     -e SYNC_BASE_URL="http://caddy:8080" \
-    -v /tmp/test-orgs.yaml:/etc/misp-docker/orgs.yaml:ro \
+    -v ${WORK_DIR}/test-orgs.yaml:/etc/misp-docker/orgs.yaml:ro \
     sync 2>&1
 
 # Verify org was created
@@ -747,7 +755,7 @@ else
 fi
 
 # Update the warninglist with a new version and different content
-cat > /tmp/test-orgs-v2.yaml <<'ORGSEOF2'
+cat > ${WORK_DIR}/test-orgs-v2.yaml <<'ORGSEOF2'
 taxonomies:
   - admiralty-scale
   - tlp
@@ -804,7 +812,7 @@ ORGSEOF2
 ${COMPOSE} run --rm -T \
     -e ADMIN_KEY="${ADMIN_KEY}" \
     -e SYNC_BASE_URL="http://caddy:8080" \
-    -v /tmp/test-orgs-v2.yaml:/etc/misp-docker/orgs.yaml:ro \
+    -v ${WORK_DIR}/test-orgs-v2.yaml:/etc/misp-docker/orgs.yaml:ro \
     sync 2>&1
 
 # Verify warninglist was updated to version 2 (query DB directly)
@@ -816,9 +824,9 @@ assert_eq "sync: custom warninglist updated to v2" "2" "$sync_wl_v2_version"
 ${COMPOSE} run --rm -T \
     -e ADMIN_KEY="${ADMIN_KEY}" \
     -e SYNC_BASE_URL="http://caddy:8080" \
-    -v /tmp/test-orgs-v2.yaml:/etc/misp-docker/orgs.yaml:ro \
-    sync 2>&1 | tee /tmp/warm-sync-output.txt || true
-warm_sync_output=$(cat /tmp/warm-sync-output.txt)
+    -v ${WORK_DIR}/test-orgs-v2.yaml:/etc/misp-docker/orgs.yaml:ro \
+    sync 2>&1 | tee ${WORK_DIR}/warm-sync-output.txt || true
+warm_sync_output=$(cat ${WORK_DIR}/warm-sync-output.txt)
 # Check warm run did not create or update anything
 warm_created=$(echo "$warm_sync_output" | /usr/bin/grep -o "'created': [0-9]*" | /usr/bin/grep -v "'created': 0" || true)
 warm_updated=$(echo "$warm_sync_output" | /usr/bin/grep -o "'updated': [0-9]*" | /usr/bin/grep -v "'updated': 0" || true)
@@ -828,7 +836,7 @@ else
     fail "sync: warm run creates/updates nothing (${warm_created} ${warm_updated})"
 fi
 
-rm -f /tmp/test-orgs.yaml /tmp/test-orgs-v2.yaml
+rm -f ${WORK_DIR}/test-orgs.yaml ${WORK_DIR}/test-orgs-v2.yaml
 
 
 # ============================================================================
@@ -992,6 +1000,36 @@ with urllib.request.urlopen(req, timeout=10) as resp:
         fail "modules: web->modules enrichment returned no results"
     fi
 fi
+
+
+# --- Multi-replica web ------------------------------------------------------
+
+echo ""
+echo "--- Multi-replica web ---"
+
+# The configure service owns schema and settings; web replicas only wait for MISP.live.
+configure_logs=$(${COMPOSE} logs configure 2>/dev/null || true)
+assert_contains "configure: ran configuration" "$configure_logs" "configuration complete"
+assert_contains "configure: set MISP.live" "$configure_logs" "setting MISP.live = true"
+
+${COMPOSE} up -d --no-deps --no-recreate --scale web=2 web >/dev/null 2>&1
+# Read each replica's log through the engine; compose log output differs between runners
+web_logs_all() { for id in $(container_ids web); do ${ENGINE} logs "$id" 2>&1; done; }
+retries=30
+until [ "$(web_logs_all | grep -c 'starting PHP-FPM' || true)" -ge 2 ] || [ $retries -le 0 ]; do
+    sleep 2; retries=$((retries - 1))
+done
+web_logs=$(web_logs_all || true)
+fpm_starts=$(echo "$web_logs" | grep -c 'starting PHP-FPM' || true)
+assert_eq "web: two replicas started PHP-FPM" "2" "$fpm_starts"
+assert_not_contains "web: replicas do not run configuration" "$web_logs" "configuration complete"
+web_count=$(container_ids web | wc -l | tr -d ' ')
+assert_eq "web: two containers running" "2" "$web_count"
+login_status=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:${TEST_PORT}/users/login" || true)
+assert_eq "web: login page served with two replicas" "200" "$login_status"
+# Scale back to one replica so the compose teardown sees only containers it created
+extra_web=$(container_ids web | tail -n +2)
+[ -n "$extra_web" ] && ${ENGINE} rm -f $extra_web >/dev/null 2>&1 || true
 
 
 # --- Settings coverage ------------------------------------------------------

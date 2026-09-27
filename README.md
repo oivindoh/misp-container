@@ -1,6 +1,6 @@
 # MISP Container
 
-A modern Docker image for [MISP](https://www.misp-project.org/) 2.5, designed for Kubernetes but also usable with Docker Compose.
+A container image for [MISP](https://www.misp-project.org/) 2.5, designed for Kubernetes but also usable with Compose (podman).
 
 ## Goals
 
@@ -26,8 +26,8 @@ Built from a single Dockerfile with multiple targets:
 
 ```bash
 cd deploy
-docker compose build
-docker compose up -d
+podman compose build
+podman compose up -d
 open http://localhost:8080
 ```
 
@@ -36,7 +36,12 @@ Default login: `admin@admin.test` / `ChangeMe-Str0ng!Pass#2026`
 ## Architecture
 
 ```
-  web Pod                           worker Deployment (scalable)
+  configure Job (runs first, once per rollout)
++---------------------------------------------------------------+
+| init -> schema, settings, admin, GPG, auth -> MISP.live=true   |
++---------------------------------------------------------------+
+
+  web Pod (scalable)                worker Deployment (scalable)
 +----------------------------+     +----------------------------+
 | init -> caddy + php-fpm    |     | init -> supervisord        |
 |        :8080    :9002      |     |   default, prio, email,    |
@@ -50,12 +55,13 @@ Default login: `admin@admin.test` / `ChangeMe-Str0ng!Pass#2026`
     +---------+          +--------++----------------------------+
 ```
 
-The `misp` image serves four roles (same image, different entrypoint):
+The `misp` image serves five roles (same image, different entrypoint):
 
 | Role | Entrypoint | Description |
 |------|------------|-------------|
-| **init** | `entrypoint-init.py` | One-shot: extracts files into volumes, generates config. Runs before web/worker. |
-| **web** | `entrypoint-web.py` | PHP-FPM on port 9002. Runs configuration with advisory lock, sets `MISP.live=true`. |
+| **init** | `entrypoint-init.py` | Init container in every pod: extracts files into volumes, renders config, imports the GPG key. |
+| **configure** | `entrypoint-configure.py` | One-shot Job per rollout: schema migrations, settings, admin user, GPG, auth. Sets `MISP.live=true` last. |
+| **web** | `entrypoint-web.py` | PHP-FPM on port 9002. Waits for `MISP.live=true`, then serves. Safe to scale. |
 | **worker** | `entrypoint-worker.py` | Background job workers via supervisord. Waits for `MISP.live=true`, then processes jobs. Safe to scale. |
 | **scheduler** | `entrypoint-worker.py` | Runs only the MISP `scheduler_worker`. Must be a single replica. |
 
@@ -64,7 +70,7 @@ Additional containers: **caddy** (reverse proxy), **sync** (declarative org conf
 ### Scaling
 
 - **Workers**: freely scalable. Redis `BRPOP` delivers each job to exactly one worker.
-- **Web**: safely scalable. Configuration uses a MySQL advisory lock.
+- **Web**: freely scalable. Web pods never run configuration; the configure Job does, under a MySQL advisory lock.
 - **Scheduler**: must remain at 1 replica.
 
 ---
@@ -86,14 +92,17 @@ See `deploy/base/base.env` for the container-level defaults and `deploy/base/sec
 
 ### Startup behaviour
 
-1. Acquires MySQL advisory lock (prevents races between replicas)
+The configure step runs once per rollout: a Job in Kubernetes, a one-shot service in Compose.
+
+1. Acquires the MySQL advisory lock (a concurrent org sync waits)
 2. Runs DB schema migrations and performance indexes
 3. Loads all current settings from DB in one pass
 4. Compares desired state against actual, only calls `cake` when different
 5. Sets up admin user, GPG, auth
 6. Sets `MISP.live=true`
 
-Warm restarts (nothing changed) take ~1 second.
+Web and worker pods wait for `MISP.live=true`, then start PHP-FPM or supervisord. They never
+touch the schema or the settings, so they start in seconds and scale freely.
 
 ### Essential variables
 
@@ -110,7 +119,9 @@ python3 -c "import secrets; print(secrets.token_hex(32))"  # generate salt
 python3 -c "import uuid; print(uuid.uuid4())"              # generate UUID
 ```
 
-Database and Redis connection details are in `deploy/base/base.env`.
+Database and Redis connection details are in `deploy/base/base.env`. `MISP_REDIS_*` also fills the
+background-job and ZeroMQ Redis settings, and `MISP_BASEURL` fills the external and REST client base URLs,
+unless those are set explicitly.
 
 ### HTTPS
 
@@ -169,14 +180,30 @@ Features: idempotent, environment variable expansion in authkeys/URLs, role mana
 | `ADMIN_KEY` | Admin API key (required) |
 | `SYNC_BASE_URL` | MISP URL the sync container connects to |
 
+### GPG key
+
+MISP signs notification email with an instance GPG key. Every replica must hold the same
+key, so the key is supplied, not generated:
+
+```bash
+gpg --batch --passphrase "$GNUPG_PASSWORD" --quick-generate-key "MISP Admin <misp@example.com>" rsa3072 sign never
+gpg --armor --export-secret-keys misp@example.com > private.asc
+kubectl -n misp create secret generic misp-gnupg --from-file=private.asc
+```
+
+The init container imports `private.asc` from the optional Secret `misp-gnupg` into every
+pod. `GNUPG_PASSWORD` must match the key passphrase. Set `GNUPG_SIGN=true` once the key is
+in place. Compose sets `AUTOCONF_GPG=true` instead, which generates a key in the
+`misp-gnupg` volume on first start.
+
 ### Custom scripts
 
 Two hook points for custom Python during startup:
 
-| Script | When |
-|--------|------|
-| `/custom/setup.py` | After DB ready, before configuration |
-| `/custom/pre-start.py` | After configuration, before PHP-FPM starts |
+| Script | Where | When |
+|--------|-------|------|
+| `/custom/setup.py` | configure | After DB ready, before configuration |
+| `/custom/pre-start.py` | web | In every web replica, before PHP-FPM starts |
 
 Mount via volume. Optional -- silently skipped if absent.
 
@@ -189,6 +216,14 @@ deploy/
   base/                 # Kustomize base (all resources)
   overlays/
     prod/               # Production overlay (KSOPS secrets example)
+```
+
+The `configure` Job carries Argo CD sync annotations: it runs in sync wave 1 and the
+Deployments in wave 2, and Argo CD recreates it on every sync. With plain `kubectl apply`,
+delete a finished Job before applying a changed spec:
+
+```bash
+kubectl delete job configure
 ```
 
 Use as a Kustomize base and override per environment:
@@ -205,10 +240,21 @@ configMapGenerator:
       - ADMIN_EMAIL=admin@example.com
 ```
 
-Secrets are `.env` files consumable by both Kustomize and Docker Compose. Encrypt with SOPS for production:
+Secrets are `.env` files consumable by both Kustomize and Compose. Encrypt with SOPS for production:
 ```bash
 sops -e -i deploy/base/secrets.env
 ```
+
+### Storage
+
+| Resource | Base default | Notes |
+|----------|--------------|-------|
+| MariaDB | StatefulSet, 20Gi ReadWriteOnce PVC | Patch the size or storage class in the overlay |
+| Attachments | PVC `attachments`, 20Gi ReadWriteMany | Web and worker pods share it. Use S3 instead by setting `PLUGIN_S3_BUCKET_NAME` and removing the claim |
+| Redis | No persistence | Sessions and queued jobs are lost when Redis restarts |
+
+The web and worker entrypoints refuse to start when the attachments directory is not
+writable and S3 is not configured.
 
 ### Network policies
 
@@ -228,8 +274,8 @@ See [docs/metrics.md](docs/metrics.md) for the full metrics reference and exampl
 
 | Backend | When |
 |---------|------|
-| **Local volume** | Docker Compose (default). Named volume `misp-attachments`. |
-| **S3** | Kubernetes (recommended). Set `PLUGIN_S3_BUCKET_NAME` and endpoint/credentials. |
+| **Local volume** | Compose: named volume `misp-attachments`. Kubernetes: PVC `attachments` (ReadWriteMany). |
+| **S3** | Set `PLUGIN_S3_BUCKET_NAME` and endpoint/credentials. In Kubernetes, remove the `attachments` claim in the overlay. |
 
 ---
 

@@ -26,7 +26,7 @@ This guide covers migrating from an existing MISP installation (official misp-do
 
 ## Prerequisites
 
-- Docker and Docker Compose installed
+- podman with a compose provider
 - Access to the existing MISP database (mysqldump)
 - Access to the existing MISP file system (for attachments and GPG keys)
 
@@ -101,12 +101,12 @@ BASE_URL=https://your-misp.example.com
 Start MySQL and Redis without MISP (so we can import the dump before MISP touches the DB):
 
 ```bash
-docker compose up -d misp-mysql misp-redis
+podman compose up -d misp-mysql misp-redis
 ```
 
 Wait for MySQL to be healthy:
 ```bash
-docker compose exec misp-mysql mariadb -u root -p<root-password> -e "SELECT 1"
+podman compose exec misp-mysql mariadb -u root -p<root-password> -e "SELECT 1"
 ```
 
 ## Step 4: Import the database
@@ -114,21 +114,21 @@ docker compose exec misp-mysql mariadb -u root -p<root-password> -e "SELECT 1"
 If you used `mysqldump`:
 ```bash
 # Create the database if it doesn't exist
-docker compose exec -T misp-mysql mariadb -u root -p<root-password> \
+podman compose exec -T misp-mysql mariadb -u root -p<root-password> \
     -e "CREATE DATABASE IF NOT EXISTS misp CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
 
 # Import the dump
-docker compose exec -T misp-mysql mariadb -u root -p<root-password> \
+podman compose exec -T misp-mysql mariadb -u root -p<root-password> \
     --default-character-set=utf8mb4 misp < misp-backup.sql
 ```
 
 If you used `mariadb-backup`:
 ```bash
 # Stop the database, prepare and restore
-docker compose stop misp-mysql
-docker compose exec -T misp-mysql mbstream -x -C /var/lib/mysql < misp-backup.mbstream
-docker compose exec -T misp-mysql mariadb-backup --prepare --target-dir=/var/lib/mysql
-docker compose start misp-mysql
+podman compose stop misp-mysql
+podman compose exec -T misp-mysql mbstream -x -C /var/lib/mysql < misp-backup.mbstream
+podman compose exec -T misp-mysql mariadb-backup --prepare --target-dir=/var/lib/mysql
+podman compose start misp-mysql
 ```
 
 ### Version check
@@ -139,7 +139,7 @@ If migrating from a different MISP 2.5.x version, schema updates also run automa
 
 ## Step 5: Restore files
 
-### Attachments (Docker Compose only -- for Kubernetes, use S3)
+### Attachments (Compose only -- for Kubernetes, use the PVC or S3)
 
 This image stores attachments in `app/attachments/` (a dedicated volume), separate from `app/files/` which holds MISP distribution files managed by the init container. This prevents image upgrades from overwriting your uploaded data.
 
@@ -149,8 +149,8 @@ mkdir -p /tmp/misp-restore
 tar xzf misp-files.tar.gz -C /tmp/misp-restore
 
 # Start init container to create volumes, then copy files in
-docker compose up init
-docker compose cp /tmp/misp-restore/files/. web:/var/www/MISP/app/attachments/
+podman compose up init
+podman compose cp /tmp/misp-restore/files/. web:/var/www/MISP/app/attachments/
 ```
 
 For Kubernetes deployments, S3 is the only supported attachment backend. See [Migrating to S3 storage](#migrating-to-s3-storage) below.
@@ -159,13 +159,13 @@ For Kubernetes deployments, S3 is the only supported attachment backend. See [Mi
 
 ```bash
 tar xzf misp-gnupg.tar.gz -C /tmp/misp-restore
-docker compose cp /tmp/misp-restore/.gnupg/. web:/var/www/MISP/.gnupg/
+podman compose cp /tmp/misp-restore/.gnupg/. web:/var/www/MISP/.gnupg/
 ```
 
 ## Step 6: Start the full stack
 
 ```bash
-docker compose up -d
+podman compose up -d
 ```
 
 MISP will:
@@ -177,7 +177,7 @@ MISP will:
 
 ```bash
 # Check logs
-docker compose logs web --tail=20
+podman compose logs web --tail=20
 
 # Verify web UI
 open http://localhost:8080
@@ -207,7 +207,7 @@ UUID=<value-from-old-instance>
 
 **Password doesn't work** -- The admin password from `ADMIN_PASSWORD` env var is only set on first run (when the user doesn't exist). If the user already exists in the imported DB, the env var is ignored. Use the password from your old instance.
 
-**Workers not processing** -- Check that `SUPERVISOR_HOST` is set correctly. In Docker Compose it should be `worker` (the service name). In Kubernetes it's `127.0.0.1` (sidecar).
+**Workers not processing** -- Check that `SUPERVISOR_HOST` is set correctly. In Compose it should be `worker` (the service name). In Kubernetes it's `127.0.0.1` (sidecar).
 
 ## Migrating to S3 storage
 
@@ -224,7 +224,7 @@ If your old instance uses local file storage and you want to switch to S3:
    ```
 4. Migrate existing attachments to S3 using the MISP admin tool:
    ```bash
-   docker compose exec web /var/www/MISP/app/Console/cake Admin migrateToS3
+   podman compose exec web /var/www/MISP/app/Console/cake Admin migrateToS3
    ```
 
 ## Migrating from official misp-docker
