@@ -1,8 +1,8 @@
 # Testing
 
-Three test suites verify the MISP container image at different levels.
+## TL;DR
 
-## Quick reference
+Three suites: unit tests on the Python library, an integration suite on one Compose stack, and a hub-spoke sync suite on three instances.
 
 ```bash
 mise run test                # unit tests (~0.2s)
@@ -100,12 +100,16 @@ Run with: `mise run test-sync`
 
 ## CI
 
-GitHub Actions runs all three test suites on every push to master and on PRs:
-1. Unit tests
-2. Integration tests (single instance, ~70s)
-3. Hub-spoke sync tests (3 instances, ~90s)
+GitHub Actions on every push to master and every PR:
 
-Trivy scans all three images in parallel after tests pass.
+| Job | Runs |
+|-----|------|
+| `build` | The three images into the layer cache |
+| `unit` | The unit tests |
+| `integration` | This suite, against the images from `build` (`MISP_IMAGE_TAG=ci`) |
+| `hub-spoke` | The sync suite, in parallel with `integration` |
+| `scan` | Trivy on the three images |
+| `release` | On a tag: push the images and create the GitHub Release, after every other job |
 
 ## Environment
 

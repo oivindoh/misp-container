@@ -1,5 +1,15 @@
 # Developing
 
+## TL;DR
+
+- `mise run test` for the unit tests, `mise run test-integration` for the Compose suite,
+  `mise run test-sync` for the three-instance sync suite. Podman runs the containers.
+- Settings: curated defaults in `files/misp-config/settings.yaml`, the generated catalogue in
+  `settings-upstream.yaml` (`mise run settings-update`).
+- New MISP release: the tracking workflow opens a PR with the bump, `files/composer.lock` and
+  the catalogue; CI's strict checks tell you what changed.
+- Release: `mise run release [vX.Y.Z]`, then push master and the tag.
+
 ## Setup
 
 [mise](https://mise.jdx.dev/) manages Python, uv, and the virtualenv automatically:
@@ -9,7 +19,7 @@ cd misp-container      # mise creates .venv on enter
 mise run test          # unit tests (~0.3s)
 mise run test-integration  # full Compose stack with podman (~90s)
 mise run test-sync     # hub-spoke 3-instance sync (~60s)
-mise run test-all      # unit + integration
+mise run test-all      # unit + integration + sync
 ```
 
 ## Tests
@@ -20,7 +30,7 @@ mise run test-all      # unit + integration
 | Integration | 104 | Full Compose stack: HTTP, auth, settings, PHP-FPM, workers, S3, org sync, metrics, modules enrichment |
 | Hub-spoke sync | 12 | 3 isolated MISP instances: pull, push, tag-filtered sync |
 
-Integration tests run all containers with `read_only: true` (except web, which needs to patch settings.yaml for version-gate tests) to catch filesystem write issues before they hit Kubernetes.
+The integration suite runs every container with `read_only: true` (except web, whose version-gate checks patch `settings.yaml` in place) to catch filesystem writes before Kubernetes does, and prints the wall time of each section. Set `COMPOSE_CMD` and `CONTAINER_CMD` for another runner; CI uses `docker compose` and `docker`.
 
 ## New MISP releases
 
@@ -55,7 +65,7 @@ The task:
 2. Optionally updates it if a new upstream tag is provided
 3. Checks origin for existing release tags
 4. Computes the next tag (`v2.5.38` or `v2.5.37-rN+1`)
-5. Updates image tags in `deploy/base/kustomization.yaml`
+5. Updates the image tags in `deploy/base/kustomization.yaml`, the components that pin the image, the Compose files (`MISP_IMAGE_TAG` default) and, if present, the `?ref=` pins of the local ArgoCD overlay (not committed)
 6. Shows the diff and asks for confirmation
 7. Commits and creates the git tag
 
@@ -79,7 +89,7 @@ CI runs tests, scans, pushes images, and creates a GitHub Release with:
 
 ## Settings Engine
 
-All MISP settings are defined in `files/misp-config/settings.yaml`. Each setting has a group, type, and value.
+`files/misp-config/settings.yaml` holds the defaults this image applies; each setting has a group and a value.
 
 ### Adding a setting
 
@@ -172,29 +182,30 @@ files/
     log.py                  # Logging setup
     metrics.py              # Prometheus metrics collection
     sync.py                 # Declarative org/team/server sync engine
+    task.py                 # Periodic task runner (cronjobs component)
   misp-config/
     settings.yaml           # Curated defaults this image applies
     settings-upstream.yaml  # Generated catalogue of every other MISP setting (track_only)
-scripts/
-  update-settings.sh        # Regenerates the catalogue from a live stack
-  update_settings.py        # The catalogue tool (--check in the integration suite)
-  update-composer-lock.sh   # Resolves files/composer.lock through the composer-lock stage
   entrypoint-configure.py   # Configure Job entrypoint
   entrypoint-web.py         # PHP-FPM entrypoint
   entrypoint-worker.py      # Worker/scheduler entrypoint
   entrypoint-sync.py        # Org sync entrypoint (org-sync Job)
   entrypoint-metrics.py     # Prometheus metrics HTTP server (metrics Deployment)
   Caddyfile                 # Caddy configuration
+  php.ini.template, php-fpm-pool.conf.template
   requirements-*.txt        # Pinned Python dependencies (final, modules)
   composer.lock             # Resolved PHP dependencies for the current CORE_TAG (generated)
+scripts/
+  release.sh                # mise run release
+  update-settings.sh        # Regenerates the catalogue from a live stack
+  update_settings.py        # The catalogue tool (--check in the integration suite)
+  update-composer-lock.sh   # Resolves files/composer.lock through the composer-lock stage
 tests/
-  test_config.py            # Unit tests for settings engine
-  test_env.py               # Unit tests for env handling
-  test_init.py              # Unit tests for file operations
-  test_sync.py              # Unit tests for sync engine
-  test_metrics.py           # Unit tests for metrics exporter
+  test_*.py                 # Unit tests (see tests/README.md)
   run-integration-tests.sh  # Containerised integration test suite
   run-sync-test.sh          # Hub-spoke 3-instance sync tests
+  docker-compose.test.yml   # Test overlay on deploy/docker-compose.yml
+  docker-compose.sync-test.yml
 deploy/
   docker-compose.yml        # Local development stack (podman compose)
   base/                     # Kustomize base (MISP itself)

@@ -2,6 +2,17 @@
 
 This guide covers migrating from an existing MISP installation (official misp-docker, bare-metal, or VM) to this container image.
 
+## TL;DR
+
+1. Dump the old database (`mysqldump --single-transaction --hex-blob`), copy `app/files`
+   attachments and, if you keep it, `.gnupg`.
+2. Put the old instance's `Security.salt`, `Security.encryption_key` and `MISP.uuid` into the
+   new secrets and config: without them every password, authkey and sync relationship breaks.
+3. Start only the database, import the dump, copy the files in, then start the stack. The
+   configure step runs `cake Admin runUpdates` for the schema gap.
+4. In Kubernetes, the same order: the `mariadb` component first, restore into it, files onto the
+   `attachments` claim (or S3), then the first sync.
+
 ## What migrates
 
 | Data | How | Notes |
@@ -12,7 +23,7 @@ This guide covers migrating from an existing MISP installation (official misp-do
 | Tags, taxonomies, galaxies | MySQL dump/restore | Custom tags preserved |
 | Warninglists | MySQL dump/restore | Custom warninglists preserved |
 | Sharing groups | MySQL dump/restore | Membership preserved |
-| File attachments | Copy to `app/attachments/` | Or migrate to S3 (required for K8s) |
+| File attachments | Copy to `app/attachments/` (Compose volume or the Kubernetes `attachments` claim) | Or migrate to S3 |
 | GPG keys | Copy `.gnupg/` | Or generate new |
 | MISP settings | MySQL dump/restore | Stored in `system_settings` table |
 
@@ -155,7 +166,7 @@ podman compose create web
 podman compose cp /tmp/misp-restore/files/. web:/var/www/MISP/app/attachments/
 ```
 
-For Kubernetes deployments, S3 is the only supported attachment backend. See [Migrating to S3 storage](#migrating-to-s3-storage) below.
+In Kubernetes, copy the files onto the `attachments` claim (a temporary pod with the claim mounted and `kubectl cp`), or use S3: see [Migrating to S3 storage](#migrating-to-s3-storage) below.
 
 ### GPG keys (optional)
 
@@ -172,7 +183,7 @@ podman compose up -d
 
 MISP will:
 1. Run schema migrations if needed (`cake Admin runUpdates`)
-2. Apply settings from env vars (won't overwrite existing DB settings unless they're `type: envar`)
+2. Apply settings: env-driven settings are enforced, defaults from `settings.yaml` are written only where the setting is missing
 3. Start PHP-FPM and background workers
 
 ## Step 7: Verify

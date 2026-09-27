@@ -1,6 +1,11 @@
 # Prometheus Metrics
 
-The metrics container (`entrypoint-metrics.py` in the main image) exposes operational metrics in Prometheus exposition format on port 9191.
+## TL;DR
+
+The metrics Deployment (`entrypoint-metrics.py` in the main image) exposes Prometheus metrics
+on port 9191 from the database and from probes of the configured sync servers: instance
+health, content counts, server sync state and certificate expiry, job queues, org sync runs.
+Scrape `/metrics`; `/healthz` and `/ready` answer 200.
 
 ## Endpoints
 
