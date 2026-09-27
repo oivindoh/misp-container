@@ -818,3 +818,163 @@ settings:
     LinOTPAuth.verifyssl:
       description: "Set to false to skip SSL/TLS verify"
       value: true
+
+  # -- oidc: OidcAuth plugin, rendered into config.php when OIDC_ENABLE=true ---
+  # The documented OIDC_* names map onto these (env.py ALIASES). role_mapper and
+  # scopes take JSON in env; scopes also takes a comma-separated list.
+  oidc:
+    Security.auth:
+      description: "Authentication plugins MISP loads; each enabled auth group adds its own"
+      value: ["OidcAuth.Oidc"]
+    OidcAuth.provider_url:
+      value: ""
+      blank_protection: true
+    OidcAuth.issuer:
+      description: "Defaults to provider_url when unset"
+      value: ""
+      blank_protection: true
+    OidcAuth.client_id:
+      value: ""
+      blank_protection: true
+    OidcAuth.client_secret:
+      value: ""
+      sensitive: true
+      blank_protection: true
+    OidcAuth.role_mapper:
+      description: "IdP role (value of roles_property) to MISP role id or name; first match wins"
+      value: {}
+    OidcAuth.default_org:
+      description: "Organisation id, UUID or name for users the IdP gives no organisation"
+      value: ""
+      blank_protection: true
+    OidcAuth.scopes:
+      value: ["profile", "email"]
+    OidcAuth.roles_property:
+      value: roles
+    OidcAuth.roles_delimiter:
+      value: ","
+    OidcAuth.organisation_property:
+      value: organization
+    OidcAuth.organisation_uuid_property:
+      value: organization_uuid
+    OidcAuth.authentication_method:
+      value: client_secret_post
+    OidcAuth.code_challenge_method:
+      value: S256
+    OidcAuth.disable_request_object:
+      value: false
+    OidcAuth.disable_pushed_authorization_request:
+      value: false
+    OidcAuth.mixedAuth:
+      description: "true keeps the password form and adds a login button; false redirects every login to the IdP"
+      value: false
+    OidcAuth.unblock:
+      value: false
+    OidcAuth.skipProxy:
+      value: true
+    OidcAuth.offline_access:
+      value: false
+    OidcAuth.check_user_validity:
+      value: 0
+    OidcAuth.update_user_role:
+      value: true
+    OidcAuth.allow_email_linking:
+      value: false
+    OidcAuth.require_email_verified:
+      value: true
+    OidcAuth.login_button_text:
+      value: "Login with OIDC"
+
+  # -- ldap: LdapAuth plugin, rendered into config.php when LDAPAUTH_ENABLE=true
+  ldap:
+    Security.auth:
+      value: ["LdapAuth.Ldap"]
+    LdapAuth.ldapServer:
+      value: ""
+      blank_protection: true
+    LdapAuth.ldapDn:
+      value: ""
+      blank_protection: true
+    LdapAuth.ldapReaderUser:
+      value: ""
+      blank_protection: true
+    LdapAuth.ldapReaderPassword:
+      value: ""
+      sensitive: true
+      blank_protection: true
+    LdapAuth.ldapSearchFilter:
+      value: ""
+      blank_protection: true
+    LdapAuth.ldapSearchAttribute:
+      value: mail
+    LdapAuth.ldapEmailField:
+      value: mail
+    LdapAuth.ldapDefaultOrgId:
+      value: ""
+      blank_protection: true
+    LdapAuth.ldapDefaultRoleId:
+      value: ""
+      blank_protection: true
+    LdapAuth.ldapRoleField:
+      value: ""
+      blank_protection: true
+    LdapAuth.ldapOrgField:
+      value: ""
+      blank_protection: true
+    LdapAuth.ldapOrgGroupMapping:
+      value: {}
+    LdapAuth.ldapProtocol:
+      value: 3
+    LdapAuth.ldapNetworkTimeout:
+      value: 5
+    LdapAuth.ldapAllowReferrals:
+      value: false
+    LdapAuth.ldapNestedGroups:
+      value: false
+    LdapAuth.ldapCheckUserAccountControl:
+      value: false
+    LdapAuth.ldapEscape:
+      value: true
+    LdapAuth.ldapHeaderAuth:
+      value: false
+    LdapAuth.ldapHeaderAuthHeader:
+      value: ""
+      blank_protection: true
+    LdapAuth.ldapHeaderAuthTrustedProxies:
+      value: []
+    LdapAuth.debug:
+      value: false
+
+  # -- apache_auth: ApacheSecureAuth (header auth with LDAP lookup), rendered into
+  # config.php when APACHESECUREAUTH_LDAP_ENABLE=true
+  apache_auth:
+    ApacheSecureAuth.apacheEnv:
+      value: REMOTE_USER
+    ApacheSecureAuth.ldapServer:
+      value: ""
+      blank_protection: true
+    ApacheSecureAuth.ldapReaderUser:
+      value: ""
+      blank_protection: true
+    ApacheSecureAuth.ldapReaderPassword:
+      value: ""
+      sensitive: true
+      blank_protection: true
+    ApacheSecureAuth.ldapDN:
+      value: ""
+      blank_protection: true
+    ApacheSecureAuth.ldapSearchAttribute:
+      value: uid
+    ApacheSecureAuth.ldapFilter:
+      value: ""
+      blank_protection: true
+    ApacheSecureAuth.ldapDefaultRoleId:
+      value: ""
+      blank_protection: true
+    ApacheSecureAuth.ldapDefaultOrg:
+      value: ""
+      blank_protection: true
+    ApacheSecureAuth.ldapEmailField:
+      value: mail
+    ApacheSecureAuth.starttls:
+      value: false

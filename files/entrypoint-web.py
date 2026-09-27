@@ -84,7 +84,7 @@ configure_php()
 if not env("PLUGIN_S3_BUCKET_NAME"):
     check_writable(env("MISP_ATTACHMENTS_DIR"), "attachments")
 
-db.wait_for_mysql()
+db.wait_for_db()
 db.wait_for_live()
 
 redirect_logs()

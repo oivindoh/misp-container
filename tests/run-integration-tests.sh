@@ -9,12 +9,27 @@ set -euo pipefail
 # Usage:
 #   ./tests/run-tests.sh          # run all tests
 #   ./tests/run-tests.sh --skip-build  # skip the compose build
+#   ./tests/run-tests.sh --postgres    # the same suite on PostgreSQL
 #
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 DEPLOY_DIR="$(cd "$SCRIPT_DIR/../deploy" && pwd)"
 # COMPOSE_CMD selects the compose runner: podman compose (default) or docker compose (CI)
 COMPOSE="${COMPOSE_CMD:-podman compose} -f ${DEPLOY_DIR}/docker-compose.yml -f ${SCRIPT_DIR}/docker-compose.test.yml"
+SKIP_BUILD=0
+DB_ENGINE_UNDER_TEST=mysql
+for arg in "$@"; do
+    case "$arg" in
+        --skip-build) SKIP_BUILD=1 ;;
+        --postgres) DB_ENGINE_UNDER_TEST=postgres ;;
+        *) echo "unknown argument: $arg" >&2; exit 2 ;;
+    esac
+done
+if [ "$DB_ENGINE_UNDER_TEST" = "postgres" ]; then
+    # The postgres service sits behind a compose profile; the overlay points every
+    # MISP container at it through tests/postgres.env
+    COMPOSE="${COMPOSE} -f ${SCRIPT_DIR}/docker-compose.postgres.yml --profile postgres"
+fi
 # CONTAINER_CMD is the engine behind it: podman (default) or docker (CI)
 ENGINE="${CONTAINER_CMD:-podman}"
 # Host-side scratch files (mounted into the sync container, so the path must be shared with the VM)
@@ -78,8 +93,18 @@ web_exec() { ${COMPOSE} exec -T web bash -c "$1" 2>/dev/null; }
 # Container IDs of a compose service; both compose runners set this label
 container_ids() { ${ENGINE} ps -q --filter "label=com.docker.compose.project=deploy" --filter "label=com.docker.compose.service=$1" 2>/dev/null; }
 # Run SQL queries via the MySQL container (mariadb-client not in the MISP image)
-mysql_exec() { ${COMPOSE} exec -T mysql mariadb -u misp -pmisp-test-pw -N misp -e "$1" 2>/dev/null; }
+# SQL through the image's own engine-neutral layer (MariaDB or PostgreSQL)
+mysql_exec() {
+    SQL="$1" ${COMPOSE} exec -T -e SQL web python3 -c '
+import os, sys; sys.path.insert(0, "/opt")
+from misp_container.env import apply_defaults
+from misp_container import db
+apply_defaults()
+print(db.query(os.environ["SQL"]))' 2>/dev/null
+}
 db_query() { mysql_exec "$1" | tr -d '[:space:]'; }
+sql_true() { [ "${DB_ENGINE_UNDER_TEST}" = "postgres" ] && echo TRUE || echo 1; }
+sql_now_epoch() { [ "${DB_ENGINE_UNDER_TEST}" = "postgres" ] && echo "EXTRACT(EPOCH FROM NOW())::bigint" || echo "UNIX_TIMESTAMP()"; }
 api_get() {
     local key="$1" path="$2"
     curl -s -H "Authorization: ${key}" -H "Accept: application/json" "http://localhost:${TEST_PORT}${path}" 2>/dev/null || echo '{}'
@@ -113,7 +138,7 @@ echo ""
 # Clean up any previous test run
 ${COMPOSE} down -v 2>/dev/null || true
 
-if [ "${1:-}" != "--skip-build" ]; then
+if [ "$SKIP_BUILD" -eq 0 ]; then
     echo "Building images..."
     ${COMPOSE} build 2>&1
 fi
@@ -231,7 +256,7 @@ assert_contains "settings stored in DB" "$db_settings_count" "[0-9]"
 
 # Env-var-enforced settings (envars.json) should be written to the DB
 baseurl=$(db_query "SELECT value FROM system_settings WHERE setting='MISP.baseurl';")
-assert_eq "BASE_URL stored in DB" "\"http://localhost:${TEST_PORT}\"" "$baseurl"
+assert_eq "BASE_URL stored in DB" "\"http://caddy:8080\"" "$baseurl"
 
 section "Workers"
 
@@ -340,9 +365,9 @@ assert_contains "taxonomies directory populated" "$taxonomies" ""
 bootstrap=$(web_exec "cat /var/www/MISP/app/Config/bootstrap.php 2>/dev/null | grep 'Detect what auth modules'")
 assert_contains "bootstrap.php has auth plugin patch" "$bootstrap" "Detect what auth modules"
 
-# database.php should be generated from env vars with the correct MySQL host
+# database.php is generated from env vars with the host of the engine under test
 db_php=$(web_exec "cat /var/www/MISP/app/Config/database.php 2>/dev/null | grep 'host'")
-assert_contains "database.php has correct host" "$db_php" "mysql"
+assert_contains "database.php has correct host" "$db_php" "$DB_ENGINE_UNDER_TEST"
 
 # config.php should have Redis bootstrap settings (critical for K8s where
 # each pod has its own Config volume and workers never run web configure)
@@ -463,7 +488,7 @@ shutil.copy2('/tmp/settings.yaml.bak', '${YAML_SRC}')
 os.chmod('${YAML_SRC}', 0o440); os.chmod('/etc/misp-docker', 0o550)
 " >/dev/null 2>&1
 ext_baseurl=$(db_query "SELECT value FROM system_settings WHERE setting='MISP.external_baseurl';")
-assert_eq "envar wins over version-gated default" "\"http://localhost:${TEST_PORT}\"" "$ext_baseurl"
+assert_eq "envar wins over version-gated default" "\"http://caddy:8080\"" "$ext_baseurl"
 
 section "S3 attachment storage"
 
@@ -574,7 +599,7 @@ ${COMPOSE} exec -T web bash -c '
   $CAKE user create headeruser@example.com 3 1 "HeaderUserPass123!" 2>/dev/null || true
   $CAKE user change_pw headeruser@example.com "HeaderUserPass123!" --no_password_change
 ' >/dev/null 2>&1
-mysql_exec "UPDATE users SET external_auth_required=1, external_auth_key='headeruser@example.com', change_pw=0, last_pw_change=UNIX_TIMESTAMP() WHERE email='headeruser@example.com';" >/dev/null 2>&1
+mysql_exec "UPDATE users SET external_auth_required=$(sql_true), external_auth_key='headeruser@example.com', change_pw=NOT $(sql_true), last_pw_change=$(sql_now_epoch) WHERE email='headeruser@example.com';" >/dev/null 2>&1
 
 # Browser-style request with the auth header. If CustomAuth works,
 # MISP creates a session and serves the page (200) instead of redirecting
@@ -597,6 +622,36 @@ ${COMPOSE} exec -T web bash -c '
 rm -f ${WORK_DIR}/misp-header-cookies
 
 # --- Org sync -----------------------------------------------------------------
+
+# --- OIDC login through dex -------------------------------------------------
+
+section "OIDC login"
+
+# The whole flow runs inside the compose network: the login page starts the
+# flow (mixed auth needs ?OidcAuth=enable), dex's local connector takes the
+# credentials, and the callback lands on http://caddy:8080/users/login.
+oidc_out=$(${COMPOSE} run --rm --no-deps -T sync bash -c '
+set -e
+J=/tmp/oidc-jar
+AUTH=$(curl -s -o /dev/null -w "%{redirect_url}" -c $J "http://caddy:8080/users/login?OidcAuth=enable")
+echo "auth=$AUTH"
+# dex redirects the local connector to its form; the credentials post to that URL
+FORM=$(curl -s -L -o /dev/null -w "%{url_effective}" -b $J -c $J "$AUTH")
+echo "form=$FORM"
+FINAL=$(curl -s -L -o /dev/null -w "%{url_effective} %{http_code}" -b $J -c $J --data-urlencode "login=oidc@example.com" --data-urlencode "password=oidc-test-password" "$FORM")
+echo "final=$FINAL"
+curl -s -b $J -H "Accept: application/json" http://caddy:8080/users/view/me.json | jq -c . || echo "{}"
+' 2>/dev/null || true)
+assert_contains "oidc: login page redirects to dex" "$oidc_out" "auth=http://dex:5556/dex/auth"
+assert_contains "oidc: dex offers its password form" "$oidc_out" "form=http://dex:5556/dex/auth/local/login"
+assert_contains "oidc: callback lands on MISP" "$oidc_out" "final=http://caddy:8080/ 200"
+oidc_me=$(echo "$oidc_out" | grep '^{' | tail -1 || true)
+assert_eq "oidc: user is logged in with the IdP email" "oidc@example.com" "$(echo "$oidc_me" | jq -r '.User.email // empty')"
+assert_eq "oidc: role mapped by name" "Org Admin" "$(echo "$oidc_me" | jq -r '.Role.name // empty')"
+assert_eq "oidc: default organisation assigned" "Test Org" "$(echo "$oidc_me" | jq -r '.Organisation.name // empty')"
+oidc_form=$(curl -s "http://localhost:${TEST_PORT}/users/login" | grep -c 'name="data\[User\]\[password\]"' || true)
+assert_eq "oidc: mixed auth keeps the password form" "1" "$oidc_form"
+
 
 # --- Task runner (cronjob entrypoint) ---------------------------------------
 

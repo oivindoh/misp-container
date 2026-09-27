@@ -69,6 +69,21 @@ services:
     env_file:
       - ../tests/test-compose-secrets.env
 
+  # PostgreSQL for the second run of the suite (tests/run-integration-tests.sh --postgres)
+  postgres:
+    env_file:
+      - base/secrets-db.env
+      - ../tests/test-compose-secrets.env
+
+  # OIDC provider for the login test (tests/dex.yaml)
+  dex:
+    image: ghcr.io/dexidp/dex:v2.45.1
+    command: ["dex", "serve", "/etc/dex/config.yaml"]
+    volumes:
+      - ../tests/dex.yaml:/etc/dex/config.yaml:ro
+    ports:
+      - "15556:5556"
+
   # S3-compatible storage for attachment testing
   garage:
     image: dxflrs/garage:v2.3.0

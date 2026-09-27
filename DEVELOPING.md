@@ -18,6 +18,7 @@
 cd misp-container      # mise creates .venv on enter
 mise run test          # unit tests (~0.3s)
 mise run test-integration  # full Compose stack with podman (~90s)
+mise run test-integration -- --postgres   # the same suite on PostgreSQL
 mise run test-sync     # hub-spoke 3-instance sync (~60s)
 mise run test-all      # unit + integration + sync
 ```
@@ -26,8 +27,8 @@ mise run test-all      # unit + integration + sync
 
 | Suite | Tests | What it covers |
 |-------|-------|----------------|
-| Unit | 243 | Config engine, config.php rendering, advisory lock, app/Config preparation, task runner, sync engine, metrics exporter |
-| Integration | 104 | Full Compose stack: HTTP, auth, settings, PHP-FPM, workers, S3, org sync, metrics, modules enrichment |
+| Unit | 271 | Config engine, config.php rendering, advisory lock, database helpers, app/Config preparation, task runner, sync engine, metrics exporter |
+| Integration | 111 | Full Compose stack: HTTP, auth, settings, PHP-FPM, workers, S3, org sync, metrics, modules enrichment |
 | Hub-spoke sync | 12 | 3 isolated MISP instances: pull, push, tag-filtered sync |
 
 The integration suite runs every container with `read_only: true` (except web, whose version-gate checks patch `settings.yaml` in place) to catch filesystem writes before Kubernetes does, and prints the wall time of each section. Set `COMPOSE_CMD` and `CONTAINER_CMD` for another runner; CI uses `docker compose` and `docker`.
@@ -43,6 +44,12 @@ early warning for changed settings and defaults. The PR body lists the new setti
 setting that appears there with a value this image should enforce moves to `settings.yaml`;
 when a release changes a secure default we already curate, give it `since: <that tag>` so
 existing instances pick the new value up once.
+
+Upstream source is patched in two places. `init.py` patches `bootstrap.php` with the auth
+plugin detection when it renders `app/Config`. The `Dockerfile` patches CakePHP's
+`Postgres.php` (`describe()` resets its sequence match per column), guarded by a `grep` that
+fails the build when the patched line changes. On a failed guard, check whether the release
+carries the fix and drop the patch, or adapt it.
 
 ## Releases
 
@@ -177,7 +184,8 @@ files/
     api.py                  # MISP REST API client (urllib)
     cake.py                 # CakePHP CLI wrapper
     config.py               # Settings diff engine (SettingSpec, SettingsCache)
-    db.py                   # MySQL queries via pymysql
+    db.py                   # Engine-neutral database layer (pymysql or pg8000), lock, schema import
+    housekeeping.py         # Nightly deletes (housekeeping component)
     env.py                  # Environment variable defaults
     init.py                 # Per-pod preparation: app/Config rendering, GPG key import
     configure.py            # One-shot configuration (configure Job)
@@ -207,6 +215,7 @@ tests/
   run-integration-tests.sh  # Containerised integration test suite
   run-sync-test.sh          # Hub-spoke 3-instance sync tests
   docker-compose.test.yml   # Test overlay on deploy/docker-compose.yml
+  docker-compose.postgres.yml  # Second overlay for --postgres
   docker-compose.sync-test.yml
 deploy/
   docker-compose.yml        # Local development stack (podman compose)

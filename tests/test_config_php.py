@@ -117,8 +117,8 @@ class TestConfigPhpSpecs:
 
 class TestGeneratedPhpEscaping:
     def test_database_password_with_quote(self, tmp_path):
-        env_vars = {"MYSQL_HOST": "db", "MYSQL_USER": "u", "MYSQL_PORT": "3306",
-                    "MYSQL_PASSWORD": "pa'ss\\word", "MYSQL_DATABASE": "misp", "MYSQL_TLS": "false"}
+        env_vars = {"DB_HOST": "db", "DB_USER": "u", "DB_PORT": "3306",
+                    "DB_PASSWORD": "pa'ss\\word", "DB_NAME": "misp", "DB_TLS": "false"}
         with patch.dict(os.environ, env_vars):
             _generate_database_config(tmp_path)
         content = (tmp_path / "database.php").read_text()
@@ -131,3 +131,48 @@ class TestGeneratedPhpEscaping:
             _generate_email_config(tmp_path)
         content = (tmp_path / "email.php").read_text()
         assert "'port'          => 25," in content
+
+
+class TestPluginGroups:
+    """Auth plugin config is rendered into config.php only when its switch is on."""
+
+    def _all(self):
+        return {
+            "minimum_config": [SettingSpec.from_dict("MISP.redis_host", {"value": "redis"})],
+            "db_enable": [],
+            "oidc": [
+                SettingSpec.from_dict("Security.auth", {"value": ["OidcAuth.Oidc"]}),
+                SettingSpec.from_dict("OidcAuth.scopes", {"value": ["profile", "email"]}),
+                SettingSpec.from_dict("OidcAuth.role_mapper", {"value": {}}),
+                SettingSpec.from_dict("OidcAuth.client_id", {"value": "", "blank_protection": True}),
+            ],
+            "ldap": [SettingSpec.from_dict("Security.auth", {"value": ["LdapAuth.Ldap"]})],
+        }
+
+    def test_off_by_default(self):
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("OIDC_ENABLE", None); os.environ.pop("LDAPAUTH_ENABLE", None)
+            names = [s.name for s in config_php_specs(self._all())]
+        assert names == ["MISP.redis_host"]
+
+    def test_oidc_rendered_with_json_env_overrides(self):
+        env = {"OIDC_ENABLE": "true", "OIDCAUTH_ROLE_MAPPER": '{"misp-admin": "admin", "misp-user": 3}',
+               "OIDCAUTH_SCOPES": "profile,email,groups", "OIDCAUTH_CLIENT_ID": "misp"}
+        with patch.dict(os.environ, env):
+            os.environ.pop("LDAPAUTH_ENABLE", None)
+            out = render_config_php(config_php_specs(self._all()))
+        assert "'auth' => array('OidcAuth.Oidc')," in out
+        assert "'scopes' => array('profile', 'email', 'groups')," in out
+        assert "'role_mapper' => array('misp-admin' => 'admin', 'misp-user' => 3)," in out
+        assert "'client_id' => 'misp'," in out
+
+    def test_two_plugins_share_security_auth(self):
+        with patch.dict(os.environ, {"OIDC_ENABLE": "true", "LDAPAUTH_ENABLE": "true"}):
+            os.environ.pop("OIDCAUTH_CLIENT_ID", None)
+            out = render_config_php(config_php_specs(self._all()))
+        assert "'auth' => array('OidcAuth.Oidc', 'LdapAuth.Ldap')," in out
+        assert "client_id" not in out
+
+    def test_empty_dict_and_list(self):
+        assert php_literal({}) == "array()"
+        assert php_literal([]) == "array()"

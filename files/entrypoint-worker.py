@@ -127,7 +127,7 @@ apply_defaults()
 prepare()
 if not env("PLUGIN_S3_BUCKET_NAME"):
     check_writable(env("MISP_ATTACHMENTS_DIR"), "attachments")
-db.wait_for_mysql(retries=60, wait_seconds=5)
+db.wait_for_db(retries=60, wait_seconds=5)
 db.wait_for_live()
 generate_supervisord_config()
 

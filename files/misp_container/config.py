@@ -109,6 +109,14 @@ class SettingSpec:
                 return int(value)
             except ValueError:
                 return value
+        if self.kind in ("list", "dict"):
+            stripped = value.strip()
+            if not stripped:
+                return [] if self.kind == "list" else {}
+            if stripped[0] in "[{":
+                return json.loads(stripped)
+            # a bare comma-separated list is the same as a JSON list of strings
+            return [item.strip() for item in stripped.split(",") if item.strip()]
         return value
 
     @classmethod
@@ -121,6 +129,10 @@ class SettingSpec:
         elif isinstance(raw_value, int):
             value = str(raw_value)
             kind = "int"
+        elif isinstance(raw_value, (list, dict)):
+            # Plugin config (scopes, role_mapper); env overrides are JSON
+            value = json.dumps(raw_value)
+            kind = "list" if isinstance(raw_value, list) else "dict"
         else:
             value = str(raw_value)
             kind = "str"
@@ -191,10 +203,7 @@ class SettingsCache:
         image_version = _read_file(DIST_VERSION_FILE, "unknown")
         if self.last_defaults_version != image_version:
             log.info("saving defaults version: %s", image_version)
-            db.query(
-                f"REPLACE INTO system_settings (setting, value) "
-                f"VALUES ('misp_docker.defaults_version', '\"{image_version}\"');"
-            )
+            db.set_system_setting("misp_docker.defaults_version", image_version)
 
     def get(self, key: str) -> str | None:
         """Get a setting value, or None if not present."""
@@ -363,6 +372,10 @@ def php_literal(value) -> str:
         return "true" if value else "false"
     if isinstance(value, int):
         return str(value)
+    if isinstance(value, list):
+        return "array(" + ", ".join(php_literal(v) for v in value) + ")"
+    if isinstance(value, dict):
+        return "array(" + ", ".join(f"{php_literal(str(k))} => {php_literal(v)}" for k, v in value.items()) + ")"
     escaped = str(value).replace("\\", "\\\\").replace("'", "\\'")
     return f"'{escaped}'"
 
@@ -379,10 +392,15 @@ def render_config_php(specs: list[SettingSpec]) -> str:
         if spec.blank_protection and not spec.effective_value:
             continue
         section, _, key = spec.name.partition(".")
+        value = spec.typed_value
         if key:
-            tree.setdefault(section, {})[key] = spec.typed_value
+            current = tree.setdefault(section, {}).get(key)
+            # Security.auth collects one entry per enabled auth plugin
+            if isinstance(current, list) and isinstance(value, list):
+                value = current + [v for v in value if v not in current]
+            tree[section][key] = value
         else:
-            tree[section] = spec.typed_value
+            tree[section] = value
 
     lines = ["<?php", "$config = array("]
     for section, value in tree.items():
@@ -397,13 +415,25 @@ def render_config_php(specs: list[SettingSpec]) -> str:
     return "\n".join(lines) + "\n"
 
 
+# Groups rendered into config.php only when their switch is "true": the auth
+# plugins read their config from config.php, never from the database.
+CONDITIONAL_CONFIG_PHP_GROUPS = (
+    ("oidc", "OIDC_ENABLE"),
+    ("ldap", "LDAPAUTH_ENABLE"),
+    ("apache_auth", "APACHESECUREAUTH_LDAP_ENABLE"),
+)
+
+
 def config_php_specs(all_specs: dict[str, list[SettingSpec]]) -> list[SettingSpec]:
-    """The specs that belong in config.php: bootstrap groups, plus S3 when enabled."""
+    """The specs that belong in config.php: bootstrap groups, S3 and the enabled auth plugins."""
     specs: list[SettingSpec] = []
     for group in CONFIG_PHP_GROUPS:
         specs.extend(all_specs.get(group, []))
     if os.environ.get("PLUGIN_S3_BUCKET_NAME"):
         specs.extend(all_specs.get("s3", []))
+    for group, switch in CONDITIONAL_CONFIG_PHP_GROUPS:
+        if os.environ.get(switch, "").lower() == "true":
+            specs.extend(all_specs.get(group, []))
     return specs
 
 

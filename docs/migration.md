@@ -222,6 +222,13 @@ MISP_UUID=<value-from-old-instance>
 
 **Workers not processing** -- Check that `SIMPLEBACKGROUNDJOBS_SUPERVISOR_HOST` is set correctly: `worker`, the service name in both Compose and Kubernetes.
 
+## PostgreSQL as the target
+
+MISP's PostgreSQL support is a fresh-install path: the baseline schema and the migrations
+run on PostgreSQL, but MISP ships nothing that moves a MySQL or MariaDB database over. A
+`mysqldump` cannot be loaded into PostgreSQL. Migrate an existing instance onto the
+`mariadb` component; start new instances on `postgres` if you want that engine.
+
 ## Migrating to S3 storage
 
 If your old instance uses local file storage and you want to switch to S3:

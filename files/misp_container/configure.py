@@ -33,7 +33,8 @@ def run_custom_script(path: str, label: str) -> None:
 # still carries one of them forgot to set its secrets.
 PLACEHOLDER_MARKERS = ("change-me", "override-me", "REPLACE-WITH", "0000000000")
 CHECKED_SECRETS = ("SECURITY_SALT", "SECURITY_ENCRYPTION_KEY", "ADMIN_PASSWORD", "ADMIN_KEY",
-                   "MYSQL_PASSWORD", "MYSQL_ROOT_PASSWORD", "MISP_REDIS_PASSWORD", "GNUPG_PASSWORD")
+                   "DB_PASSWORD", "MYSQL_PASSWORD", "MYSQL_ROOT_PASSWORD", "POSTGRES_PASSWORD", "MISP_REDIS_PASSWORD",
+                   "GNUPG_PASSWORD")
 
 
 def is_placeholder(value: str) -> bool:
@@ -125,7 +126,7 @@ def run() -> None:
     import time
     started = time.monotonic()
     check_identity()
-    db.wait_for_mysql()
+    db.wait_for_db()
     db.init_schema()
 
     # Early custom hook: after the DB is ready, before MISP configuration.

@@ -1,15 +1,15 @@
-# Nightly housekeeping for MISP database tables.
-# Batched deletes (LIMIT 25000) to avoid long locks. No OPTIMIZE TABLE: on
-# InnoDB it rebuilds the table under a metadata lock, which stalls MISP on a
-# large audit_logs table. Retention periods are a policy choice; patch them.
-
-# -- Jobs cleanup: delete jobs older than 2 days --
+# Nightly housekeeping: batched deletes of old rows in jobs, logs and
+# audit_logs, through the main image (python3 -m misp_container.housekeeping),
+# on MariaDB or PostgreSQL. No OPTIMIZE TABLE: on InnoDB it rebuilds the table
+# under a metadata lock. Retention is a policy choice: set
+# HOUSEKEEPING_<TABLE>_DAYS in misp-env.
+# -- Delete jobs older than HOUSEKEEPING_JOBS_DAYS (2) --
 apiVersion: batch/v1
 kind: CronJob
 metadata:
-  name: mysql-jobs-cleanup
+  name: housekeeping-jobs
   labels:
-    app.kubernetes.io/name: mysql-jobs-cleanup
+    app.kubernetes.io/name: housekeeping-jobs
 spec:
   schedule: "0 2 * * *"
   concurrencyPolicy: Forbid
@@ -17,54 +17,49 @@ spec:
   failedJobsHistoryLimit: 3
   jobTemplate:
     spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 3600
       template:
         metadata:
           labels:
-            app.kubernetes.io/name: mysql-jobs-cleanup
+            app.kubernetes.io/name: housekeeping-jobs
         spec:
           restartPolicy: OnFailure
+          securityContext:
+            runAsUser: 1000
+            runAsGroup: 1000
+            runAsNonRoot: true
+            seccompProfile:
+              type: RuntimeDefault
           containers:
-            - name: mysql-cleanup
-              image: docker.io/library/mariadb
-              command:
-                - bash
-                - -c
-                - |
-                  DELETED=1
-                  while [ "$DELETED" -ge 100 ]; do
-                    DELETED=$(mysql -u "$MYSQL_USER" -p"$MYSQL_PASSWORD" -h mysql "$MYSQL_DATABASE" -N -e \
-                      "DELETE FROM jobs WHERE date_created < NOW() - INTERVAL 2 DAY LIMIT 25000; SELECT ROW_COUNT();")
-                    echo "Deleted $DELETED old jobs"
-                  done
-                  echo "Jobs cleanup complete"
-              env:
-                - name: MYSQL_USER
-                  valueFrom:
-                    secretKeyRef:
-                      name: misp-db
-                      key: MYSQL_USER
-                - name: MYSQL_PASSWORD
-                  valueFrom:
-                    secretKeyRef:
-                      name: misp-db
-                      key: MYSQL_PASSWORD
-                - name: MYSQL_DATABASE
-                  value: misp
+            - name: housekeeping
+              image: ghcr.io/oivindoh/misp-container
+              command: ["/usr/bin/tini", "--", "python3", "-m", "misp_container.housekeeping", "jobs"]
+              envFrom:
+                - configMapRef:
+                    name: misp-env
+                - secretRef:
+                    name: misp-db
               resources:
                 requests:
                   cpu: 20m
-                  memory: 32Mi
+                  memory: 64Mi
                 limits:
                   cpu: 500m
-                  memory: 128Mi
+                  memory: 256Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: [ALL]
 ---
-# -- Logs cleanup: delete logs >30d, audit_logs >90d --
+# -- Delete logs older than HOUSEKEEPING_LOGS_DAYS (30) --
 apiVersion: batch/v1
 kind: CronJob
 metadata:
-  name: mysql-logs-cleanup
+  name: housekeeping-logs
   labels:
-    app.kubernetes.io/name: mysql-logs-cleanup
+    app.kubernetes.io/name: housekeeping-logs
 spec:
   schedule: "0 3 * * *"
   concurrencyPolicy: Forbid
@@ -72,53 +67,88 @@ spec:
   failedJobsHistoryLimit: 3
   jobTemplate:
     spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 3600
       template:
         metadata:
           labels:
-            app.kubernetes.io/name: mysql-logs-cleanup
+            app.kubernetes.io/name: housekeeping-logs
         spec:
           restartPolicy: OnFailure
+          securityContext:
+            runAsUser: 1000
+            runAsGroup: 1000
+            runAsNonRoot: true
+            seccompProfile:
+              type: RuntimeDefault
           containers:
-            - name: mysql-cleanup
-              image: docker.io/library/mariadb
-              command:
-                - bash
-                - -c
-                - |
-                  # Delete old logs (>30 days)
-                  DELETED=1
-                  while [ "$DELETED" -ge 100 ]; do
-                    DELETED=$(mysql -u "$MYSQL_USER" -p"$MYSQL_PASSWORD" -h mysql "$MYSQL_DATABASE" -N -e \
-                      "DELETE FROM logs WHERE created < NOW() - INTERVAL 30 DAY LIMIT 25000; SELECT ROW_COUNT();")
-                    echo "Deleted $DELETED old logs"
-                  done
-
-                  # Delete old audit logs (>90 days)
-                  DELETED=1
-                  while [ "$DELETED" -ge 100 ]; do
-                    DELETED=$(mysql -u "$MYSQL_USER" -p"$MYSQL_PASSWORD" -h mysql "$MYSQL_DATABASE" -N -e \
-                      "DELETE FROM audit_logs WHERE created < NOW() - INTERVAL 90 DAY LIMIT 25000; SELECT ROW_COUNT();")
-                    echo "Deleted $DELETED old audit_logs"
-                  done
-
-                  echo "Logs cleanup complete"
-              env:
-                - name: MYSQL_USER
-                  valueFrom:
-                    secretKeyRef:
-                      name: misp-db
-                      key: MYSQL_USER
-                - name: MYSQL_PASSWORD
-                  valueFrom:
-                    secretKeyRef:
-                      name: misp-db
-                      key: MYSQL_PASSWORD
-                - name: MYSQL_DATABASE
-                  value: misp
+            - name: housekeeping
+              image: ghcr.io/oivindoh/misp-container
+              command: ["/usr/bin/tini", "--", "python3", "-m", "misp_container.housekeeping", "logs"]
+              envFrom:
+                - configMapRef:
+                    name: misp-env
+                - secretRef:
+                    name: misp-db
               resources:
                 requests:
                   cpu: 20m
-                  memory: 32Mi
+                  memory: 64Mi
                 limits:
                   cpu: 500m
-                  memory: 128Mi
+                  memory: 256Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: [ALL]
+---
+# -- Delete audit_logs older than HOUSEKEEPING_AUDIT_LOGS_DAYS (90) --
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: housekeeping-audit-logs
+  labels:
+    app.kubernetes.io/name: housekeeping-audit-logs
+spec:
+  schedule: "10 3 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 3600
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: housekeeping-audit-logs
+        spec:
+          restartPolicy: OnFailure
+          securityContext:
+            runAsUser: 1000
+            runAsGroup: 1000
+            runAsNonRoot: true
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: housekeeping
+              image: ghcr.io/oivindoh/misp-container
+              command: ["/usr/bin/tini", "--", "python3", "-m", "misp_container.housekeeping", "audit_logs"]
+              envFrom:
+                - configMapRef:
+                    name: misp-env
+                - secretRef:
+                    name: misp-db
+              resources:
+                requests:
+                  cpu: 20m
+                  memory: 64Mi
+                limits:
+                  cpu: 500m
+                  memory: 256Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: [ALL]

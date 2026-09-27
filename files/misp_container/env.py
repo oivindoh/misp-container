@@ -32,6 +32,48 @@ DERIVED = {
 }
 
 
+# Database connection: DB_* is the engine-neutral form; MYSQL_* stays as the
+# alias every existing deployment sets.
+DB_ALIASES = {
+    "MYSQL_HOST": "DB_HOST",
+    "MYSQL_PORT": "DB_PORT",
+    "MYSQL_DATABASE": "DB_NAME",
+    "MYSQL_USER": "DB_USER",
+    "MYSQL_PASSWORD": "DB_PASSWORD",
+    "MYSQL_TLS": "DB_TLS",
+}
+
+# Documented short names for the auth plugins, mapped onto the env vars derived
+# from the setting names (OidcAuth.provider_url -> OIDCAUTH_PROVIDER_URL).
+ALIASES = {
+    "OIDC_PROVIDER_URL": "OIDCAUTH_PROVIDER_URL",
+    "OIDC_ISSUER": "OIDCAUTH_ISSUER",
+    "OIDC_CLIENT_ID": "OIDCAUTH_CLIENT_ID",
+    "OIDC_CLIENT_SECRET": "OIDCAUTH_CLIENT_SECRET",
+    "OIDC_ROLES_PROPERTY": "OIDCAUTH_ROLES_PROPERTY",
+    "OIDC_ROLES_MAPPING": "OIDCAUTH_ROLE_MAPPER",
+    "OIDC_DEFAULT_ORG": "OIDCAUTH_DEFAULT_ORG",
+    "OIDC_SCOPES": "OIDCAUTH_SCOPES",
+    "OIDC_CODE_CHALLENGE_METHOD": "OIDCAUTH_CODE_CHALLENGE_METHOD",
+    "OIDC_AUTH_METHOD": "OIDCAUTH_AUTHENTICATION_METHOD",
+    "OIDC_MIXEDAUTH": "OIDCAUTH_MIXEDAUTH",
+    "OIDC_DISABLE_REQUEST_OBJECT": "OIDCAUTH_DISABLE_REQUEST_OBJECT",
+    "OIDC_SKIP_PROXY": "OIDCAUTH_SKIPPROXY",
+    "LDAP_ENABLE": "LDAPAUTH_ENABLE",
+    "APACHESECUREAUTH_LDAP_APACHE_ENV": "APACHESECUREAUTH_APACHEENV",
+    "APACHESECUREAUTH_LDAP_SERVER": "APACHESECUREAUTH_LDAPSERVER",
+    "APACHESECUREAUTH_LDAP_READER_USER": "APACHESECUREAUTH_LDAPREADERUSER",
+    "APACHESECUREAUTH_LDAP_READER_PASSWORD": "APACHESECUREAUTH_LDAPREADERPASSWORD",
+    "APACHESECUREAUTH_LDAP_DN": "APACHESECUREAUTH_LDAPDN",
+    "APACHESECUREAUTH_LDAP_SEARCH_ATTRIBUTE": "APACHESECUREAUTH_LDAPSEARCHATTRIBUTE",
+    "APACHESECUREAUTH_LDAP_FILTER": "APACHESECUREAUTH_LDAPFILTER",
+    "APACHESECUREAUTH_LDAP_DEFAULT_ROLE_ID": "APACHESECUREAUTH_LDAPDEFAULTROLEID",
+    "APACHESECUREAUTH_LDAP_DEFAULT_ORG": "APACHESECUREAUTH_LDAPDEFAULTORG",
+    "APACHESECUREAUTH_LDAP_EMAIL_FIELD": "APACHESECUREAUTH_LDAPEMAILFIELD",
+    "APACHESECUREAUTH_LDAP_STARTTLS": "APACHESECUREAUTH_STARTTLS",
+}
+
+
 def apply_defaults():
     """Apply runtime defaults that can't live in env files.
 
@@ -52,6 +94,15 @@ def apply_defaults():
         if value:
             for target in targets:
                 os.environ.setdefault(target, value)
+    for alias, target in ALIASES.items():
+        value = os.environ.get(alias, "")
+        if value:
+            os.environ.setdefault(target, value)
+    for alias, target in DB_ALIASES.items():
+        value = os.environ.get(alias, "")
+        if value:
+            os.environ.setdefault(target, value)
+    os.environ.setdefault("DB_ENGINE", "mysql")
     misp_email = os.environ.get("MISP_EMAIL") or os.environ.get("ADMIN_EMAIL", "")
     if misp_email:
         os.environ.setdefault("MISP_CONTACT", misp_email)

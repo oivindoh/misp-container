@@ -13,14 +13,13 @@ from misp_container import db
 
 
 class FakeCursor:
+    """Shaped like a pg8000 cursor: close(), no context manager."""
+
     def __init__(self, conn):
         self.conn = conn
 
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *exc):
-        return False
+    def close(self):
+        pass
 
     def execute(self, sql, params=None):
         self.conn.statements.append(sql)
@@ -55,8 +54,8 @@ def fake_pymysql():
     module = types.ModuleType("pymysql")
     module.connect = connect
     module.cursors = types.ModuleType("pymysql.cursors")
-    env = {"MYSQL_HOST": "h", "MYSQL_PORT": "3306", "MYSQL_USER": "u",
-           "MYSQL_PASSWORD": "p", "MYSQL_DATABASE": "d"}
+    env = {"DB_HOST": "h", "DB_PORT": "3306", "DB_USER": "u",
+           "DB_PASSWORD": "p", "DB_NAME": "d"}
     with patch.dict(sys.modules, {"pymysql": module, "pymysql.cursors": module.cursors}), \
             patch.dict(os.environ, env):
         db._lock_conn = None

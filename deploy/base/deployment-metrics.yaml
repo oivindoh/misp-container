@@ -42,16 +42,16 @@ spec:
           # Database credentials only: the exporter never needs the admin or
           # application secrets
           env:
-            - name: MYSQL_USER
+            - name: DB_USER
               valueFrom:
                 secretKeyRef:
                   name: misp-db
-                  key: MYSQL_USER
-            - name: MYSQL_PASSWORD
+                  key: DB_USER
+            - name: DB_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: misp-db
-                  key: MYSQL_PASSWORD
+                  key: DB_PASSWORD
           resources:
             requests:
               cpu: 5m

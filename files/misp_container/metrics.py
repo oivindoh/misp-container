@@ -56,25 +56,52 @@ def _metric(name: str, help_text: str, mtype: str, samples: list) -> str:
 
 
 def _connect():
-    import pymysql
-    import pymysql.cursors
+    """A connection whose cursor returns dict rows on either engine."""
+    from . import db
+    return _DictConnection(db._connect())
 
-    kwargs = {
-        "host": env("MYSQL_HOST"),
-        "port": int(env("MYSQL_PORT")),
-        "user": env("MYSQL_USER"),
-        "password": env("MYSQL_PASSWORD"),
-        "database": env("MYSQL_DATABASE"),
-        "charset": "utf8mb4",
-        "cursorclass": pymysql.cursors.DictCursor,
-        "connect_timeout": 5,
-        "read_timeout": 10,
-    }
-    if env("MYSQL_TLS") == "true":
-        import ssl as _ssl
 
-        kwargs["ssl"] = {"ssl": _ssl.create_default_context()}
-    return pymysql.connect(**kwargs)
+class _DictConnection:
+    """DB-API connection wrapper: cursors yield dicts keyed by column name."""
+
+    def __init__(self, conn):
+        self._conn = conn
+
+    def cursor(self):
+        return _DictCursor(self._conn.cursor())
+
+    def commit(self):
+        self._conn.commit()
+
+    def close(self):
+        self._conn.close()
+
+
+class _DictCursor:
+    def __init__(self, cur):
+        self._cur = cur
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self._cur.close()
+        return False
+
+    def execute(self, sql, params=None):
+        return self._cur.execute(sql, params or ())
+
+    def _names(self):
+        return [d[0] for d in (self._cur.description or [])]
+
+    def _row(self, row):
+        return None if row is None else {n: v for n, v in zip(self._names(), row)}
+
+    def fetchone(self):
+        return self._row(self._cur.fetchone())
+
+    def fetchall(self):
+        return [self._row(r) for r in self._cur.fetchall()]
 
 
 # ---------------------------------------------------------------------------
@@ -143,23 +170,32 @@ def _collect_db_metrics() -> tuple[str, list[dict]]:
             # tables (attributes, shadow_attributes) to avoid full index scans.
             # Small tables (orgs, users, tags) use exact COUNT(*).
             try:
-                db = env("MYSQL_DATABASE")
-                cur.execute(
-                    "SELECT TABLE_NAME, TABLE_ROWS FROM information_schema.TABLES "
-                    "WHERE TABLE_SCHEMA = %s "
-                    "AND TABLE_NAME IN ('events', 'attributes', 'shadow_attributes')",
-                    (db,),
-                )
+                from . import db as dbmod
+                if dbmod.is_postgres():
+                    cur.execute(
+                        'SELECT relname AS "TABLE_NAME", GREATEST(n_live_tup, 0) AS "TABLE_ROWS" '
+                        "FROM pg_stat_user_tables "
+                        "WHERE relname IN ('events', 'attributes', 'shadow_attributes')"
+                    )
+                else:
+                    cur.execute(
+                        "SELECT TABLE_NAME, TABLE_ROWS FROM information_schema.TABLES "
+                        "WHERE TABLE_SCHEMA = %s "
+                        "AND TABLE_NAME IN ('events', 'attributes', 'shadow_attributes')",
+                        (env("DB_NAME"),),
+                    )
                 approx = {r["TABLE_NAME"]: int(r["TABLE_ROWS"] or 0) for r in cur.fetchall()}
 
                 # Small tables: exact counts are cheap
+                from . import db as dbmod
+                t, f = dbmod.bool_lit(True), dbmod.bool_lit(False)
                 cur.execute(
-                    """
+                    f"""
                     SELECT
                         (SELECT COUNT(*) FROM organisations) AS orgs,
-                        (SELECT COUNT(*) FROM organisations WHERE local = 1) AS orgs_local,
-                        (SELECT COUNT(*) FROM users WHERE disabled = 0) AS users_active,
-                        (SELECT COUNT(*) FROM users WHERE disabled = 1) AS users_disabled,
+                        (SELECT COUNT(*) FROM organisations WHERE local = {t}) AS orgs_local,
+                        (SELECT COUNT(*) FROM users WHERE disabled = {f}) AS users_active,
+                        (SELECT COUNT(*) FROM users WHERE disabled = {t}) AS users_disabled,
                         (SELECT COUNT(*) FROM sharing_groups) AS sharing_groups,
                         (SELECT COUNT(*) FROM tags) AS tags
                     """
@@ -248,15 +284,20 @@ def _collect_db_metrics() -> tuple[str, list[dict]]:
 
                 # All jobs in one query -- LEFT JOIN to servers for pull/push,
                 # split into server vs non-server in Python.
+                from . import db as dbmod
+                if dbmod.is_postgres():
+                    server_id_expr = "NULLIF(regexp_replace(j.job_input, '^.*: ', ''), '')::bigint"
+                else:
+                    server_id_expr = "CAST(SUBSTRING_INDEX(j.job_input, ': ', -1) AS UNSIGNED)"
                 cur.execute(
-                    """
+                    f"""
                     SELECT j.worker, j.job_type, j.status,
                            s.id AS server_id, s.name AS server_name,
                            COUNT(*) AS cnt
                     FROM jobs j
                     LEFT JOIN servers s
                       ON j.job_type IN ('pull', 'push')
-                     AND CAST(SUBSTRING_INDEX(j.job_input, ': ', -1) AS UNSIGNED) = s.id
+                     AND {server_id_expr} = s.id
                     GROUP BY j.worker, j.job_type, j.status, s.id, s.name
                     """
                 )
@@ -313,13 +354,14 @@ def _collect_db_metrics() -> tuple[str, list[dict]]:
 
             # Sync container log (our custom table)
             try:
+                from . import db as dbmod
                 cur.execute(
                     "SELECT operation, status, "
                     "  COUNT(*) AS runs, "
                     "  MAX(timestamp) AS last_run, "
                     "  AVG(duration_seconds) AS avg_duration "
                     "FROM misp_container_sync_log "
-                    "WHERE timestamp > DATE_SUB(NOW(), INTERVAL 24 HOUR) "
+                    f"WHERE timestamp > {dbmod.ago(24, 'HOUR')} "
                     "GROUP BY operation, status"
                 )
                 rows = cur.fetchall()
@@ -339,7 +381,7 @@ def _collect_db_metrics() -> tuple[str, list[dict]]:
 
                 # Last successful run per operation (org-sync, configure)
                 cur.execute(
-                    "SELECT operation, UNIX_TIMESTAMP(MAX(timestamp)) AS ts "
+                    f"SELECT operation, {dbmod.epoch('MAX(timestamp)')} AS ts "
                     "FROM misp_container_sync_log WHERE status = 'success' GROUP BY operation"
                 )
                 last = [({"operation": r["operation"]}, int(r["ts"])) for r in cur.fetchall() if r.get("ts")]
@@ -525,8 +567,21 @@ def init_sync_log_table() -> None:
     conn = _connect()
     try:
         with conn.cursor() as cur:
-            cur.execute(
+            from . import db as dbmod
+            if dbmod.is_postgres():
+                ddl = """
+                CREATE TABLE IF NOT EXISTS misp_container_sync_log (
+                    id SERIAL PRIMARY KEY,
+                    timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    operation VARCHAR(64) NOT NULL,
+                    status VARCHAR(16) NOT NULL,
+                    summary TEXT,
+                    duration_seconds FLOAT,
+                    error_message TEXT
+                )
                 """
+            else:
+                ddl = """
                 CREATE TABLE IF NOT EXISTS misp_container_sync_log (
                     id INT AUTO_INCREMENT PRIMARY KEY,
                     timestamp DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -537,12 +592,9 @@ def init_sync_log_table() -> None:
                     error_message TEXT
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
                 """
-            )
+            cur.execute(ddl)
             # Prune entries older than 30 days
-            cur.execute(
-                "DELETE FROM misp_container_sync_log "
-                "WHERE timestamp < DATE_SUB(NOW(), INTERVAL 30 DAY)"
-            )
+            cur.execute(f"DELETE FROM misp_container_sync_log WHERE timestamp < {dbmod.ago(30, 'DAY')}")
         conn.commit()
     finally:
         conn.close()

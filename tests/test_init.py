@@ -18,12 +18,12 @@ class TestGenerateDatabaseConfig:
     def test_generates_valid_php(self, tmp_path):
         """All MySQL connection parameters appear in the generated PHP."""
         env_vars = {
-            "MYSQL_HOST": "db-host",
-            "MYSQL_USER": "dbuser",
-            "MYSQL_PORT": "3307",
-            "MYSQL_PASSWORD": "secret",
-            "MYSQL_DATABASE": "testdb",
-            "MYSQL_TLS": "false",
+            "DB_HOST": "db-host",
+            "DB_USER": "dbuser",
+            "DB_PORT": "3307",
+            "DB_PASSWORD": "secret",
+            "DB_NAME": "testdb",
+            "DB_TLS": "false",
         }
         with patch.dict(os.environ, env_vars, clear=False):
             _generate_database_config(tmp_path)
@@ -39,9 +39,9 @@ class TestGenerateDatabaseConfig:
         ca_file = tmp_path / "ca.pem"
         ca_file.write_text("cert")
         env_vars = {
-            "MYSQL_HOST": "h", "MYSQL_USER": "u", "MYSQL_PORT": "3306",
-            "MYSQL_PASSWORD": "p", "MYSQL_DATABASE": "d",
-            "MYSQL_TLS": "true",
+            "DB_HOST": "h", "DB_USER": "u", "DB_PORT": "3306",
+            "DB_PASSWORD": "p", "DB_NAME": "d",
+            "DB_TLS": "true",
             "MYSQL_TLS_CA": str(ca_file),
             "MYSQL_TLS_CERT": "",
             "MYSQL_TLS_KEY": "",
@@ -154,8 +154,8 @@ class TestPrepareConfig:
         config_dir = tmp_path / "Config"
         monkeypatch.setattr(init_mod, "MISP_CONFIG", str(config_dir))
         monkeypatch.setattr("misp_container.config.CONFIG_DIR", str(tmp_path))
-        env_vars = {"MISP_CONFIG_DEFAULTS": str(defaults), "MYSQL_HOST": "db", "MYSQL_USER": "u",
-                    "MYSQL_PORT": "3306", "MYSQL_PASSWORD": "p", "MYSQL_DATABASE": "misp", "MYSQL_TLS": "false",
+        env_vars = {"MISP_CONFIG_DEFAULTS": str(defaults), "DB_HOST": "db", "DB_USER": "u",
+                    "DB_PORT": "3306", "DB_PASSWORD": "p", "DB_NAME": "misp", "DB_TLS": "false",
                     "MISP_EMAIL": "m@x", "SMTP_FQDN": "smtp", "SMTP_PORT": "25"}
         with patch.dict(os.environ, env_vars):
             os.environ.pop("MISP_REDIS_HOST", None)
@@ -182,7 +182,7 @@ class TestPrepareConfig:
         settings.write_text("settings: {}\n")
         monkeypatch.setattr(init_mod, "MISP_CONFIG", str(config_dir))
         monkeypatch.setattr("misp_container.config.CONFIG_DIR", str(tmp_path))
-        with patch.dict(os.environ, {"MISP_CONFIG_DEFAULTS": str(defaults), "MYSQL_PORT": "3306", "SMTP_PORT": "25"}):
+        with patch.dict(os.environ, {"MISP_CONFIG_DEFAULTS": str(defaults), "DB_PORT": "3306", "SMTP_PORT": "25"}):
             init_mod.prepare_config()
         assert (config_dir / "core.php").read_text() == "<?php // mine"
 

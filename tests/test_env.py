@@ -87,3 +87,20 @@ class TestDerivedDefaults:
             assert os.environ["MISP_EXTERNAL_BASEURL"] == "https://m"
             assert os.environ["MISP_CONTACT"] == "a@x"
             assert os.environ["GNUPG_EMAIL"] == "a@x"
+
+
+class TestAuthAliases:
+    def test_documented_oidc_names_feed_derived_ones(self):
+        env = {"OIDC_PROVIDER_URL": "https://idp", "OIDC_ROLES_MAPPING": '{"a": 1}', "OIDC_MIXEDAUTH": "true"}
+        with patch.dict(os.environ, env, clear=False):
+            for key in ("OIDCAUTH_PROVIDER_URL", "OIDCAUTH_ROLE_MAPPER", "OIDCAUTH_MIXEDAUTH"):
+                os.environ.pop(key, None)
+            apply_defaults()
+            assert os.environ["OIDCAUTH_PROVIDER_URL"] == "https://idp"
+            assert os.environ["OIDCAUTH_ROLE_MAPPER"] == '{"a": 1}'
+            assert os.environ["OIDCAUTH_MIXEDAUTH"] == "true"
+
+    def test_derived_name_wins_over_alias(self):
+        with patch.dict(os.environ, {"OIDC_CLIENT_ID": "short", "OIDCAUTH_CLIENT_ID": "derived"}):
+            apply_defaults()
+            assert os.environ["OIDCAUTH_CLIENT_ID"] == "derived"

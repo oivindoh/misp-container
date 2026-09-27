@@ -79,9 +79,9 @@ never do, so they start in seconds and any number of them can run.
 
 1. Refuses to run with a placeholder secret, a missing or short `SECURITY_SALT`, or an empty
    `MISP_UUID`.
-2. Takes the MySQL advisory lock `misp_configure` (a concurrent org sync waits on it).
-3. Imports `MYSQL.sql` on an empty database, then runs `cake Admin runUpdates` and the
-   performance indexes.
+2. Takes the database advisory lock `misp_configure` (a concurrent org sync waits on it).
+3. Imports the engine's schema baseline (`MYSQL.sql` or `POSTGRESQL.sql`) on an empty database,
+   then runs `cake Admin runUpdates`.
 4. Reads every current setting once, compares with `settings.yaml`, and calls `cake` only for
    the differences: env-driven settings are enforced, defaults are written once, version-gated
    defaults once per image version.
@@ -163,7 +163,23 @@ python3 -c "import uuid; print(uuid.uuid4())"              # UUID
 ```
 
 Container-level defaults (database and Redis hosts, PHP limits, worker counts) are in
-`deploy/base/base.env`. `MISP_REDIS_*` also fills the background-job and ZeroMQ Redis
+`deploy/base/base.env`.
+
+### Database
+
+| Variable | Description |
+|----------|-------------|
+| `DB_ENGINE` | `mysql` (MariaDB or MySQL, the default) or `postgres` |
+| `DB_HOST`, `DB_PORT` | The server; the port defaults to the engine's |
+| `DB_NAME`, `DB_USER`, `DB_PASSWORD` | The database and its owner (`misp-db` holds the credentials) |
+| `DB_TLS` | `true` for a TLS connection |
+
+The `MYSQL_*` names stay as aliases of `DB_*`. On PostgreSQL the database must exist with
+UTF8 encoding and be owned by the user; the configure Job loads MISP's baseline into it.
+MISP's PostgreSQL support is a fresh-install path (no MySQL to PostgreSQL migration), the
+On Demand correlation engine is MySQL-only, and the integration suite runs on both engines.
+The image patches one line of CakePHP's PostgreSQL datasource (the `Dockerfile` names it) so
+that settings inserts work. `MISP_REDIS_*` also fills the background-job and ZeroMQ Redis
 settings, and `MISP_BASEURL` fills the external and REST client base URLs, unless those are
 set explicitly.
 
@@ -189,12 +205,13 @@ deploy/
 
 | Component | Content | Leave it out when |
 |-----------|---------|-------------------|
-| `mariadb` | StatefulSet with a 20Gi PVC | You run an external database (`MYSQL_HOST`) |
+| `mariadb` | MariaDB StatefulSet with a 20Gi PVC | You use `postgres` or an external database (`DB_HOST`) |
+| `postgres` | PostgreSQL 17 StatefulSet with a 20Gi PVC | You use `mariadb` or an external database |
 | `redis` | Deployment without persistence | You run an external Redis (`MISP_REDIS_HOST`) |
 | `ingress-haproxy` | Ingress for the haproxy class | Another ingress or a Gateway routes to the `web` Service |
 | `netpol-cilium` | CiliumNetworkPolicies for every pod | The cluster does not run Cilium |
 | `cronjobs` | Feed, sync and update CronJobs through the API | The MISP scheduler runs these tasks |
-| `housekeeping` | Nightly deletes in `jobs`, `logs`, `audit_logs` | Retention is handled elsewhere |
+| `housekeeping` | Nightly deletes in `jobs`, `logs`, `audit_logs` (`HOUSEKEEPING_<TABLE>_DAYS`) | Retention is handled elsewhere |
 | `pdb` | PodDisruptionBudgets for web and worker | One replica of each |
 
 An overlay lists the base, the components it wants, and its own values:
@@ -222,7 +239,7 @@ reads too:
 
 | Secret | File | Keys | Who gets it |
 |--------|------|------|-------------|
-| `misp-db` | `secrets-db.env` | `MYSQL_USER`, `MYSQL_PASSWORD`, `MYSQL_ROOT_PASSWORD` | configure, web, worker, scheduler, org-sync, mariadb, housekeeping; metrics gets user and password only |
+| `misp-db` | `secrets-db.env` | `DB_USER`, `DB_PASSWORD`, `MYSQL_ROOT_PASSWORD` (mariadb only) | configure, web, worker, scheduler, org-sync, housekeeping, the mariadb or postgres component; metrics gets user and password only |
 | `misp-app` | `secrets-app.env` | `MISP_REDIS_PASSWORD`, `GNUPG_PASSWORD`, `SECURITY_ENCRYPTION_KEY`, `SECURITY_SALT` | configure, web, worker, scheduler, redis |
 | `misp-admin` | `secrets-admin.env` | `ADMIN_PASSWORD`, `ADMIN_KEY` | configure, org-sync, cronjobs. With `ADMIN_KEY` empty MISP generates a key, org-sync exits without changes, and the cronjobs fail with a clear message |
 
@@ -247,7 +264,7 @@ gpg --armor --export-secret-keys misp@example.com > private.asc
 
 | Resource | Base default | Notes |
 |----------|--------------|-------|
-| MariaDB | StatefulSet, 20Gi ReadWriteOnce PVC (`mariadb` component) | Patch the size or storage class in the overlay |
+| MariaDB or PostgreSQL | StatefulSet, 20Gi ReadWriteOnce PVC (`mariadb` or `postgres` component) | Patch the size or storage class in the overlay |
 | Attachments, org logos, custom images | PVC `attachments`, 20Gi ReadWriteMany | Web and worker pods share it. For S3, set `PLUGIN_S3_BUCKET_NAME` and remove the claim in the overlay |
 | Redis | No persistence (`redis` component) | Sessions and queued jobs are lost when Redis restarts |
 | Everything else | `emptyDir` per pod | `app/Config`, `app/tmp`, `.gnupg`, `app/files/{scripts/tmp,certs,terms}` |
@@ -333,6 +350,46 @@ taxonomies:
 | `ORG_CONFIG_URL` | URL to fetch the file from instead |
 | `ADMIN_KEY` | Admin API key (required) |
 | `SYNC_BASE_URL` | MISP URL the run connects to (default `MISP_BASEURL`) |
+
+## Authentication plugins
+
+MISP's auth plugins read their configuration from `config.php`, so their settings are groups
+in `settings.yaml` that every pod renders when the plugin's switch is on. The documented
+short names below are aliases of the derived ones (`OidcAuth.provider_url` is
+`OIDCAUTH_PROVIDER_URL` as well).
+
+| Switch | Group | Plugin |
+|--------|-------|--------|
+| `OIDC_ENABLE=true` | `oidc` | `OidcAuth`: OpenID Connect |
+| `LDAPAUTH_ENABLE=true` | `ldap` | `LdapAuth`: LDAP bind with a reader account |
+| `APACHESECUREAUTH_LDAP_ENABLE=true` | `apache_auth` | `ApacheSecureAuth`: a header from the proxy, looked up in LDAP |
+| `CUSTOM_AUTH_ENABLE=true` | (database) | `Plugin.CustomAuth_*`: a header from the proxy, no lookup |
+
+### OpenID Connect
+
+| Variable | Setting | Default |
+|----------|---------|---------|
+| `OIDC_PROVIDER_URL` | `OidcAuth.provider_url` | required |
+| `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET` | `OidcAuth.client_id`, `client_secret` | required; the secret belongs in `misp-app` |
+| `OIDC_ISSUER` | `OidcAuth.issuer` | the provider URL |
+| `OIDC_ROLES_PROPERTY` | `OidcAuth.roles_property` | `roles`: the claim with the user's roles |
+| `OIDC_ROLES_MAPPING` | `OidcAuth.role_mapper` | `{}`: JSON, IdP role to MISP role id or name, first match wins. A user with no matching role is refused |
+| `OIDC_DEFAULT_ORG` | `OidcAuth.default_org` | organisation id, UUID or name when the IdP sends none |
+| `OIDC_SCOPES` | `OidcAuth.scopes` | `profile,email` |
+| `OIDC_MIXEDAUTH` | `OidcAuth.mixedAuth` | `false`: every login goes to the IdP. `true` keeps the password form and adds a button |
+| `OIDC_LOGOUT_URL` | `Plugin.CustomAuth_custom_logout` | the IdP's logout URL |
+| `OIDC_AUTH_METHOD`, `OIDC_CODE_CHALLENGE_METHOD` | `authentication_method`, `code_challenge_method` | `client_secret_post`, `S256` |
+
+The redirect URI is `MISP_BASEURL/users/login`; register it at the IdP. Every other
+`OidcAuth.*` key in `settings.yaml` (offline access, user validity checks, email linking)
+takes its derived env var. The integration suite logs in through a dex instance with a role
+mapped by name and the default organisation.
+
+### LDAP
+
+`LDAPAUTH_LDAPSERVER`, `LDAPAUTH_LDAPDN`, `LDAPAUTH_LDAPREADERUSER`, `LDAPAUTH_LDAPREADERPASSWORD`
+are required; `LDAPAUTH_LDAPSEARCHFILTER`, `LDAPAUTH_LDAPDEFAULTORGID`, `LDAPAUTH_LDAPDEFAULTROLEID`,
+`LDAPAUTH_LDAPROLEFIELD` and the rest of the `ldap` group follow the plugin's README.
 
 ## Custom scripts
 

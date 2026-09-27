@@ -83,3 +83,11 @@ class TestRenderSummary:
 
     def test_no_new_settings(self):
         assert upd.render_summary([], [], {}).startswith("No new settings.")
+
+
+class TestPluginGroupsExempt:
+    def test_plugin_settings_are_not_stale(self, tmp_path):
+        f = tmp_path / "settings.yaml"
+        f.write_text("settings:\n  optional:\n    MISP.baseurl:\n      value: x\n  oidc:\n    OidcAuth.client_id:\n      value: ''\n")
+        assert upd.curated_names(f) == {"MISP.baseurl", "OidcAuth.client_id"}
+        assert upd.curated_names(f, registered_only=True) == {"MISP.baseurl"}

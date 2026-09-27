@@ -182,28 +182,51 @@ def _generate_config_php(config_dst):
 
 
 def _generate_database_config(config_dst):
-    """Generate database.php from environment variables."""
+    """Generate database.php from environment variables, for MySQL/MariaDB or PostgreSQL."""
     from .config import php_literal
+    from . import db
+
+    if db.is_postgres():
+        content = f"""<?php
+class DATABASE_CONFIG {{
+    public $default = array(
+        'datasource' => 'Database/PostgresObserverExtended',
+        'persistent' => false,
+        'host' => {php_literal(env("DB_HOST"))},
+        'login' => {php_literal(env("DB_USER"))},
+        'port' => {_int_env("DB_PORT", 5432)},
+        'password' => {php_literal(env("DB_PASSWORD"))},
+        'database' => {php_literal(env("DB_NAME"))},
+        'schema' => {php_literal(env("DB_SCHEMA", "public"))},
+        'prefix' => '',
+        'encoding' => 'utf8',
+        'flags' => array(PDO::ATTR_STRINGIFY_FETCHES => true),
+    );
+}}
+"""
+        (config_dst / "database.php").write_text(content)
+        return
 
     content = f"""<?php
 class DATABASE_CONFIG {{
     public $default = array(
-        'datasource' => 'Database/Mysql',
+        'datasource' => 'Database/MysqlObserverExtended',
         'persistent' => false,
-        'host' => {php_literal(env("MYSQL_HOST"))},
-        'login' => {php_literal(env("MYSQL_USER"))},
-        'port' => {_int_env("MYSQL_PORT", 3306)},
-        'password' => {php_literal(env("MYSQL_PASSWORD"))},
-        'database' => {php_literal(env("MYSQL_DATABASE"))},
+        'host' => {php_literal(env("DB_HOST"))},
+        'login' => {php_literal(env("DB_USER"))},
+        'port' => {_int_env("DB_PORT", 3306)},
+        'password' => {php_literal(env("DB_PASSWORD"))},
+        'database' => {php_literal(env("DB_NAME"))},
         'prefix' => '',
-        'encoding' => 'utf8',
+        'encoding' => 'utf8mb4 COLLATE utf8mb4_unicode_ci',
+        'flags' => array(PDO::ATTR_STRINGIFY_FETCHES => true),
     );
 }}
 """
     dst = config_dst / "database.php"
     dst.write_text(content)
 
-    if env("MYSQL_TLS") == "true":
+    if env("DB_TLS") == "true":
         lines = dst.read_text()
         for key, env_key in [("ssl_ca", "MYSQL_TLS_CA"), ("ssl_cert", "MYSQL_TLS_CERT"), ("ssl_key", "MYSQL_TLS_KEY")]:
             val = env(env_key)

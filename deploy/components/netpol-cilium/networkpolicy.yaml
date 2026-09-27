@@ -4,8 +4,8 @@
 #   haproxy-controller ns --> caddy :8080
 #   cronjobs              --> caddy :8080, metrics :9191
 #   caddy                 --> php-fpm :9002  (localhost in same pod)
-#   php-fpm               --> mariadb :3306, redis :6379
-#   worker                --> mariadb :3306, redis :6379
+#   php-fpm               --> mariadb :3306, redis :6379, HTTPS out (IdP, partners)
+#   worker                --> mariadb :3306, redis :6379, HTTPS out (partners, feeds)
 #   configure job         --> mariadb :3306, redis :6379
 #   org-sync job          --> caddy :8080, mariadb :3306
 #   housekeeping          --> mariadb :3306
@@ -55,6 +55,13 @@ spec:
         - ports:
             - port: "3306"
               protocol: TCP
+    - toEndpoints:
+        - matchLabels:
+            app.kubernetes.io/name: postgres
+      toPorts:
+        - ports:
+            - port: "5432"
+              protocol: TCP
     # Redis
     - toEndpoints:
         - matchLabels:
@@ -78,6 +85,20 @@ spec:
       toPorts:
         - ports:
             - port: "9001"
+              protocol: TCP
+    # Outbound HTTPS: sync partners, feeds, the OIDC provider, external LDAP over TLS
+    - toCIDRSet:
+        - cidr: 0.0.0.0/0
+          except:
+            - 10.0.0.0/8
+            - 172.16.0.0/12
+            - 192.168.0.0/16
+        - cidr: "::/0"
+          except:
+            - fc00::/7
+      toPorts:
+        - ports:
+            - port: "443"
               protocol: TCP
     # DNS
     - toEndpoints:
@@ -109,6 +130,13 @@ spec:
       toPorts:
         - ports:
             - port: "3306"
+              protocol: TCP
+    - toEndpoints:
+        - matchLabels:
+            app.kubernetes.io/name: postgres
+      toPorts:
+        - ports:
+            - port: "5432"
               protocol: TCP
     - toEndpoints:
         - matchLabels:
@@ -157,6 +185,13 @@ spec:
               protocol: TCP
     - toEndpoints:
         - matchLabels:
+            app.kubernetes.io/name: postgres
+      toPorts:
+        - ports:
+            - port: "5432"
+              protocol: TCP
+    - toEndpoints:
+        - matchLabels:
             io.kubernetes.pod.namespace: kube-system
             k8s-app: kube-dns
       toPorts:
@@ -196,6 +231,13 @@ spec:
         - ports:
             - port: "3306"
               protocol: TCP
+    - toEndpoints:
+        - matchLabels:
+            app.kubernetes.io/name: postgres
+      toPorts:
+        - ports:
+            - port: "5432"
+              protocol: TCP
     # Redis
     - toEndpoints:
         - matchLabels:
@@ -203,6 +245,20 @@ spec:
       toPorts:
         - ports:
             - port: "6379"
+              protocol: TCP
+    # Outbound HTTPS: sync partners, feeds, the OIDC provider, external LDAP over TLS
+    - toCIDRSet:
+        - cidr: 0.0.0.0/0
+          except:
+            - 10.0.0.0/8
+            - 172.16.0.0/12
+            - 192.168.0.0/16
+        - cidr: "::/0"
+          except:
+            - fc00::/7
+      toPorts:
+        - ports:
+            - port: "443"
               protocol: TCP
     # DNS
     - toEndpoints:
@@ -276,8 +332,9 @@ spec:
       - key: app.kubernetes.io/name
         operator: In
         values:
-          - mysql-jobs-cleanup
-          - mysql-logs-cleanup
+          - housekeeping-jobs
+          - housekeeping-logs
+          - housekeeping-audit-logs
   ingress: []
   egress:
     - toEndpoints:
@@ -286,6 +343,13 @@ spec:
       toPorts:
         - ports:
             - port: "3306"
+              protocol: TCP
+    - toEndpoints:
+        - matchLabels:
+            app.kubernetes.io/name: postgres
+      toPorts:
+        - ports:
+            - port: "5432"
               protocol: TCP
     - toEndpoints:
         - matchLabels:
@@ -401,6 +465,13 @@ spec:
         - ports:
             - port: "3306"
               protocol: TCP
+    - toEndpoints:
+        - matchLabels:
+            app.kubernetes.io/name: postgres
+      toPorts:
+        - ports:
+            - port: "5432"
+              protocol: TCP
     # External HTTPS (server reachability + TLS cert checks)
     - toCIDRSet:
         - cidr: 0.0.0.0/0
@@ -453,13 +524,62 @@ spec:
             - key: app.kubernetes.io/name
               operator: In
               values:
-                - mysql-jobs-cleanup
-                - mysql-logs-cleanup
+                - housekeeping-jobs
+                - housekeeping-logs
+                - housekeeping-audit-logs
         - matchLabels:
             app.kubernetes.io/name: metrics
       toPorts:
         - ports:
             - port: "3306"
+              protocol: TCP
+  egress:
+    # DNS only
+    - toEndpoints:
+        - matchLabels:
+            io.kubernetes.pod.namespace: kube-system
+            k8s-app: kube-dns
+      toPorts:
+        - ports:
+            - port: "53"
+              protocol: UDP
+            - port: "53"
+              protocol: TCP
+---
+# -- PostgreSQL --
+# Accepts connections from web, worker, scheduler, and housekeeping pods.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: postgres
+spec:
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: postgres
+  ingress:
+    - fromEndpoints:
+        - matchLabels:
+            app.kubernetes.io/name: web
+        - matchLabels:
+            app.kubernetes.io/name: worker
+        - matchLabels:
+            app.kubernetes.io/name: scheduler
+        - matchLabels:
+            app.kubernetes.io/name: configure
+        - matchLabels:
+            app.kubernetes.io/name: org-sync
+        - matchExpressions:
+            - key: app.kubernetes.io/name
+              operator: In
+              values:
+                - housekeeping-jobs
+                - housekeeping-logs
+                - housekeeping-audit-logs
+        - matchLabels:
+            app.kubernetes.io/name: metrics
+      toPorts:
+        - ports:
+            - port: "5432"
               protocol: TCP
   egress:
     # DNS only

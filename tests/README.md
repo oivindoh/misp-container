@@ -7,6 +7,7 @@ Three suites: unit tests on the Python library, an integration suite on one Comp
 ```bash
 mise run test                # unit tests (~0.2s)
 mise run test-integration    # single-instance integration tests (~70s)
+mise run test-integration -- --postgres   # the same on PostgreSQL
 mise run test-sync           # hub-spoke sync test with 3 instances (~90s)
 mise run test-all            # unit + integration (not sync)
 ```
@@ -15,14 +16,16 @@ All integration tests build the images with compose, start full MISP stacks, and
 
 ## Unit tests
 
-**243 tests** covering the Python entrypoint library (`files/misp_container/`).
+**271 tests** covering the Python entrypoint library (`files/misp_container/`).
 
 | File | What it tests |
 |------|---------------|
 | `test_config.py` | Settings diff engine, version comparison, YAML loading, env var expansion, settings cache |
 | `test_env.py` | Environment variable defaults, `apply_defaults()`, worker config derivation, derived variables |
 | `test_task.py` | Periodic task runner (cronjob entrypoint) |
-| `test_db.py` | Advisory lock holds one connection until release |
+| `test_db.py` | Advisory lock holds one connection until release, statement splitter, the version gate |
+| `test_engine.py` | Engine selection, SQL fragments per engine, `MYSQL_*` aliases, housekeeping batches, cursor handling |
+| `test_configure.py` | Placeholder and identity checks of the configure step |
 | `test_config_php.py` | config.php rendering from settings.yaml, PHP escaping and typing |
 | `test_init.py` | app/Config rendering, database.php/email.php generation, GPG key import, writable check |
 | `test_admin.py` | SQL escape function |
@@ -32,9 +35,9 @@ Run with: `mise run test` or `PYTHONPATH=files python -m pytest tests/ -v`
 
 ## Integration tests
 
-**104 tests** verifying the full MISP stack in Compose.
+**111 tests** verifying the full MISP stack in Compose.
 
-**Stack:** 1 MISP instance (configure + web x2 + caddy + worker + MySQL + Redis + Garage S3)
+**Stack:** 1 MISP instance (configure + web x2 + caddy + worker + MariaDB or PostgreSQL + Redis + Garage S3 + dex)
 
 | Suite | Tests | What it verifies |
 |-------|-------|------------------|
@@ -52,12 +55,15 @@ Run with: `mise run test` or `PYTHONPATH=files python -m pytest tests/ -v`
 | Version-gated defaults | 3 | Defaults version saved, version gate stability, envar precedence |
 | S3 attachment storage | 4 | Garage S3 bootstrap, upload, download, bucket verification |
 | Custom auth | 2 | Header login (200), no-header redirect (302) |
+| OIDC login | 7 | Redirect to dex, its form, the callback, the user's email, role by name, default organisation, mixed auth |
 | Multi-replica web | 6 | configure service ran once, two web replicas serve without configuring |
 | Org sync | 11 | Org/user/tag/server creation, server authkey (DB verify), sync user authkey prefix, taxonomy enable, disabled user, custom warninglist create/update, warm run idempotency |
 
 **Files:**
 - `run-integration-tests.sh` -- test script
-- `docker-compose.test.yml` -- overlay on `deploy/docker-compose.yml` (test ports, env, Garage S3)
+- `docker-compose.test.yml` -- overlay on `deploy/docker-compose.yml` (test ports, env, Garage S3, dex)
+- `docker-compose.postgres.yml`, `postgres.env` -- second overlay for `--postgres`: points every MISP container at the postgres service
+- `dex.yaml` -- the OIDC provider's static client and user
 - `test-compose.env` -- test env overrides (BASE_URL, ADMIN_EMAIL, etc.)
 - `test-compose-secrets.env` -- test secrets (passwords, Redis key), layered over `deploy/base/secrets-*.env`
 - `garage.toml` -- Garage S3 config for attachment testing
@@ -106,7 +112,8 @@ GitHub Actions on every push to master and every PR:
 |-----|------|
 | `build` | The three images into the layer cache |
 | `unit` | The unit tests |
-| `integration` | This suite, against the images from `build` (`MISP_IMAGE_TAG=ci`) |
+| `integration` | This suite on MariaDB, against the images from `build` (`MISP_IMAGE_TAG=ci`) |
+| `integration-postgres` | This suite on PostgreSQL, in parallel |
 | `hub-spoke` | The sync suite, in parallel with `integration` |
 | `scan` | Trivy on the three images |
 | `release` | On a tag: push the images and create the GitHub Release, after every other job |

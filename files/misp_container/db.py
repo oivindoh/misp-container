@@ -1,74 +1,186 @@
-"""MySQL database operations via pymysql (pure Python, no CLI dependency)."""
+"""Database access for the entrypoints, on MySQL/MariaDB or PostgreSQL.
+
+DB_ENGINE selects the engine ("mysql", the default, or "postgres"); DB_HOST,
+DB_PORT, DB_NAME, DB_USER, DB_PASSWORD and DB_TLS describe the connection.
+The MYSQL_* names are accepted as aliases (env.py). Every query here is either
+engine-neutral or built through the helpers below, so callers never branch.
+"""
 
 from __future__ import annotations
 
 import sys
 import time
+from contextlib import closing
 
 from . import env as envmod
 from .log import get as getlog
 
 log = getlog("db")
 
+MYSQL = "mysql"
+POSTGRES = "postgres"
 
-def _connect():
-    """Create a pymysql connection from environment variables."""
-    import pymysql
-    import pymysql.cursors
 
+def engine() -> str:
+    value = envmod.env("DB_ENGINE", MYSQL).strip().lower()
+    if value in ("postgres", "postgresql", "pgsql"):
+        return POSTGRES
+    return MYSQL
+
+
+def is_postgres() -> bool:
+    return engine() == POSTGRES
+
+
+def settings() -> dict:
+    """Connection settings from env, with the engine's default port."""
     e = envmod.env
-    kwargs = {
-        "host": e("MYSQL_HOST"),
-        "port": int(e("MYSQL_PORT")),
-        "user": e("MYSQL_USER"),
-        "password": e("MYSQL_PASSWORD"),
-        "database": e("MYSQL_DATABASE"),
-        "autocommit": True,
-        "charset": "utf8mb4",
+    port = e("DB_PORT") or ("5432" if is_postgres() else "3306")
+    return {
+        "host": e("DB_HOST"),
+        "port": int(port),
+        "user": e("DB_USER"),
+        "password": e("DB_PASSWORD"),
+        "database": e("DB_NAME"),
+        "tls": e("DB_TLS") == "true",
     }
-    if e("MYSQL_TLS") == "true":
+
+
+# -- Engine-specific SQL fragments -------------------------------------------
+
+def bool_lit(value: bool) -> str:
+    """tinyint(1) on MySQL is boolean on PostgreSQL."""
+    if is_postgres():
+        return "TRUE" if value else "FALSE"
+    return "1" if value else "0"
+
+
+def now_epoch() -> str:
+    """Current time as UNIX seconds, as an SQL expression."""
+    if is_postgres():
+        return "EXTRACT(EPOCH FROM NOW())::bigint"
+    return "UNIX_TIMESTAMP()"
+
+
+def epoch(expr: str) -> str:
+    """A timestamp expression as UNIX seconds."""
+    if is_postgres():
+        return f"EXTRACT(EPOCH FROM {expr})::bigint"
+    return f"UNIX_TIMESTAMP({expr})"
+
+
+def ago(amount: int, unit: str) -> str:
+    """NOW() minus an interval; unit is DAY or HOUR."""
+    if is_postgres():
+        return f"NOW() - INTERVAL '{amount} {unit.lower()}s'"
+    return f"NOW() - INTERVAL {amount} {unit.upper()}"
+
+
+# -- Connections and queries -------------------------------------------------
+
+def _connect(autocommit: bool = True):
+    """A DB-API connection from the environment."""
+    s = settings()
+    if is_postgres():
+        import pg8000.dbapi
+        kwargs = {"user": s["user"], "password": s["password"], "host": s["host"],
+                  "port": s["port"], "database": s["database"]}
+        if s["tls"]:
+            import ssl
+            kwargs["ssl_context"] = ssl.create_default_context()
+        conn = pg8000.dbapi.connect(**kwargs)
+        conn.autocommit = autocommit
+        return conn
+
+    import pymysql
+    kwargs = {"host": s["host"], "port": s["port"], "user": s["user"], "password": s["password"],
+              "database": s["database"], "autocommit": autocommit, "charset": "utf8mb4"}
+    if s["tls"]:
         import ssl
         kwargs["ssl"] = {"ssl": ssl.create_default_context()}
     return pymysql.connect(**kwargs)
 
 
+def _cursor(conn):
+    """A cursor closed on exit; pg8000 cursors are not context managers."""
+    return closing(conn.cursor())
+
+
+def _fetch_rows(cur):
+    """Rows of the last statement, or [] when it returned no result set."""
+    if cur.description is None:
+        return []
+    return list(cur.fetchall())
+
+
 def query(sql: str, *, check: bool = False) -> str:
-    """Run a SQL query. Returns the first column of the first row as string."""
+    """Run a statement. Returns rows as tab-separated columns, newline-separated rows."""
     conn = _connect()
     try:
-        with conn.cursor() as cur:
+        with _cursor(conn) as cur:
             cur.execute(sql)
-            rows = cur.fetchall()
+            rows = _fetch_rows(cur)
             if not rows:
                 return ""
-            # Format like mysql CLI -N: tab-separated columns, newline-separated rows
             lines = []
             for row in rows:
                 cols = []
                 for val in row:
                     if val is None:
                         cols.append("NULL")
-                    elif isinstance(val, bytes):
-                        cols.append(val.decode())
+                    elif isinstance(val, (bytes, bytearray, memoryview)):
+                        cols.append(bytes(val).decode())
+                    elif isinstance(val, bool):
+                        cols.append("1" if val else "0")
                     else:
                         cols.append(str(val))
                 lines.append("\t".join(cols))
             return "\n".join(lines)
     except Exception as e:
         if check:
-            raise RuntimeError(f"MySQL query failed: {e}") from e
+            raise RuntimeError(f"query failed: {e}") from e
         return ""
     finally:
         conn.close()
 
 
+def dict_query(sql: str, params=None) -> list[dict]:
+    """Run a statement, return rows as dicts keyed by column name."""
+    conn = _connect()
+    try:
+        with _cursor(conn) as cur:
+            cur.execute(sql, params or ())
+            if cur.description is None:
+                return []
+            names = [d[0] for d in cur.description]
+            rows = []
+            for row in cur.fetchall():
+                rows.append({names[i]: (bytes(v).decode() if isinstance(v, (bytes, bytearray, memoryview)) else v)
+                             for i, v in enumerate(row)})
+            return rows
+    finally:
+        conn.close()
+
+
+def execute(sql: str, params=None) -> int:
+    """Run a statement, return the affected row count."""
+    conn = _connect()
+    try:
+        with _cursor(conn) as cur:
+            cur.execute(sql, params or ())
+            return cur.rowcount if cur.rowcount is not None else 0
+    finally:
+        conn.close()
+
+
 def query_ok(sql: str) -> bool:
-    """Run a SQL query, return True if it succeeded."""
+    """Run a statement, return True if it succeeded."""
     try:
         conn = _connect()
         try:
-            with conn.cursor() as cur:
+            with _cursor(conn) as cur:
                 cur.execute(sql)
+                _fetch_rows(cur)
             return True
         finally:
             conn.close()
@@ -76,19 +188,29 @@ def query_ok(sql: str) -> bool:
         return False
 
 
-def wait_for_mysql(retries: int = 100, wait_seconds: int = 5) -> None:
-    """Wait for MySQL to become available."""
-    host = envmod.env("MYSQL_HOST")
-    port = envmod.env("MYSQL_PORT")
-    log.info("waiting for MySQL at %s:%s", host, port)
+def wait_for_db(retries: int = 100, wait_seconds: int = 5) -> None:
+    """Wait for the database to accept connections."""
+    s = settings()
+    log.info("waiting for %s at %s:%s", engine(), s["host"], s["port"])
     for i in range(retries, 0, -1):
-        if query_ok("SHOW STATUS"):
-            log.info("MySQL is ready")
+        if query_ok("SELECT 1"):
+            log.info("database is ready")
             return
         log.info("waiting for database (%d retries left)", i)
         time.sleep(wait_seconds)
-    log.error("could not connect to MySQL at %s:%s", host, port)
+    log.error("could not connect to %s at %s:%s", engine(), s["host"], s["port"])
     sys.exit(1)
+
+
+wait_for_mysql = wait_for_db
+
+
+def set_system_setting(name: str, value: str) -> None:
+    """Write a row of system_settings (value stored JSON-encoded, as MISP does)."""
+    literal = '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+    updated = execute("UPDATE system_settings SET value = %s WHERE setting = %s", (literal, name))
+    if not updated:
+        execute("INSERT INTO system_settings (setting, value) VALUES (%s, %s)", (name, literal))
 
 
 def wait_for_live(retries: int = 120, wait_seconds: int = 3) -> None:
@@ -126,25 +248,37 @@ def wait_for_live(retries: int = 120, wait_seconds: int = 3) -> None:
     sys.exit(1)
 
 
+SCHEMA_FILES = {
+    MYSQL: "/var/www/MISP/INSTALL/MYSQL.sql",
+    POSTGRES: "/var/www/MISP/INSTALL/POSTGRESQL.sql",
+}
+
+
 def init_schema() -> None:
-    """Import MISP database schema if not already initialized."""
-    if query_ok("DESCRIBE attributes"):
+    """Import MISP's install baseline on an empty database."""
+    if query_ok("SELECT 1 FROM attributes LIMIT 1"):
         log.info("database already initialized")
         return
-    log.info("importing MISP database schema")
-    with open("/var/www/MISP/INSTALL/MYSQL.sql") as f:
+    path = SCHEMA_FILES[engine()]
+    log.info("importing MISP database schema from %s", path)
+    with open(path) as f:
         sql = f.read()
-    conn = _connect()
+    # The PostgreSQL baseline is one transaction (BEGIN ... COMMIT in the
+    # file); the statements run under one connection with commit at the end.
+    conn = _connect(autocommit=False)
     try:
-        with conn.cursor() as cur:
+        with _cursor(conn) as cur:
             for statement in split_sql_statements(sql):
+                if statement.upper() in ("BEGIN", "COMMIT", "START TRANSACTION"):
+                    continue
                 cur.execute(statement)
+        conn.commit()
     finally:
         conn.close()
 
 
 def split_sql_statements(sql: str) -> list[str]:
-    """Split a MySQL dump into statements.
+    """Split a SQL dump into statements.
 
     A ';' inside a quoted string or a comment does not end a statement.
     '--' and '#' comments and plain block comments are dropped; MySQL
@@ -195,21 +329,36 @@ def split_sql_statements(sql: str) -> list[str]:
     return statements
 
 
-# MySQL releases a named lock when its connection closes, so the lock
-# connection stays open from acquire until release.
+# -- Configure lock ----------------------------------------------------------
+# MySQL releases a named lock when its connection closes, and PostgreSQL a
+# session advisory lock likewise, so the lock connection stays open from
+# acquire until release.
 _lock_conn = None
+LOCK_NAME = "misp_configure"
 
 
 def acquire_config_lock(timeout: int = 300) -> None:
-    """Acquire the MySQL advisory lock for configuration and hold its connection."""
+    """Acquire the advisory lock for configuration and hold its connection."""
     global _lock_conn
     log.info("acquiring configuration lock")
     conn = _connect()
     try:
-        with conn.cursor() as cur:
-            cur.execute("SELECT GET_LOCK('misp_configure', %s);", (timeout,))
-            row = cur.fetchone()
-        result = row[0] if row else None
+        with _cursor(conn) as cur:
+            if is_postgres():
+                deadline = time.monotonic() + timeout
+                while True:
+                    cur.execute("SELECT pg_try_advisory_lock(hashtext(%s))", (LOCK_NAME,))
+                    if cur.fetchone()[0]:
+                        result = 1
+                        break
+                    if time.monotonic() > deadline:
+                        result = 0
+                        break
+                    time.sleep(2)
+            else:
+                cur.execute("SELECT GET_LOCK(%s, %s);", (LOCK_NAME, timeout))
+                row = cur.fetchone()
+                result = row[0] if row else None
     except Exception as e:
         conn.close()
         log.error("could not acquire configuration lock: %s", e)
@@ -222,13 +371,17 @@ def acquire_config_lock(timeout: int = 300) -> None:
 
 
 def release_config_lock() -> None:
-    """Release the MySQL advisory lock and close its connection."""
+    """Release the advisory lock and close its connection."""
     global _lock_conn
     if _lock_conn is None:
         return
     try:
-        with _lock_conn.cursor() as cur:
-            cur.execute("SELECT RELEASE_LOCK('misp_configure');")
+        with _cursor(_lock_conn) as cur:
+            if is_postgres():
+                cur.execute("SELECT pg_advisory_unlock(hashtext(%s))", (LOCK_NAME,))
+            else:
+                cur.execute("SELECT RELEASE_LOCK(%s);", (LOCK_NAME,))
+            _fetch_rows(cur)
     except Exception as e:
         log.warning("could not release configuration lock: %s", e)
     finally:

@@ -39,6 +39,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         php8.4-bcmath \
         php8.4-mbstring \
         php8.4-mysql \
+        php8.4-pgsql \
         php8.4-redis \
         php8.4-gd \
         php8.4-fpm \
@@ -157,9 +158,21 @@ RUN if [ -n "${CORE_COMMIT}" ]; then \
         | grep -v -E '^(PyMISP|app/files/scripts/(cti-python-stix2|misp-stix|mixbox|python-cybox|python-maec|python-stix))$' \
         | xargs git submodule update --init --recursive --depth 1 --
 
+# CakePHP's Postgres::describe() reuses the $seq match of an earlier column
+# for every column with a NULL default, so the sequence map points each
+# column of a table at the id sequence and an INSERT into a table keyed on
+# a varchar (system_settings) fails in setval(). Reset the match per column.
+# The grep fails the build when upstream changes the loop, so the patch is
+# revisited rather than silently dropped.
+RUN CAKE_PG=/var/www/MISP/app/Lib/cakephp/lib/Cake/Model/Datasource/Database/Postgres.php && \
+    T="$(printf '\t')" && \
+    grep -q "^${T}${T}${T}foreach (\$cols as \$c) {\$" "$CAKE_PG" && \
+    sed -i "s|^\(${T}${T}${T}\)foreach (\$cols as \$c) {\$|\1foreach (\$cols as \$c) {\n\1${T}\$seq = null;|" "$CAKE_PG" && \
+    grep -q "^${T}${T}${T}${T}\$seq = null;\$" "$CAKE_PG"
+
 # Clean and set permissions - all in one layer
-RUN find /var/www/MISP/INSTALL/* ! -name 'MYSQL.sql' -type f -exec rm {} + && \
-    find /var/www/MISP/INSTALL/* ! -name 'MYSQL.sql' -type l -exec rm {} + && \
+RUN find /var/www/MISP/INSTALL/* ! -name 'MYSQL.sql' ! -name 'POSTGRESQL.sql' -type f -exec rm {} + && \
+    find /var/www/MISP/INSTALL/* ! -name 'MYSQL.sql' ! -name 'POSTGRESQL.sql' -type l -exec rm {} + && \
     find /var/www/MISP/.git/* ! -name HEAD -exec rm -rf {} + 2>/dev/null || true && \
     rm -rf /var/www/MISP/PyMISP \
            /var/www/MISP/app/files/scripts/cti-python-stix2 \
@@ -227,6 +240,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         php8.4-bcmath \
         php8.4-mbstring \
         php8.4-mysql \
+        php8.4-pgsql \
         php8.4-redis \
         php8.4-gd \
         php8.4-fpm \
