@@ -53,6 +53,9 @@ class SettingSpec:
     since: str = ""
     sensitive: bool = False
     kind: str = "str"
+    # Known to the engine for env overrides and coverage, but its default is
+    # never written: MISP keeps its own default until an env var sets it.
+    track_only: bool = False
 
     @property
     def env_var(self) -> str:
@@ -129,6 +132,7 @@ class SettingSpec:
             since=spec.get("since", ""),
             sensitive=bool(spec.get("sensitive")),
             kind=kind,
+            track_only=bool(spec.get("track_only")),
         )
 
 
@@ -241,7 +245,12 @@ class SettingsCache:
 
         for spec in specs:
             # Env vars always take precedence
-            if spec.name in self.enforced:
+            if spec.name in self.enforced or spec.track_only:
+                skipped += 1
+                continue
+
+            # A blank default with blank_protection leaves MISP's own default in place
+            if spec.blank_protection and not spec.effective_value:
                 skipped += 1
                 continue
 
@@ -267,8 +276,14 @@ class SettingsCache:
             log.info("%s defaults: %d new, %d upgraded, %d existing", group, applied, upgraded, skipped)
 
 
+# Generated catalogue of every MISP setting the curated file does not name
+# (scripts/update-settings.sh). Its entries are track_only.
+UPSTREAM_GROUP = "upstream"
+UPSTREAM_FILE = "settings-upstream.yaml"
+
+
 def load_settings_yaml(path: str | None = None) -> dict[str, list[SettingSpec]]:
-    """Load settings.yaml and return specs grouped by group name.
+    """Load settings.yaml, plus the upstream catalogue next to it, grouped by group name.
 
     settings.yaml has a top-level 'settings' key with groups as levels.
     Each setting has a 'value' (default) and optional 'force', 'blank_protection', 'since'.
@@ -285,8 +300,24 @@ def load_settings_yaml(path: str | None = None) -> dict[str, list[SettingSpec]]:
         raw = yaml.safe_load(f) or {}
 
     group_data = raw.get("settings", raw)
+    groups = _parse_settings(group_data)
 
-    return _parse_settings(group_data)
+    upstream_path = os.path.join(os.path.dirname(path), UPSTREAM_FILE)
+    if os.path.exists(upstream_path):
+        with open(upstream_path) as f:
+            upstream = yaml.safe_load(f) or {}
+        curated = {spec.name for specs in groups.values() for spec in specs}
+        specs = []
+        for name, raw_spec in (upstream.get("settings") or {}).items():
+            if name in curated or not isinstance(raw_spec, dict):
+                continue
+            spec = SettingSpec.from_dict(name, raw_spec)
+            spec.track_only = True
+            specs.append(spec)
+        if specs:
+            groups[UPSTREAM_GROUP] = specs
+
+    return groups
 
 
 def _parse_settings(group_data: dict) -> dict[str, list[SettingSpec]]:

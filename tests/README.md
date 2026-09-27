@@ -15,7 +15,7 @@ All integration tests build the images with compose, start full MISP stacks, and
 
 ## Unit tests
 
-**231 tests** covering the Python entrypoint library (`files/misp_container/`).
+**243 tests** covering the Python entrypoint library (`files/misp_container/`).
 
 | File | What it tests |
 |------|---------------|
@@ -32,7 +32,7 @@ Run with: `mise run test` or `PYTHONPATH=files python -m pytest tests/ -v`
 
 ## Integration tests
 
-**103 tests** verifying the full MISP stack in Compose.
+**104 tests** verifying the full MISP stack in Compose.
 
 **Stack:** 1 MISP instance (configure + web x2 + caddy + worker + MySQL + Redis + Garage S3)
 

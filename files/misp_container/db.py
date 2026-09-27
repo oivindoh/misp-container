@@ -116,13 +116,62 @@ def init_schema() -> None:
     conn = _connect()
     try:
         with conn.cursor() as cur:
-            # MYSQL.sql contains multiple statements
-            for statement in sql.split(";"):
-                statement = statement.strip()
-                if statement:
-                    cur.execute(statement)
+            for statement in split_sql_statements(sql):
+                cur.execute(statement)
     finally:
         conn.close()
+
+
+def split_sql_statements(sql: str) -> list[str]:
+    """Split a MySQL dump into statements.
+
+    A ';' inside a quoted string or a comment does not end a statement.
+    '--' and '#' comments and plain block comments are dropped; MySQL
+    conditional comments (/*!...*/) are statements and kept.
+    """
+    statements = []
+    buf = []
+    i = 0
+    n = len(sql)
+    quote = None
+    while i < n:
+        c = sql[i]
+        if quote:
+            buf.append(c)
+            if c == "\\" and i + 1 < n:
+                buf.append(sql[i + 1])
+                i += 2
+                continue
+            if c == quote:
+                quote = None
+            i += 1
+            continue
+        if c in ("'", '"', "`"):
+            quote = c
+            buf.append(c)
+            i += 1
+            continue
+        if sql.startswith("--", i) or c == "#":
+            end = sql.find("\n", i)
+            i = n if end == -1 else end
+            continue
+        if sql.startswith("/*", i) and not sql.startswith("/*!", i):
+            end = sql.find("*/", i + 2)
+            i = n if end == -1 else end + 2
+            continue
+        if c == ";":
+            text = "".join(buf).strip()
+            if text:
+                statements.append(text)
+            buf = []
+            i += 1
+            continue
+        buf.append(c)
+        i += 1
+    text = "".join(buf).strip()
+    if text:
+        statements.append(text)
+    return statements
 
 
 # MySQL releases a named lock when its connection closes, so the lock

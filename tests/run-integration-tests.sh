@@ -88,6 +88,7 @@ wait_for_misp() {
 # --- Setup ------------------------------------------------------------------
 
 TEST_PORT=18080  # use a non-standard port to avoid conflicts
+MISP_VERSION=$(grep '^ARG CORE_TAG=' "${SCRIPT_DIR}/../Dockerfile" | cut -d= -f2)
 
 echo "============================================="
 echo " MISP Container Integration Tests"
@@ -418,7 +419,7 @@ for g in ('minimum_config','db_enable','initialisation','critical','optional','g
 c.save_defaults_version()
 " >/dev/null 2>&1
 stored_version=$(db_query "SELECT value FROM system_settings WHERE setting='misp_docker.defaults_version';")
-assert_eq "defaults version saved after configure" "\"v2.5.37\"" "$stored_version"
+assert_eq "defaults version saved after configure" "\"${MISP_VERSION}\"" "$stored_version"
 
 # Version-gated upgrade: set csp_enforce=false, clear version, inject since gate
 ${COMPOSE} exec -T web ${PY} "${PY_INIT}
@@ -428,7 +429,7 @@ db.query(\"DELETE FROM system_settings WHERE setting='misp_docker.defaults_versi
 os.chmod('/etc/misp-docker', 0o770); os.chmod('${YAML_SRC}', 0o660)
 shutil.copy2('${YAML_SRC}', '/tmp/settings.yaml.bak')
 with open('${YAML_SRC}') as f: data = yaml.safe_load(f)
-data['settings']['critical']['Security.csp_enforce']['since'] = 'v2.5.37'
+data['settings']['critical']['Security.csp_enforce']['since'] = '${MISP_VERSION}'
 data['settings']['critical']['Security.csp_enforce']['value'] = True
 with open('${YAML_SRC}', 'w') as f: yaml.dump(data, f)
 specs = load_settings_yaml()
@@ -448,7 +449,7 @@ db.query(\"DELETE FROM system_settings WHERE setting='misp_docker.defaults_versi
 os.chmod('/etc/misp-docker', 0o770); os.chmod('${YAML_SRC}', 0o660)
 shutil.copy2('${YAML_SRC}', '/tmp/settings.yaml.bak')
 with open('${YAML_SRC}') as f: data = yaml.safe_load(f)
-data['settings']['critical']['MISP.external_baseurl']['since'] = 'v2.5.37'
+data['settings']['critical']['MISP.external_baseurl']['since'] = '${MISP_VERSION}'
 data['settings']['critical']['MISP.external_baseurl']['value'] = 'https://should-not-win'
 with open('${YAML_SRC}', 'w') as f: yaml.dump(data, f)
 specs = load_settings_yaml()
@@ -593,6 +594,23 @@ ${COMPOSE} exec -T web bash -c '
 rm -f ${WORK_DIR}/misp-header-cookies
 
 # --- Org sync -----------------------------------------------------------------
+
+# --- Task runner (cronjob entrypoint) ---------------------------------------
+
+echo ""
+echo "--- Task runner ---"
+
+# update-taxonomies is quick and idempotent; pull-servers with no servers makes no call
+task_output=$(${COMPOSE} run --rm --no-deps -T -e ADMIN_KEY="${ADMIN_KEY}" -e SYNC_BASE_URL="http://caddy:8080" \
+    sync python3 -m misp_container.task update-taxonomies 2>&1) && task_rc=0 || task_rc=$?
+assert_eq "task: update-taxonomies exits 0" "0" "$task_rc"
+assert_contains "task: update-taxonomies called the API" "$task_output" "POST /taxonomies/update"
+task_output=$(${COMPOSE} run --rm --no-deps -T -e ADMIN_KEY="${ADMIN_KEY}" -e SYNC_BASE_URL="http://caddy:8080" \
+    sync python3 -m misp_container.task pull-servers 2>&1) && task_rc=0 || task_rc=$?
+assert_eq "task: pull-servers exits 0" "0" "$task_rc"
+task_output=$(${COMPOSE} run --rm --no-deps -T -e ADMIN_KEY="" sync python3 -m misp_container.task pull-servers 2>&1) && task_rc=0 || task_rc=$?
+assert_eq "task: missing ADMIN_KEY exits 1" "1" "$task_rc"
+
 
 echo ""
 echo "--- Org sync ---"
@@ -1003,23 +1021,6 @@ with urllib.request.urlopen(req, timeout=10) as resp:
 fi
 
 
-# --- Task runner (cronjob entrypoint) ---------------------------------------
-
-echo ""
-echo "--- Task runner ---"
-
-# update-taxonomies is quick and idempotent; pull-servers with no servers makes no call
-task_output=$(${COMPOSE} run --rm --no-deps -T -e ADMIN_KEY="${ADMIN_KEY}" -e SYNC_BASE_URL="http://caddy:8080" \
-    sync python3 -m misp_container.task update-taxonomies 2>&1) && task_rc=0 || task_rc=$?
-assert_eq "task: update-taxonomies exits 0" "0" "$task_rc"
-assert_contains "task: update-taxonomies called the API" "$task_output" "POST /taxonomies/update"
-task_output=$(${COMPOSE} run --rm --no-deps -T -e ADMIN_KEY="${ADMIN_KEY}" -e SYNC_BASE_URL="http://caddy:8080" \
-    sync python3 -m misp_container.task pull-servers 2>&1) && task_rc=0 || task_rc=$?
-assert_eq "task: pull-servers exits 0" "0" "$task_rc"
-task_output=$(${COMPOSE} run --rm --no-deps -T -e ADMIN_KEY="" sync python3 -m misp_container.task pull-servers 2>&1) && task_rc=0 || task_rc=$?
-assert_eq "task: missing ADMIN_KEY exits 1" "1" "$task_rc"
-
-
 # --- Multi-replica web ------------------------------------------------------
 
 echo ""
@@ -1054,11 +1055,16 @@ extra_web=$(container_ids web | tail -n +2)
 
 echo ""
 echo "--- Settings coverage ---"
-if tests/check-settings-coverage.sh "http://localhost:${TEST_PORT}" "$ADMIN_KEY"; then
-    pass "settings: all MISP settings tracked in settings.yaml"
+if PYTHONPATH="${SCRIPT_DIR}/../files" python3 "${SCRIPT_DIR}/../scripts/update_settings.py" --check \
+        --url "http://localhost:${TEST_PORT}" --key "$ADMIN_KEY"; then
+    pass "settings: every MISP setting is curated or catalogued"
 else
-    fail "settings: new untracked MISP settings found (see output above)"
+    fail "settings: new or stale settings (run scripts/update-settings.sh and review)"
 fi
+
+# Every default this image applies must be accepted by this MISP version
+cake_failures=$(${COMPOSE} logs configure 2>/dev/null | grep -c "WARNING \[cake\]" || true)
+assert_eq "configure: no rejected cake settings" "0" "$cake_failures"
 
 # --- Results ----------------------------------------------------------------
 

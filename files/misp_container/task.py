@@ -88,7 +88,9 @@ def main(argv: list[str]) -> None:
     client = MISPClient(base_url, api_key)
     client.timeout = REQUEST_TIMEOUT
     result = run_task(client, name)
-    sys.exit(1 if result["errors"] else 0)
+    # A partner that refuses one pull is that partner's problem (the metrics
+    # exporter reports it); the run only fails when no call succeeded.
+    sys.exit(1 if result["errors"] and not result["calls"] else 0)
 
 
 if __name__ == "__main__":

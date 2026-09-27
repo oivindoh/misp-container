@@ -30,33 +30,56 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Update CORE_TAG and open PR
+      - name: Update CORE_TAG
         if: steps.misp.outputs.changed == 'true'
+        run: |
+          NEW="${{ steps.misp.outputs.latest }}"
+          BRANCH="misp-update/${NEW}"
+          # Skip if a PR already exists for this version
+          EXISTING=$(gh pr list --head "${BRANCH}" --state open --json number --jq 'length')
+          if [ "${EXISTING}" -gt 0 ]; then
+            echo "PR already exists for ${BRANCH}, skipping"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          sed -i "s/^ARG CORE_TAG=.*/ARG CORE_TAG=${NEW}/" Dockerfile
+        id: bump
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Build the new version, start it, and regenerate the settings catalogue
+      # from what this MISP defines, so the PR carries the settings diff and
+      # CI's strict coverage check can pass.
+      - uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
+        if: steps.misp.outputs.changed == 'true' && steps.bump.outputs.skip != 'true'
+      - name: Regenerate the settings catalogue
+        if: steps.misp.outputs.changed == 'true' && steps.bump.outputs.skip != 'true'
+        timeout-minutes: 45
+        env:
+          COMPOSE_CMD: docker compose
+          CONTAINER_CMD: docker
+        run: |
+          pip install --quiet pyyaml
+          scripts/update-settings.sh
+
+      - name: Commit and open PR
+        if: steps.misp.outputs.changed == 'true' && steps.bump.outputs.skip != 'true'
         run: |
           NEW="${{ steps.misp.outputs.latest }}"
           OLD="${{ steps.misp.outputs.current }}"
           BRANCH="misp-update/${NEW}"
 
-          # Skip if a PR already exists for this version
-          EXISTING=$(gh pr list --head "${BRANCH}" --state open --json number --jq 'length')
-          if [ "${EXISTING}" -gt 0 ]; then
-            echo "PR already exists for ${BRANCH}, skipping"
-            exit 0
-          fi
-
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git checkout -b "${BRANCH}"
-
-          sed -i "s/^ARG CORE_TAG=.*/ARG CORE_TAG=${NEW}/" Dockerfile
-          git add Dockerfile
+          git add Dockerfile files/misp-config/settings-upstream.yaml
           git commit -m "bump MISP to ${NEW}"
           git push --force-with-lease origin "${BRANCH}"
 
-          BODY="MISP released ${NEW} (was ${OLD})."
+          BODY="MISP released ${NEW} (was ${OLD}). The settings catalogue was regenerated from ${NEW}: review the diff of files/misp-config/settings-upstream.yaml for new settings."
           BODY="${BODY}
 
-          CI will build and test automatically. After merging, tag and push to release:
+          CI builds and tests automatically. After merging, tag and push to release:
 
               git tag ${NEW}
               git push origin ${NEW}"

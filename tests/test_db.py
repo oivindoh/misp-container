@@ -91,3 +91,26 @@ class TestConfigLock:
         _, connections = fake_pymysql
         db.release_config_lock()
         assert connections == []
+
+
+class TestSplitSqlStatements:
+    def test_semicolons_in_comments_and_strings(self):
+        sql = (
+            "-- header; with a semicolon\n"
+            "/*!40101 SET NAMES utf8mb4 */;\n"
+            "CREATE TABLE t (\n  a INT -- trailing; comment\n);\n"
+            "# hash; comment\n"
+            "/* block; comment */\n"
+            "INSERT INTO t VALUES ('a;b', \"c;d\", 'it''s', 'back\\'slash;');\n"
+            "SELECT `x;y` FROM t"
+        )
+        got = db.split_sql_statements(sql)
+        assert got == [
+            "/*!40101 SET NAMES utf8mb4 */",
+            "CREATE TABLE t (\n  a INT \n)",
+            "INSERT INTO t VALUES ('a;b', \"c;d\", 'it''s', 'back\\'slash;')",
+            "SELECT `x;y` FROM t",
+        ]
+
+    def test_empty_and_comment_only_input(self):
+        assert db.split_sql_statements("-- only; a comment\n/* and; this */\n") == []

@@ -9,7 +9,7 @@
 # Build through compose: podman compose build
 #
 
-ARG CORE_TAG=v2.5.37
+ARG CORE_TAG=v2.5.47
 ARG CORE_COMMIT
 ARG PHP_VER=20240924
 
@@ -73,7 +73,9 @@ RUN sed -i '/cake-resque/d' /tmp/composer.json && \
 
 # composer:2.9.8
 COPY --from=composer:2@sha256:1364b5b9132ab4c42ea3be53e894572c32fe75a512cb3b1c3903fcc9bce53dcc /usr/bin/composer /usr/bin/composer
-RUN composer config --no-interaction allow-plugins.composer/installers true && \
+# The composer download cache survives across builds (buildah and BuildKit)
+RUN --mount=type=cache,target=/root/.composer/cache \
+    composer config --no-interaction allow-plugins.composer/installers true && \
     composer install && \
     composer require --with-all-dependencies --no-interaction \
         elasticsearch/elasticsearch:8.19.0 \
@@ -126,12 +128,17 @@ ARG MISP_GID=1000
 RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates \
     && apt-get clean -y && rm -rf /var/lib/apt/lists/*
 
+# Initialise only the submodules the image ships: PyMISP and the STIX helpers
+# under app/files/scripts are removed below, so they are never fetched.
 RUN if [ -n "${CORE_COMMIT}" ]; then \
         git clone https://github.com/MISP/MISP.git /var/www/MISP && cd /var/www/MISP && git checkout "${CORE_COMMIT}"; \
     else \
         git clone --branch "${CORE_TAG}" --depth 1 https://github.com/MISP/MISP.git /var/www/MISP; \
     fi && \
-    cd /var/www/MISP && git submodule update --init --recursive .
+    cd /var/www/MISP && \
+    git config --file .gitmodules --get-regexp path | awk '{print $2}' \
+        | grep -v -E '^(PyMISP|app/files/scripts/(cti-python-stix2|misp-stix|mixbox|python-cybox|python-maec|python-stix))$' \
+        | xargs git submodule update --init --recursive --depth 1 --
 
 # Clean and set permissions - all in one layer
 RUN find /var/www/MISP/INSTALL/* ! -name 'MYSQL.sql' -type f -exec rm {} + && \
@@ -285,7 +292,7 @@ COPY --chown=${MISP_UID}:${MISP_GID} --chmod=0550 files/entrypoint-metrics.py /e
 # Config templates and settings
 COPY --chown=${MISP_UID}:${MISP_GID} files/php-fpm-pool.conf.template /etc/misp-docker/php-fpm-pool.conf.template
 COPY --chown=${MISP_UID}:${MISP_GID} files/php.ini.template /etc/misp-docker/php.ini.template
-COPY --chown=${MISP_UID}:${MISP_GID} files/misp-config/settings.yaml /etc/misp-docker/settings.yaml
+COPY --chown=${MISP_UID}:${MISP_GID} files/misp-config/ /etc/misp-docker/
 RUN find /etc/misp-docker -type f -exec chmod 0440 {} + && \
     find /etc/misp-docker -type d -exec chmod 0550 {} +
 

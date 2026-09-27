@@ -373,14 +373,12 @@ settings:
     MISP.disable_emailing:
       description: "You can disable all e-mailing using this setting. When enabled, no outgoing e-mails will be sent by MISP"
       value: true
+      force: true
     MISP.showorgalternate:
       description: "True enables the alternate org fields for the event index (source org and member org) instead of the traditional way ..."
       value: false
 
     # Correlation
-    MISP.correlation_engine:
-      description: "Choose which correlation engine to use. MISP defaults to the default engine, maintaining all data in the database whi..."
-      value: default
     MISP.correlation_limit:
       description: "Set a value for the maximum number of correlations a value should have before MISP will refuse to correlate it (extre..."
       value: 20
@@ -424,6 +422,7 @@ settings:
     MISP.disable_cached_exports:
       description: "Cached exports can take up a considerable amount of space and can be disabled instance wide using this setting. Even ..."
       value: true
+      force: true
     MISP.download_attachments_on_load:
       description: "Always download attachments when loaded by a user in a browser. It is highly recommended to leave this setting on tru..."
       value: true
@@ -480,9 +479,11 @@ settings:
     Security.rest_client_baseurl:
       description: "If left empty, the baseurl of your MISP is used. However, in some instances (such as port-forwarded VM installations)..."
       value: https://localhost
+    # MISP rejects the value until the organisation exists; the admin step creates it later
     MISP.host_org_id:
       description: "The hosting organisation of this instance. If this is not selected then replication instances cannot be added"
       value: 1
+      force: true
     Plugin.Enrichment_hover_enable:
       description: "Enable/disable the hover over information retrieved from the enrichment modules"
       value: false
@@ -707,6 +708,7 @@ settings:
     SMIME.password:
       value: ""
       sensitive: true
+      blank_protection: true
 
   # -- s3: S3 attachment storage (only applied when PLUGIN_S3_BUCKET_NAME is set)
   s3:

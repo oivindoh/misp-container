@@ -43,6 +43,10 @@ run = "${COMPOSE_CMD:-podman compose} -f deploy/docker-compose.yml -f tests/dock
 description = "Follow sync test compose logs"
 run = "${COMPOSE_CMD:-podman compose} -f tests/docker-compose.sync-test.yml logs -f"
 
+[tasks.settings-update]
+description = "Regenerate files/misp-config/settings-upstream.yaml from a live MISP (builds and runs the test stack)"
+run = "scripts/update-settings.sh ${@}"
+
 [tasks.release]
 description = "Prepare a release: bump MISP version (optional), update image tags, create git tag"
 run = "scripts/release.sh ${@}"

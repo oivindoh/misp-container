@@ -82,7 +82,7 @@ def configure_misp() -> None:
 
         # minimum_config and db_enable live in config.php, rendered by init in every pod
         log.info("core settings")
-        for group in ("initialisation", "critical", "optional"):
+        for group in ("initialisation", "critical", "optional", "upstream"):
             apply_settings_fast(group, cache, all_specs)
 
         log.info("admin user")

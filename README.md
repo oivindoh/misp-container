@@ -87,6 +87,8 @@ Plugin.S3_bucket_name  ->  PLUGIN_S3_BUCKET_NAME
 
 If the env var exists and is non-empty, the setting is enforced on every startup. If no env var is set, the default from `settings.yaml` is applied once, then the user owns it via the MISP UI.
 
+Settings that `settings.yaml` does not name are listed in the generated `settings-upstream.yaml` with MISP's own default. The image never applies those, but the same env var convention overrides any of them.
+
 See `deploy/base/base.env` for the container-level defaults and `deploy/base/secrets.env` for secrets.
 
 ### Startup behaviour
@@ -309,7 +311,9 @@ Kubernetes. In Compose, run one on demand:
 podman compose run --rm --no-deps sync python3 -m misp_container.task pull-servers
 ```
 
-`ADMIN_KEY` must be set; `SYNC_BASE_URL` defaults to `MISP_BASEURL`.
+`ADMIN_KEY` must be set; `SYNC_BASE_URL` defaults to `MISP_BASEURL`. A partner that refuses a
+pull or push is logged and reported by the metrics exporter; the run exits 1 only when no call
+succeeded.
 
 ---
 

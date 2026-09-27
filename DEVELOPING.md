@@ -16,11 +16,20 @@ mise run test-all      # unit + integration
 
 | Suite | Tests | What it covers |
 |-------|-------|----------------|
-| Unit | 231 | Config engine, config.php rendering, advisory lock, app/Config preparation, task runner, sync engine, metrics exporter |
-| Integration | 103 | Full Compose stack: HTTP, auth, settings, PHP-FPM, workers, S3, org sync, metrics, modules enrichment |
+| Unit | 243 | Config engine, config.php rendering, advisory lock, app/Config preparation, task runner, sync engine, metrics exporter |
+| Integration | 104 | Full Compose stack: HTTP, auth, settings, PHP-FPM, workers, S3, org sync, metrics, modules enrichment |
 | Hub-spoke sync | 12 | 3 isolated MISP instances: pull, push, tag-filtered sync |
 
 Integration tests run all containers with `read_only: true` (except web, which needs to patch settings.yaml for version-gate tests) to catch filesystem write issues before they hit Kubernetes.
+
+## New MISP releases
+
+`.github/workflows/track-misp-releases.yaml` checks upstream daily. For a new release it
+bumps `CORE_TAG`, builds the image, starts the Compose stack, regenerates the settings
+catalogue from that MISP, and opens a PR with both changes. CI then builds, scans and runs
+every suite on the PR, with the strict settings check and the rejected-`cake` check as the
+early warning for changed settings and defaults. Review the catalogue diff in the PR: a
+setting that appears there with a value this image should enforce moves to `settings.yaml`.
 
 ## Releases
 
@@ -109,13 +118,31 @@ The version gate only triggers once per image version. Env vars always take prec
 - `sensitive: true` -- redact the value in logs
 - `since: v2.5.40` -- version-gated default
 
+### The upstream catalogue
+
+`files/misp-config/settings-upstream.yaml` is generated, never edited: every setting the
+running MISP defines that `settings.yaml` does not name, with MISP's own default, type and
+level, all `track_only`. The image never applies those values; the file documents
+them and makes every MISP setting overridable through its derived env var.
+
+```bash
+mise run settings-update              # build the stack, regenerate, tear down
+mise run settings-update -- --skip-build
+```
+
+The integration suite runs `scripts/update_settings.py --check` and fails when MISP defines a
+setting neither file names, or when `settings.yaml` names one MISP no longer defines. It also
+fails when the configure step logs a rejected `cake setSetting`. To give a catalogued setting
+a default of this image, move it into `settings.yaml`.
+
 ### Groups
 
 | Group | Where it lands | Who applies it |
 |-------|----------------|----------------|
 | `minimum_config`, `db_enable` | `app/Config/config.php`, rendered from the YAML value type (bool, int, string) | Every entrypoint, in every pod, on every start |
 | `s3` | `config.php` as well, when `PLUGIN_S3_BUCKET_NAME` is set | Every entrypoint |
-| all other groups | the `system_settings` table, in order `initialisation` -> `critical` -> `optional` -> `gpg` -> `s3` -> `proxy` | The configure Job |
+| all other groups | the `system_settings` table, in order `initialisation` -> `critical` -> `optional` -> `upstream` -> `gpg` -> `s3` -> `proxy` | The configure Job |
+| `upstream` (generated) | only env overrides; defaults are never written | The configure Job |
 
 MISP never reads `SystemSetting::BLOCKED_SETTINGS` (salt, encryption key, password policy,
 `python_bin`, `ca_path`, `tmpdir`, `attachments_dir`, `system_setting_db` and a few more) from
@@ -139,7 +166,11 @@ files/
     metrics.py              # Prometheus metrics collection
     sync.py                 # Declarative org/team/server sync engine
   misp-config/
-    settings.yaml           # All MISP settings in one file
+    settings.yaml           # Curated defaults this image applies
+    settings-upstream.yaml  # Generated catalogue of every other MISP setting (track_only)
+scripts/
+  update-settings.sh        # Regenerates the catalogue from a live stack
+  update_settings.py        # The catalogue tool (--check in the integration suite)
   entrypoint-configure.py   # Configure Job entrypoint
   entrypoint-web.py         # PHP-FPM entrypoint
   entrypoint-worker.py      # Worker/scheduler entrypoint
