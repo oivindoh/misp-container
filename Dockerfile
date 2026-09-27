@@ -3,8 +3,10 @@
 # Non-root MISP 2.5 Docker image
 #
 # Build targets:
-#   docker build --target final -t misp .          # PHP-FPM + workers
-#   docker build --target caddy -t misp-caddy .    # Static files + reverse proxy (~64MB)
+#   final    PHP-FPM, workers, configure, init, org sync, metrics (one image, entrypoint per role)
+#   caddy    static files + FastCGI reverse proxy (scratch)
+#   modules  misp-modules (distroless)
+# Build through compose: podman compose build
 #
 
 ARG DOCKER_HUB_PROXY=""
@@ -158,7 +160,7 @@ RUN find /var/www/MISP/INSTALL/* ! -name 'MYSQL.sql' -type f -exec rm {} + && \
     chown -R ${MISP_UID}:${MISP_GID} /var/www/MISP
 
 # =============================================================================
-# Stage 5: uv - Python package installer (pinned, used by final + sync stages)
+# Stage 5: uv - Python package installer (pinned)
 # =============================================================================
 # uv 0.11.14
 FROM ghcr.io/astral-sh/uv:latest@sha256:440fd6477af86a2f1b38080c539f1672cd22acb1b1a47e321dba5158ab08864d AS uv
@@ -278,6 +280,8 @@ COPY --chown=${MISP_UID}:${MISP_GID} --chmod=0550 files/entrypoint-init.py /entr
 COPY --chown=${MISP_UID}:${MISP_GID} --chmod=0550 files/entrypoint-configure.py /entrypoint-configure.py
 COPY --chown=${MISP_UID}:${MISP_GID} --chmod=0550 files/entrypoint-web.py /entrypoint-web.py
 COPY --chown=${MISP_UID}:${MISP_GID} --chmod=0550 files/entrypoint-worker.py /entrypoint-worker.py
+COPY --chown=${MISP_UID}:${MISP_GID} --chmod=0550 files/entrypoint-sync.py /entrypoint-sync.py
+COPY --chown=${MISP_UID}:${MISP_GID} --chmod=0550 files/entrypoint-metrics.py /entrypoint-metrics.py
 
 # Config templates and settings
 COPY --chown=${MISP_UID}:${MISP_GID} files/php-fpm-pool.conf.template /etc/misp-docker/php-fpm-pool.conf.template
@@ -297,7 +301,7 @@ ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["python3", "/entrypoint-web.py"]
 
 # =============================================================================
-# Stage 6: caddy - Static files + FastCGI reverse proxy (scratch image)
+# Stage 7: caddy - Static files + FastCGI reverse proxy (scratch image)
 # =============================================================================
 # Build with: docker build --target caddy -t misp-caddy .
 # caddy:2.11.3
@@ -337,79 +341,7 @@ EXPOSE 443
 CMD ["caddy", "run", "--config", "/etc/caddy/Caddyfile"]
 
 # =============================================================================
-# Stage 7: sync - Lightweight org/team sync tool
-# =============================================================================
-# Build with: docker build --target sync -t misp-sync .
-# Only Python + pyyaml + our sync code. No PHP, no MISP source.
-# debian:trixie-20260505-slim
-FROM "${DOCKER_HUB_PROXY}debian:trixie-slim@sha256:109e2c65005bf160609e4ba6acf7783752f8502ad218e298253428690b9eaa4b" AS sync
-ENV DEBIAN_FRONTEND=noninteractive
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        python3-minimal libpython3.13-stdlib ca-certificates tini \
-    && apt-get autoremove -y && apt-get clean -y && rm -rf /var/lib/apt/lists/* \
-              /usr/share/doc /usr/share/man
-
-COPY --from=uv /uv /tmp/uv
-COPY files/requirements-sync.txt /tmp/requirements.txt
-RUN /tmp/uv pip install --system --break-system-packages --no-cache -r /tmp/requirements.txt \
-    && rm /tmp/requirements.txt /tmp/uv
-
-ARG MISP_UID=1000
-ARG MISP_GID=1000
-
-RUN groupadd -g ${MISP_GID} misp && \
-    useradd -u ${MISP_UID} -g ${MISP_GID} -s /bin/false misp
-
-COPY --chown=${MISP_UID}:${MISP_GID} files/misp_container/ /opt/misp_container/
-COPY --chown=${MISP_UID}:${MISP_GID} --chmod=0550 files/entrypoint-sync.py /entrypoint-sync.py
-
-ENV PYTHONPATH=/opt PYTHONUNBUFFERED=1
-
-USER ${MISP_UID}
-
-ENTRYPOINT ["/usr/bin/tini", "--"]
-CMD ["python3", "/entrypoint-sync.py"]
-
-# =============================================================================
-# Stage 8: metrics - Prometheus metrics exporter
-# =============================================================================
-# Build with: docker build --target metrics -t misp-metrics .
-# Lightweight HTTP server exposing /metrics on port 9191.
-# debian:trixie-20260505-slim
-FROM "${DOCKER_HUB_PROXY}debian:trixie-slim@sha256:109e2c65005bf160609e4ba6acf7783752f8502ad218e298253428690b9eaa4b" AS metrics
-ENV DEBIAN_FRONTEND=noninteractive
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        python3-minimal libpython3.13-stdlib ca-certificates tini \
-    && apt-get autoremove -y && apt-get clean -y && rm -rf /var/lib/apt/lists/* \
-              /usr/share/doc /usr/share/man
-
-COPY --from=uv /uv /tmp/uv
-COPY files/requirements-metrics.txt /tmp/requirements.txt
-RUN /tmp/uv pip install --system --break-system-packages --no-cache -r /tmp/requirements.txt \
-    && rm /tmp/requirements.txt /tmp/uv
-
-ARG MISP_UID=1000
-ARG MISP_GID=1000
-
-RUN groupadd -g ${MISP_GID} misp && \
-    useradd -u ${MISP_UID} -g ${MISP_GID} -s /bin/false misp
-
-COPY --chown=${MISP_UID}:${MISP_GID} files/misp_container/ /opt/misp_container/
-COPY --chown=${MISP_UID}:${MISP_GID} --chmod=0550 files/entrypoint-metrics.py /entrypoint-metrics.py
-
-ENV PYTHONPATH=/opt PYTHONUNBUFFERED=1
-
-EXPOSE 9191
-
-USER ${MISP_UID}
-
-ENTRYPOINT ["/usr/bin/tini", "--"]
-CMD ["python3", "/entrypoint-metrics.py"]
-
-# =============================================================================
-# Stage 9: modules - MISP enrichment/import/export/action modules
+# Stage 8: modules - MISP enrichment/import/export/action modules
 # =============================================================================
 # Build with: docker build --target modules -t misp-modules .
 # Distroless Python on Debian 13 (trixie). No shell, no package manager.

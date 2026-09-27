@@ -7,6 +7,7 @@
 #   php-fpm               --> mariadb :3306, redis :6379
 #   worker                --> mariadb :3306, redis :6379
 #   configure job         --> mariadb :3306, redis :6379
+#   org-sync job          --> caddy :8080, mariadb :3306
 #   housekeeping          --> mariadb :3306
 #   all pods              --> kube-dns :53
 #
@@ -32,6 +33,7 @@ spec:
             - key: app.kubernetes.io/name
               operator: In
               values:
+                - org-sync
                 - cache-feeds
                 - fetch-feeds
                 - pull-servers
@@ -114,6 +116,44 @@ spec:
       toPorts:
         - ports:
             - port: "6379"
+              protocol: TCP
+    - toEndpoints:
+        - matchLabels:
+            io.kubernetes.pod.namespace: kube-system
+            k8s-app: kube-dns
+      toPorts:
+        - ports:
+            - port: "53"
+              protocol: UDP
+            - port: "53"
+              protocol: TCP
+---
+# -- org-sync job --
+# Applies orgs.yaml through the API (caddy :8080), takes the configure lock and
+# writes its run log in MariaDB.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: org-sync
+spec:
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: org-sync
+  ingress: []
+  egress:
+    - toEndpoints:
+        - matchLabels:
+            app.kubernetes.io/name: web
+      toPorts:
+        - ports:
+            - port: "8080"
+              protocol: TCP
+    - toEndpoints:
+        - matchLabels:
+            app.kubernetes.io/name: mysql
+      toPorts:
+        - ports:
+            - port: "3306"
               protocol: TCP
     - toEndpoints:
         - matchLabels:
@@ -381,6 +421,8 @@ spec:
             app.kubernetes.io/name: scheduler
         - matchLabels:
             app.kubernetes.io/name: configure
+        - matchLabels:
+            app.kubernetes.io/name: org-sync
         - matchExpressions:
             - key: app.kubernetes.io/name
               operator: In

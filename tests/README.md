@@ -104,7 +104,7 @@ GitHub Actions runs all three test suites on every push to master and on PRs:
 2. Integration tests (single instance, ~70s)
 3. Hub-spoke sync tests (3 instances, ~90s)
 
-Trivy scans all five images in parallel after tests pass.
+Trivy scans all three images in parallel after tests pass.
 
 ## Environment
 

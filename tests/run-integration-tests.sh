@@ -1002,6 +1002,23 @@ with urllib.request.urlopen(req, timeout=10) as resp:
 fi
 
 
+# --- Task runner (cronjob entrypoint) ---------------------------------------
+
+echo ""
+echo "--- Task runner ---"
+
+# update-taxonomies is quick and idempotent; pull-servers with no servers makes no call
+task_output=$(${COMPOSE} run --rm --no-deps -T -e ADMIN_KEY="${ADMIN_KEY}" -e SYNC_BASE_URL="http://caddy:8080" \
+    sync python3 -m misp_container.task update-taxonomies 2>&1) && task_rc=0 || task_rc=$?
+assert_eq "task: update-taxonomies exits 0" "0" "$task_rc"
+assert_contains "task: update-taxonomies called the API" "$task_output" "POST /taxonomies/update"
+task_output=$(${COMPOSE} run --rm --no-deps -T -e ADMIN_KEY="${ADMIN_KEY}" -e SYNC_BASE_URL="http://caddy:8080" \
+    sync python3 -m misp_container.task pull-servers 2>&1) && task_rc=0 || task_rc=$?
+assert_eq "task: pull-servers exits 0" "0" "$task_rc"
+task_output=$(${COMPOSE} run --rm --no-deps -T -e ADMIN_KEY="" sync python3 -m misp_container.task pull-servers 2>&1) && task_rc=0 || task_rc=$?
+assert_eq "task: missing ADMIN_KEY exits 1" "1" "$task_rc"
+
+
 # --- Multi-replica web ------------------------------------------------------
 
 echo ""

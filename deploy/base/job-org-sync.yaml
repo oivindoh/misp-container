@@ -1,0 +1,67 @@
+# Declarative org sync: applies the misp-orgs ConfigMap (orgs.yaml) through
+# the MISP API once the web Deployment serves (sync wave 3). Exits 0 at once
+# when ADMIN_KEY is empty or orgs.yaml has nothing to apply.
+#
+# Argo CD recreates the Job on every sync (BeforeHookCreation). With plain
+# kubectl, delete the finished Job before applying a changed spec:
+#   kubectl delete job org-sync
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: org-sync
+  labels:
+    app: org-sync
+    app.kubernetes.io/name: org-sync
+  annotations:
+    argocd.argoproj.io/hook: Sync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+    argocd.argoproj.io/sync-wave: "3"
+spec:
+  backoffLimit: 2
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        app: org-sync
+        app.kubernetes.io/name: org-sync
+    spec:
+      restartPolicy: Never
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: org-sync
+          image: ghcr.io/oivindoh/misp-container
+          command: ["/usr/bin/tini", "--", "python3", "/entrypoint-sync.py"]
+          env:
+            - name: SYNC_BASE_URL
+              value: http://web:8080
+          envFrom:
+            - configMapRef:
+                name: misp-env
+            - secretRef:
+                name: misp-secrets
+          volumeMounts:
+            - name: orgs
+              mountPath: /etc/misp-docker/orgs.yaml
+              subPath: orgs.yaml
+              readOnly: true
+          resources:
+            requests:
+              cpu: 10m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+      volumes:
+        - name: orgs
+          configMap:
+            name: misp-orgs

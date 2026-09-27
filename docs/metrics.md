@@ -1,6 +1,6 @@
 # Prometheus Metrics
 
-The `misp-metrics` container exposes operational metrics in Prometheus exposition format on port 9191.
+The metrics container (`entrypoint-metrics.py` in the main image) exposes operational metrics in Prometheus exposition format on port 9191.
 
 ## Endpoints
 

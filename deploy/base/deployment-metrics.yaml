@@ -30,7 +30,8 @@ spec:
 
       containers:
         - name: metrics
-          image: ghcr.io/oivindoh/misp-container-metrics
+          image: ghcr.io/oivindoh/misp-container
+          command: ["/usr/bin/tini", "--", "python3", "/entrypoint-metrics.py"]
           ports:
             - name: metrics
               containerPort: 9191

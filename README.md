@@ -12,14 +12,12 @@ A container image for [MISP](https://www.misp-project.org/) 2.5, designed for Ku
 
 ## Images
 
-Built from a single Dockerfile with multiple targets:
+Built from a single Dockerfile with three targets:
 
 | Target | Image | Size | Purpose |
 |--------|-------|------|---------|
-| `final` | `misp` | ~550 MB | PHP-FPM, background workers, init container |
+| `final` | `misp` | ~550 MB | PHP-FPM, background workers, init, configure, org sync, metrics exporter (one entrypoint per role) |
 | `caddy` | `misp-caddy` | ~64 MB | Static files + reverse proxy (scratch image) |
-| `sync` | `misp-sync` | ~175 MB | Declarative org/team/server sync tool |
-| `metrics` | `misp-metrics` | ~130 MB | Prometheus metrics exporter |
 | `modules` | `misp-modules` | ~296 MB | MISP enrichment/import/export modules (distroless) |
 
 ## Quick start
@@ -55,7 +53,7 @@ Default login: `admin@admin.test` / `ChangeMe-Str0ng!Pass#2026`
     +---------+          +--------++----------------------------+
 ```
 
-The `misp` image serves five roles (same image, different entrypoint):
+The `misp` image serves seven roles (same image, different entrypoint):
 
 | Role | Entrypoint | Description |
 |------|------------|-------------|
@@ -64,8 +62,10 @@ The `misp` image serves five roles (same image, different entrypoint):
 | **web** | `entrypoint-web.py` | PHP-FPM on port 9002. Waits for `MISP.live=true`, then serves. Safe to scale. |
 | **worker** | `entrypoint-worker.py` | Background job workers via supervisord. Waits for `MISP.live=true`, then processes jobs. Safe to scale. |
 | **scheduler** | `entrypoint-worker.py` | Runs only the MISP `scheduler_worker`. Must be a single replica. |
+| **org-sync** | `entrypoint-sync.py` | One-shot Job after each rollout: applies `orgs.yaml` through the API. |
+| **metrics** | `entrypoint-metrics.py` | Prometheus exporter on port 9191. |
 
-Additional containers: **caddy** (reverse proxy), **sync** (declarative org config), **metrics** (Prometheus exporter), **modules** (enrichment/import/export).
+Additional images: **caddy** (reverse proxy) and **modules** (enrichment/import/export).
 
 ### Scaling
 
@@ -138,9 +138,19 @@ When unset, Caddy serves plain HTTP on `:8080` (suitable when behind a load bala
 
 ## Declarative Org Sync
 
-The `misp-sync` container applies declarative organisation, user, server, tag, taxonomy, warninglist, and sharing group configuration from a YAML file. It runs once after MISP is ready, then exits.
+The org-sync entrypoint applies declarative organisation, user, server, tag, taxonomy, warninglist, and sharing group configuration from a YAML file. It runs once after MISP is ready, then exits: the `org-sync` Job in Kubernetes (sync wave 3), the `sync` service in Compose.
 
-See `deploy/orgs.yaml.example` for a full example. Mount your config at `/etc/misp-docker/orgs.yaml`:
+See `deploy/orgs.yaml.example` for a full example. In Kubernetes, replace the `misp-orgs` ConfigMap in your overlay:
+
+```yaml
+configMapGenerator:
+  - name: misp-orgs
+    behavior: replace
+    files:
+      - orgs.yaml=orgs.yaml
+```
+
+In Compose, mount the file at `/etc/misp-docker/orgs.yaml` on the `sync` service:
 
 ```yaml
 teams:
@@ -213,25 +223,40 @@ Mount via volume. Optional -- silently skipped if absent.
 
 ```
 deploy/
-  base/                 # Kustomize base (all resources)
+  base/                 # MISP itself: Jobs, Deployments, Services, config, attachments claim
+  components/           # Optional parts an overlay opts into
   overlays/
-    prod/               # Production overlay (KSOPS secrets example)
+    prod/               # Production overlay (KSOPS secrets example, all components)
 ```
 
-The `configure` Job carries Argo CD sync annotations: it runs in sync wave 1 and the
-Deployments in wave 2, and Argo CD recreates it on every sync. With plain `kubectl apply`,
-delete a finished Job before applying a changed spec:
+| Component | Content | Leave it out when |
+|-----------|---------|-------------------|
+| `mariadb` | StatefulSet with a 20Gi PVC | You run an external database (`MYSQL_HOST`) |
+| `redis` | Deployment without persistence | You run an external Redis (`MISP_REDIS_HOST`) |
+| `ingress-haproxy` | Ingress for the haproxy class | Another ingress or a Gateway routes to the `web` Service |
+| `netpol-cilium` | CiliumNetworkPolicies for every pod | The cluster does not run Cilium |
+| `cronjobs` | Feed, sync and update CronJobs through the API (`python3 -m misp_container.task <task>`) | The MISP scheduler runs these tasks |
+| `housekeeping` | Nightly deletes in `jobs`, `logs`, `audit_logs` | Retention is handled elsewhere |
+| `pdb` | PodDisruptionBudgets for web and worker | One replica of each |
+
+The `configure` and `org-sync` Jobs carry Argo CD sync annotations: configure runs in sync
+wave 1, the Deployments in wave 2, org-sync in wave 3, and Argo CD recreates both Jobs on
+every sync. With plain `kubectl apply`, delete a finished Job before applying a changed spec:
 
 ```bash
-kubectl delete job configure
+kubectl delete job configure org-sync
 ```
 
-Use as a Kustomize base and override per environment:
+Use the base plus the components you need, and override per environment:
 
 ```yaml
 # your-overlay/kustomization.yaml
 resources:
   - ../../base
+components:
+  - ../../components/mariadb
+  - ../../components/redis
+  - ../../components/ingress-haproxy
 configMapGenerator:
   - name: misp-env
     behavior: merge
@@ -258,13 +283,26 @@ writable and S3 is not configured.
 
 ### Network policies
 
-CiliumNetworkPolicies in `deploy/base/networkpolicy.yaml` restrict all traffic to the minimum required paths. See the file header for the full traffic flow diagram.
+The `netpol-cilium` component restricts all traffic to the minimum required paths. See the header of `deploy/components/netpol-cilium/networkpolicy.yaml` for the full traffic flow diagram.
+
+### Periodic tasks
+
+The task runner in the main image calls the MISP API for the periodic work: `cache-feeds`,
+`fetch-feeds`, `pull-servers`, `push-servers`, `update-galaxies`, `update-taxonomies`,
+`update-warninglists`, `update-noticelists`. The `cronjobs` component schedules them in
+Kubernetes. In Compose, run one on demand:
+
+```bash
+podman compose run --rm --no-deps sync python3 -m misp_container.task pull-servers
+```
+
+`ADMIN_KEY` must be set; `SYNC_BASE_URL` defaults to `MISP_BASEURL`.
 
 ---
 
 ## Metrics
 
-A Prometheus metrics exporter is included (`misp-metrics` image, port 9191). Covers instance health, content counts, server sync status, background job queues, TLS cert expiry, and org sync runs.
+A Prometheus metrics exporter is included (`entrypoint-metrics.py` in the main image, port 9191). Covers instance health, content counts, server sync status, background job queues, TLS cert expiry, and org sync runs.
 
 See [docs/metrics.md](docs/metrics.md) for the full metrics reference and example alerts.
 

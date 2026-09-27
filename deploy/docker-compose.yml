@@ -21,18 +21,6 @@ x-misp-caddy-image: &misp-caddy-image
     context: ..
     target: caddy
 
-x-misp-sync-image: &misp-sync-image
-  image: ghcr.io/oivindoh/misp-container-sync:2.5.37
-  build:
-    context: ..
-    target: sync
-
-x-misp-metrics-image: &misp-metrics-image
-  image: ghcr.io/oivindoh/misp-container-metrics:2.5.37
-  build:
-    context: ..
-    target: metrics
-
 x-misp-modules-image: &misp-modules-image
   image: ghcr.io/oivindoh/misp-container-modules:2.5.37
   build:
@@ -147,13 +135,8 @@ services:
 
   # -- Org sync (runs once after MISP is ready, then exits) ----------------
   sync:
-    <<: *misp-sync-image
-    user: "1000:1000"
-    env_file:
-      - base/base.env
-      - base/secrets.env
-      - compose.env
-      - compose-secrets.env
+    <<: *misp-common
+    command: ["python3", "/entrypoint-sync.py"]
     environment:
       SYNC_BASE_URL: http://caddy:8080
     # volumes:
@@ -180,13 +163,8 @@ services:
 
   # -- Prometheus metrics exporter ------------------------------------------
   metrics:
-    <<: *misp-metrics-image
-    user: "1000:1000"
-    env_file:
-      - base/base.env
-      - base/secrets.env
-      - compose.env
-      - compose-secrets.env
+    <<: *misp-common
+    command: ["python3", "/entrypoint-metrics.py"]
     ports:
       - "9191:9191"
     depends_on:

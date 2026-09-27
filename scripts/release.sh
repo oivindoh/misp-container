@@ -61,10 +61,13 @@ echo "Next release tag: ${NEXT_TAG}"
 echo "Image tag:        ${IMAGE_TAG}"
 echo ""
 
-# --- Update kustomization.yaml image tags ---
-echo "Updating deploy/base/kustomization.yaml..."
-sed -i '' "/name: ghcr.io\/oivindoh\/misp-container/{n;s/newTag: .*/newTag: ${IMAGE_TAG}/;}" \
-    deploy/base/kustomization.yaml
+# --- Update kustomization.yaml image tags (base and the components that pin our image) ---
+for kust in deploy/base/kustomization.yaml deploy/components/*/kustomization.yaml; do
+    if grep -q "name: ghcr.io/oivindoh/misp-container" "$kust"; then
+        echo "Updating ${kust}..."
+        sed -i '' "/name: ghcr.io\/oivindoh\/misp-container/{n;s/newTag: .*/newTag: ${IMAGE_TAG}/;}" "$kust"
+    fi
+done
 
 # --- Update docker-compose.yml image tags ---
 echo "Updating deploy/docker-compose.yml..."
@@ -93,7 +96,7 @@ if [ "$CONFIRM" != "y" ] && [ "$CONFIRM" != "Y" ]; then
 fi
 
 # --- Commit and tag ---
-git add Dockerfile deploy/base/kustomization.yaml deploy/docker-compose.yml tests/docker-compose*.yml
+git add Dockerfile deploy/base/kustomization.yaml deploy/components/*/kustomization.yaml deploy/docker-compose.yml tests/docker-compose*.yml
 git commit -m "(chore) release ${NEXT_TAG}"
 git tag "${NEXT_TAG}"
 

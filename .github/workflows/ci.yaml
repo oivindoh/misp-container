@@ -21,8 +21,6 @@ env:
   REGISTRY: ghcr.io
   IMAGE_MISP: ghcr.io/${{ github.repository }}
   IMAGE_CADDY: ghcr.io/${{ github.repository }}-caddy
-  IMAGE_SYNC: ghcr.io/${{ github.repository }}-sync
-  IMAGE_METRICS: ghcr.io/${{ github.repository }}-metrics
   IMAGE_MODULES: ghcr.io/${{ github.repository }}-modules
 
 jobs:
@@ -55,26 +53,6 @@ jobs:
             type=gha,scope=misp
             type=gha,scope=caddy
           cache-to: type=gha,mode=max,scope=caddy
-
-      - name: Build sync image
-        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
-        with:
-          context: .
-          target: sync
-          load: true
-          tags: misp-sync:latest
-          cache-from: type=gha,scope=sync
-          cache-to: type=gha,mode=max,scope=sync
-
-      - name: Build metrics image
-        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
-        with:
-          context: .
-          target: metrics
-          load: true
-          tags: misp-metrics:latest
-          cache-from: type=gha,scope=metrics
-          cache-to: type=gha,mode=max,scope=metrics
 
       - name: Build modules image
         uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
@@ -115,12 +93,6 @@ jobs:
           - target: caddy
             tag: ghcr.io/oivindoh/misp-container-caddy:scan
             scope: caddy
-          - target: sync
-            tag: ghcr.io/oivindoh/misp-container-sync:scan
-            scope: sync
-          - target: metrics
-            tag: ghcr.io/oivindoh/misp-container-metrics:scan
-            scope: metrics
           - target: modules
             tag: ghcr.io/oivindoh/misp-container-modules:scan
             scope: modules
@@ -200,8 +172,6 @@ jobs:
           echo "version=${TAG}" >> "$GITHUB_OUTPUT"
           echo "misp_tags=${{ env.IMAGE_MISP }}:${TAG}" >> "$GITHUB_OUTPUT"
           echo "caddy_tags=${{ env.IMAGE_CADDY }}:${TAG}" >> "$GITHUB_OUTPUT"
-          echo "sync_tags=${{ env.IMAGE_SYNC }}:${TAG}" >> "$GITHUB_OUTPUT"
-          echo "metrics_tags=${{ env.IMAGE_METRICS }}:${TAG}" >> "$GITHUB_OUTPUT"
           echo "modules_tags=${{ env.IMAGE_MODULES }}:${TAG}" >> "$GITHUB_OUTPUT"
 
       - name: Build and push misp (from cache)
@@ -228,28 +198,6 @@ jobs:
             type=gha,scope=misp
             type=gha,scope=caddy
 
-      - name: Build and push sync (from cache)
-        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
-        with:
-          context: .
-          target: sync
-          push: true
-          tags: ${{ steps.tags.outputs.sync_tags }}
-          provenance: true
-          sbom: true
-          cache-from: type=gha,scope=sync
-
-      - name: Build and push metrics (from cache)
-        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
-        with:
-          context: .
-          target: metrics
-          push: true
-          tags: ${{ steps.tags.outputs.metrics_tags }}
-          provenance: true
-          sbom: true
-          cache-from: type=gha,scope=metrics
-
       - name: Build and push modules (from cache)
         uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
         with:
@@ -273,8 +221,6 @@ jobs:
           Images:
           - \`${{ env.IMAGE_MISP }}:${VER}\`
           - \`${{ env.IMAGE_CADDY }}:${VER}\`
-          - \`${{ env.IMAGE_SYNC }}:${VER}\`
-          - \`${{ env.IMAGE_METRICS }}:${VER}\`
           - \`${{ env.IMAGE_MODULES }}:${VER}\`"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

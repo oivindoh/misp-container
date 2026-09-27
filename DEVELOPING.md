@@ -57,8 +57,6 @@ git push origin master <tag>
 CI runs tests, scans, pushes images, and creates a GitHub Release with:
 - `ghcr.io/oivindoh/misp-container:<version>`
 - `ghcr.io/oivindoh/misp-container-caddy:<version>`
-- `ghcr.io/oivindoh/misp-container-sync:<version>`
-- `ghcr.io/oivindoh/misp-container-metrics:<version>`
 - `ghcr.io/oivindoh/misp-container-modules:<version>`
 
 ### Tag format
@@ -153,10 +151,10 @@ files/
   entrypoint-configure.py   # Configure Job entrypoint
   entrypoint-web.py         # PHP-FPM entrypoint
   entrypoint-worker.py      # Worker/scheduler entrypoint
-  entrypoint-sync.py        # Org sync entrypoint
-  entrypoint-metrics.py     # Prometheus metrics HTTP server
+  entrypoint-sync.py        # Org sync entrypoint (org-sync Job)
+  entrypoint-metrics.py     # Prometheus metrics HTTP server (metrics Deployment)
   Caddyfile                 # Caddy configuration
-  requirements-*.txt        # Pinned Python dependencies per image
+  requirements-*.txt        # Pinned Python dependencies (final, modules)
 tests/
   test_config.py            # Unit tests for settings engine
   test_env.py               # Unit tests for env handling
@@ -167,7 +165,8 @@ tests/
   run-sync-test.sh          # Hub-spoke 3-instance sync tests
 deploy/
   docker-compose.yml        # Local development stack (podman compose)
-  base/                     # Kustomize base
+  base/                     # Kustomize base (MISP itself)
+  components/               # Optional parts: database, cache, ingress, network policy, cronjobs, PDB
   overlays/                 # Kustomize overlays
 argocd/
   application.yaml          # ArgoCD Application example
