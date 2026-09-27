@@ -22,9 +22,13 @@ run = "tests/run-integration-tests.sh"
 description = "Run hub-spoke sync test (3 MISP instances)"
 run = "tests/run-sync-test.sh"
 
+[tasks.test-migration]
+description = "Run the migration suite (MariaDB to MariaDB and to PostgreSQL)"
+run = "tests/run-migration-tests.sh"
+
 [tasks.test-all]
-description = "Run unit + integration + sync tests"
-depends = ["test", "test-integration", "test-sync"]
+description = "Run unit + integration + sync + migration tests"
+depends = ["test", "test-integration", "test-sync", "test-migration"]
 
 [tasks.smoketest]
 description = "Run smoke test against a live MISP instance"

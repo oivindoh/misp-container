@@ -1,0 +1,44 @@
+# Overlay for the migration suite (tests/run-migration-tests.sh): a second
+# MariaDB as the same-engine target, and the migrate service with the test
+# env and a fixture attachments directory mounted as the source's files.
+x-test-env: &test-env
+  env_file:
+    - base/base.env
+    - base/secrets-db.env
+    - base/secrets-app.env
+    - ../tests/test-compose.env
+    - ../tests/test-compose-secrets.env
+
+services:
+  migrate:
+    <<: *test-env
+    read_only: true
+    volumes:
+      - misp-attachments:/var/www/MISP/app/attachments
+      - migrate-tmp:/tmp
+      - ${MIGRATE_FIXTURE_DIR:-/tmp}:/mnt/source:ro
+
+  mysql-target:
+    profiles: [migrate-target]
+    image: docker.io/library/mariadb:11.8.6@sha256:78a5047d3ba33975f183f183c2464cc7f1eab13ec8667e57cc9a5821d6da7577
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --max-allowed-packet=1G
+    env_file:
+      - base/secrets-db.env
+      - ../tests/test-compose-secrets.env
+    environment:
+      MARIADB_DATABASE: misp
+    # A named volume: the stack is recreated against this database after the copy
+    volumes:
+      - mysql-target-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+volumes:
+  mysql-target-data:

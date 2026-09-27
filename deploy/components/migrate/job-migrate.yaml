@@ -1,0 +1,79 @@
+# Copies the source database into this deployment's database and, when a
+# copy of the source's attachments directory is mounted, the event
+# attachments onto the attachments claim. Runs before the configure Job on
+# an empty target; the configure step then upgrades and configures the copy.
+# The Job holds the configure lock while it copies, so a configure Job that
+# starts meanwhile waits.
+#
+# Argo CD: a Sync hook in wave 0, one wave before configure. With kubectl,
+# apply this Job first and wait for it before applying the rest.
+#
+# Attachments: mount the source copy and set MIGRATE_SOURCE_FILES to it,
+# for example with a patch in the overlay:
+#   volumes: [{name: source-files, persistentVolumeClaim: {claimName: old-misp-files}}]
+#   volumeMounts: [{name: source-files, mountPath: /mnt/source, readOnly: true}]
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: migrate
+  labels:
+    app: migrate
+    app.kubernetes.io/name: migrate
+  annotations:
+    argocd.argoproj.io/hook: Sync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app: migrate
+        app.kubernetes.io/name: migrate
+    spec:
+      restartPolicy: Never
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: migrate
+          image: ghcr.io/oivindoh/misp-container
+          command: ["/usr/bin/tini", "--", "python3", "-m", "misp_container.migrate"]
+          envFrom:
+            - configMapRef:
+                name: misp-env
+            - secretRef:
+                name: misp-db
+            - secretRef:
+                name: misp-app
+            - secretRef:
+                name: misp-migrate
+          volumeMounts:
+            - name: attachments
+              mountPath: /var/www/MISP/app/attachments
+            - name: tmp
+              mountPath: /tmp
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 2000m
+              memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+      volumes:
+        - name: attachments
+          persistentVolumeClaim:
+            claimName: attachments
+        - name: tmp
+          emptyDir:
+            sizeLimit: 100Mi

@@ -201,6 +201,52 @@ spec:
             - port: "53"
               protocol: TCP
 ---
+# -- migrate job --
+# Reads the source database (in the cluster or outside it, port 3306 unless
+# MIGRATE_SOURCE_PORT says otherwise; widen the toPorts for another port) and
+# writes the target.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: migrate
+spec:
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: migrate
+  ingress: []
+  egress:
+    - toEndpoints:
+        - matchLabels:
+            app.kubernetes.io/name: mysql
+      toPorts:
+        - ports:
+            - port: "3306"
+              protocol: TCP
+    - toEndpoints:
+        - matchLabels:
+            app.kubernetes.io/name: postgres
+      toPorts:
+        - ports:
+            - port: "5432"
+              protocol: TCP
+    - toEntities:
+        - world
+        - cluster
+      toPorts:
+        - ports:
+            - port: "3306"
+              protocol: TCP
+    - toEndpoints:
+        - matchLabels:
+            io.kubernetes.pod.namespace: kube-system
+            k8s-app: kube-dns
+      toPorts:
+        - ports:
+            - port: "53"
+              protocol: UDP
+            - port: "53"
+              protocol: TCP
+---
 # -- worker + scheduler --
 # No ingress needed. Egress to MariaDB, Redis, and DNS.
 apiVersion: cilium.io/v2
@@ -520,6 +566,8 @@ spec:
             app.kubernetes.io/name: configure
         - matchLabels:
             app.kubernetes.io/name: org-sync
+        - matchLabels:
+            app.kubernetes.io/name: migrate
         - matchExpressions:
             - key: app.kubernetes.io/name
               operator: In
@@ -568,6 +616,8 @@ spec:
             app.kubernetes.io/name: configure
         - matchLabels:
             app.kubernetes.io/name: org-sync
+        - matchLabels:
+            app.kubernetes.io/name: migrate
         - matchExpressions:
             - key: app.kubernetes.io/name
               operator: In

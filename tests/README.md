@@ -2,14 +2,15 @@
 
 ## TL;DR
 
-Three suites: unit tests on the Python library, an integration suite on one Compose stack, and a hub-spoke sync suite on three instances.
+Four suites: unit tests on the Python library, an integration suite on one Compose stack, a hub-spoke sync suite on three instances, and a migration suite that copies a seeded instance onto MariaDB and PostgreSQL.
 
 ```bash
 mise run test                # unit tests (~0.2s)
 mise run test-integration    # single-instance integration tests (~70s)
 mise run test-integration -- --postgres   # the same on PostgreSQL
 mise run test-sync           # hub-spoke sync test with 3 instances (~90s)
-mise run test-all            # unit + integration (not sync)
+mise run test-migration      # migrate Job: MariaDB to MariaDB, MariaDB to PostgreSQL (~3min)
+mise run test-all            # every suite
 ```
 
 All integration tests build the images with compose, start full MISP stacks, and tear them down automatically. Pass `--skip-build` to reuse existing images.
@@ -104,6 +105,25 @@ Run with: `mise run test-integration`
 
 Run with: `mise run test-sync`
 
+## Migration suite
+
+`run-migration-tests.sh` starts the integration stack on MariaDB, seeds it (an org with a
+user, a sync user with a known authkey, a sync server, an event with an attachment) and
+records the row counts. It then runs the migrate Job into a second MariaDB and checks the
+refusals (a non-empty target, an identity mismatch, `MIGRATE_FORCE`), points the stack at the
+copy and checks it: row counts, both authkeys, the org, the server, the event, the attachment
+download, the fixture attachment copied from the mounted source files, `MISP.live` set by the
+configure step, and the run in the sync log. The same copy and checks then run onto
+PostgreSQL, plus the id sequences.
+
+**Files:**
+- `run-migration-tests.sh` -- test script
+- `docker-compose.migrate.yml` -- overlay: the second MariaDB (`mysql-target`) and the migrate service with the fixture files mounted
+- `docker-compose.migrate-mysql.yml`, `migrate-target-mysql.env` -- point the stack at `mysql-target` after the copy
+- `migrate-orgs.yaml` -- seed content for the org sync
+
+Run with: `mise run test-migration`
+
 ## CI
 
 GitHub Actions on every push to master and every PR:
@@ -115,6 +135,7 @@ GitHub Actions on every push to master and every PR:
 | `integration` | This suite on MariaDB, against the images from `build` (`MISP_IMAGE_TAG=ci`) |
 | `integration-postgres` | This suite on PostgreSQL, in parallel |
 | `hub-spoke` | The sync suite, in parallel with `integration` |
+| `migration` | The migration suite, in parallel |
 | `scan` | Trivy on the three images |
 | `release` | On a tag: push the images and create the GitHub Release, after every other job |
 

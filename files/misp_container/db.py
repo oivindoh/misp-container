@@ -80,8 +80,12 @@ def ago(amount: int, unit: str) -> str:
 
 def _connect(autocommit: bool = True):
     """A DB-API connection from the environment."""
-    s = settings()
-    if is_postgres():
+    return connect_to(settings(), engine(), autocommit)
+
+
+def connect_to(s: dict, target_engine: str, autocommit: bool = True):
+    """A DB-API connection to the database that settings() shaped `s` names."""
+    if target_engine == POSTGRES:
         import pg8000.dbapi
         kwargs = {"user": s["user"], "password": s["password"], "host": s["host"],
                   "port": s["port"], "database": s["database"]}

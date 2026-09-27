@@ -30,6 +30,7 @@ mise run test-all      # unit + integration + sync
 | Unit | 271 | Config engine, config.php rendering, advisory lock, database helpers, app/Config preparation, task runner, sync engine, metrics exporter |
 | Integration | 111 | Full Compose stack: HTTP, auth, settings, PHP-FPM, workers, S3, org sync, metrics, modules enrichment |
 | Hub-spoke sync | 12 | 3 isolated MISP instances: pull, push, tag-filtered sync |
+| Migration | 48 | The migrate Job: a seeded MariaDB copied onto a second MariaDB and onto PostgreSQL, refusals, the copy checked through the API |
 
 The integration suite runs every container with `read_only: true` (except web, whose version-gate checks patch `settings.yaml` in place) to catch filesystem writes before Kubernetes does, and prints the wall time of each section. Set `COMPOSE_CMD` and `CONTAINER_CMD` for another runner; CI uses `docker compose` and `docker`.
 
@@ -186,6 +187,7 @@ files/
     config.py               # Settings diff engine (SettingSpec, SettingsCache)
     db.py                   # Engine-neutral database layer (pymysql or pg8000), lock, schema import
     housekeeping.py         # Nightly deletes (housekeeping component)
+    migrate.py              # Copy of an existing MySQL/MariaDB MISP database (migrate component)
     env.py                  # Environment variable defaults
     init.py                 # Per-pod preparation: app/Config rendering, GPG key import
     configure.py            # One-shot configuration (configure Job)

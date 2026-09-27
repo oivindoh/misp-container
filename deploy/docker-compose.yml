@@ -166,6 +166,31 @@ services:
       mysql:
         condition: service_healthy
 
+  # -- Migration of an existing MySQL/MariaDB MISP into this stack (one-off):
+  #    podman compose --profile migrate run --rm migrate
+  #    Source connection: components/migrate/secrets-migrate.env. To copy the
+  #    attachments, mount the source's attachments directory at /mnt/source and
+  #    set MIGRATE_SOURCE_FILES=/mnt/source. See docs/migration.md.
+  migrate:
+    <<: *misp-image
+    profiles: [migrate]
+    command: ["python3", "-m", "misp_container.migrate"]
+    env_file:
+      - base/base.env
+      - base/secrets-db.env
+      - base/secrets-app.env
+      - compose.env
+      - compose-secrets.env
+      - components/migrate/secrets-migrate.env
+    user: "1000:1000"
+    volumes:
+      - misp-attachments:/var/www/MISP/app/attachments
+      - migrate-tmp:/tmp
+      # - /srv/old-misp/app/files:/mnt/source:ro
+    depends_on:
+      mysql:
+        condition: service_healthy
+
   # -- Tools (podman compose --profile tools run --rm composer-lock) ---------
   composer-lock:
     profiles: [tools]
@@ -245,6 +270,7 @@ volumes:
   misp-img-orgs:
   misp-img-custom:
   configure-tmp:
+  migrate-tmp:
   php-tmp:
   worker-misp-tmp:
   worker-tmp:

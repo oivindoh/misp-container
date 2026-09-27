@@ -1,0 +1,16 @@
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+
+# One-off migration of an existing MySQL or MariaDB MISP database into this
+# deployment (the mariadb or the postgres component). Add the component for
+# the first sync, remove it once the Job has succeeded. The source connection
+# is the misp-migrate Secret (secrets-migrate.env); see docs/migration.md.
+resources:
+  - job-migrate.yaml
+secretGenerator:
+  - name: misp-migrate
+    envs:
+      - secrets-migrate.env
+images:
+  - name: ghcr.io/oivindoh/misp-container
+    newTag: 2.5.37

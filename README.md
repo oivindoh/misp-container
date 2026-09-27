@@ -213,6 +213,7 @@ deploy/
 | `cronjobs` | Feed, sync and update CronJobs through the API | The MISP scheduler runs these tasks |
 | `housekeeping` | Nightly deletes in `jobs`, `logs`, `audit_logs` (`HOUSEKEEPING_<TABLE>_DAYS`) | Retention is handled elsewhere |
 | `pdb` | PodDisruptionBudgets for web and worker | One replica of each |
+| `migrate` | One-off Job copying an existing MySQL/MariaDB MISP into the database, see [docs/migration.md](docs/migration.md) | Always, once the Job has run |
 
 An overlay lists the base, the components it wants, and its own values:
 
@@ -242,6 +243,7 @@ reads too:
 | `misp-db` | `secrets-db.env` | `DB_USER`, `DB_PASSWORD`, `MYSQL_ROOT_PASSWORD` (mariadb only) | configure, web, worker, scheduler, org-sync, housekeeping, the mariadb or postgres component; metrics gets user and password only |
 | `misp-app` | `secrets-app.env` | `MISP_REDIS_PASSWORD`, `GNUPG_PASSWORD`, `SECURITY_ENCRYPTION_KEY`, `SECURITY_SALT` | configure, web, worker, scheduler, redis |
 | `misp-admin` | `secrets-admin.env` | `ADMIN_PASSWORD`, `ADMIN_KEY` | configure, org-sync, cronjobs. With `ADMIN_KEY` empty MISP generates a key, org-sync exits without changes, and the cronjobs fail with a clear message |
+| `misp-migrate` | `components/migrate/secrets-migrate.env` | `MIGRATE_SOURCE_*`, `MIGRATE_FORCE` | The migrate Job only |
 
 The base files hold placeholders that the configure Job refuses. Supply the real Secrets
 from your overlay through KSOPS, as `deploy/overlays/prod` does: an encrypted
@@ -409,8 +411,10 @@ and org-sync runs. See
 
 ## Migration
 
-See [docs/migration.md](docs/migration.md) for moving an existing MISP instance onto this
-system.
+The migrate Job (`migrate` component, Compose profile `migrate`) copies an existing MySQL
+or MariaDB MISP database into this deployment, on either engine, and the event attachments
+onto the attachments volume; the configure Job then upgrades the copy. See
+[docs/migration.md](docs/migration.md).
 
 ## Development
 

@@ -1,259 +1,153 @@
 # Migrating an existing MISP instance
 
-This guide covers migrating from an existing MISP installation (official misp-docker, bare-metal, or VM) to this container image.
+The migrate Job copies an existing MISP database (MySQL or MariaDB: the official misp-docker,
+a VM, a bare-metal install) into this deployment, on the `mariadb` or the `postgres` component,
+and copies the event attachments onto the attachments volume. The configure Job then upgrades
+and configures the copy as on any release upgrade.
 
 ## TL;DR
 
-1. Dump the old database (`mysqldump --single-transaction --hex-blob`), copy `app/files`
-   attachments and, if you keep it, `.gnupg`.
-2. Put the old instance's `Security.salt`, `Security.encryption_key` and `MISP.uuid` into the
-   new secrets and config: without them every password, authkey and sync relationship breaks.
-3. Start only the database, import the dump, copy the files in, then start the stack. The
-   configure step runs `cake Admin runUpdates` for the schema gap.
-4. In Kubernetes, the same order: the `mariadb` component first, restore into it, files onto the
-   `attachments` claim (or S3), then the first sync.
+1. Read `Security.salt`, `Security.encryption_key` and `MISP.uuid` from the old instance
+   (`config.php` or `system_settings`) into `misp-app` and `misp-env` (Compose:
+   `compose-secrets.env` and `compose.env`). The Job refuses to run when a value it can read
+   on the source differs.
+2. Give the Job the source connection (`secrets-migrate.env`) and, to copy attachments, a
+   mounted copy of the old `MISP.attachments_dir` (`app/files` by default).
+3. Set the old instance read-only (`MISP.live=false`), then run the Job before the first
+   configure run: Argo CD orders it (sync wave 0) when the `migrate` component is in the
+   overlay; with kubectl or Compose, run it by hand first.
+4. Remove the component (or profile) once the Job has succeeded. Users log in again; org
+   logos, custom images, terms and the GPG keyring are copied by hand.
 
-## What migrates
-
-| Data | How | Notes |
-|------|-----|-------|
-| Events, attributes, objects | MySQL dump/restore | Full fidelity |
-| Organisations, users, roles | MySQL dump/restore | Passwords, authkeys preserved |
-| Server sync configs | MySQL dump/restore | Authkeys, pull/push rules preserved |
-| Tags, taxonomies, galaxies | MySQL dump/restore | Custom tags preserved |
-| Warninglists | MySQL dump/restore | Custom warninglists preserved |
-| Sharing groups | MySQL dump/restore | Membership preserved |
-| File attachments | Copy to `app/attachments/` (Compose volume or the Kubernetes `attachments` claim) | Or migrate to S3 |
-| GPG keys | Copy `.gnupg/` | Or generate new |
-| MISP settings | MySQL dump/restore | Stored in `system_settings` table |
-
-## What does NOT migrate
-
-- **PHP sessions** -- users will need to log in again
-- **Redis cache** -- rebuilt automatically on startup
-- **CakePHP cache** -- rebuilt automatically
-- **Log files** -- start fresh (logs go to stdout anyway)
-- **config.php** -- regenerated from env vars (settings in DB take precedence)
-
-## Prerequisites
-
-- podman with a compose provider
-- Access to the existing MISP database (mysqldump)
-- Access to the existing MISP file system (for attachments and GPG keys)
-
-## Step 1: Export from the existing instance
-
-### Database dump
-
-```bash
-# On the existing MISP server
-mysqldump -u root -p --single-transaction --routines --triggers \
-    --hex-blob --default-character-set=utf8mb4 \
-    misp > misp-backup.sql
+```mermaid
+flowchart LR
+    S[(old MISP<br/>MySQL / MariaDB)] -->|rows, table by table| J[migrate Job]
+    F[/old app/files/] -->|event directories| J
+    J --> T[(mariadb or postgres<br/>component)]
+    J --> A[/attachments claim/]
+    T --> C[configure Job<br/>runUpdates, settings, MISP.live]
+    C --> W[web, worker]
 ```
 
-`--hex-blob` encodes binary columns as hex literals instead of raw bytes, avoiding character-set corruption on import. `--default-character-set=utf8mb4` ensures multi-byte text survives the round-trip.
+## What the Job does
 
-If using the official misp-docker:
-```bash
-docker compose exec db mysqldump -u root -p --single-transaction \
-    --hex-blob --default-character-set=utf8mb4 \
-    misp > misp-backup.sql
-```
+| Step | Same engine (target `mysql`) | Cross engine (target `postgres`) |
+|------|------------------------------|----------------------------------|
+| Identity | `MISP.uuid` and the salt and key, where the source stores them, must equal this deployment's values (exit 4) | same |
+| Target | must be empty (exit 3), or `MIGRATE_FORCE=true` drops every table first | same |
+| Schema | each table created from the source's own `CREATE TABLE` (MySQL 8 collations mapped for MariaDB) | this image's PostgreSQL baseline; the source must be at the same `db_version` and ledger state (exit 5) |
+| Rows | every table, whole | every table the baseline has, by column name; flags become booleans, zero dates become NULL; the id sequences move past the copied ids |
+| After | `MISP.live=false` on the copy, so web and worker wait for the configure Job | same |
+| Files | the event directories of `MIGRATE_SOURCE_FILES` into the attachments volume | same |
 
-If migrating from an existing MariaDB instance (same major version), you can alternatively use `mariadb-backup` for a binary-level physical copy, which avoids text encoding entirely:
-```bash
-docker compose exec db mariadb-backup --backup --user=root \
-    --password=<root-password> --databases=misp \
-    --stream=mbstream > misp-backup.mbstream
-```
+The Job holds the configure lock while it copies. A configure Job that starts meanwhile waits
+for it, and then runs `cake Admin runUpdates` on the copy: a source on an older MISP release is
+upgraded there, as on any release upgrade. A source at a newer schema than this image is not
+supported; take the image of the same or a newer release.
 
-### File attachments
+A cross-engine copy of an old source is two hops: same engine onto the `mariadb` component,
+a configure run to upgrade it, then a cross-engine copy from that database onto `postgres`.
 
-```bash
-# Copy the attachments directory
-tar czf misp-files.tar.gz -C /var/www/MISP/app files/
-```
+| Exit code | Meaning |
+|-----------|---------|
+| 0 | Copied |
+| 1 | The copy failed part way; the target holds a partial copy, run again with `MIGRATE_FORCE=true` |
+| 2 | Configuration: no `MIGRATE_SOURCE_HOST`, or the source refuses the connection |
+| 3 | The target database is not empty |
+| 4 | An identity setting on the source differs from this deployment's |
+| 5 | The source schema is not this image's (cross engine only) |
 
-If attachments are already on S3, skip this step.
+The run is recorded in `misp_container_sync_log` (operation `migrate`), so the metrics
+exporter reports it like a configure run.
 
-### GPG keys (optional)
+## Configuration
 
-```bash
-tar czf misp-gnupg.tar.gz -C /var/www/MISP .gnupg/
-```
+| Variable | Meaning |
+|----------|---------|
+| `MIGRATE_SOURCE_HOST`, `MIGRATE_SOURCE_PORT` | The source database (port 3306 by default) |
+| `MIGRATE_SOURCE_NAME`, `MIGRATE_SOURCE_USER`, `MIGRATE_SOURCE_PASSWORD` | Database (`misp` by default) and a user that can read it |
+| `MIGRATE_SOURCE_TLS` | `true` for a TLS connection |
+| `MIGRATE_SOURCE_FILES` | A mounted copy of the source's attachments directory; unset copies no files |
+| `MIGRATE_FORCE` | `true` drops a non-empty target first |
 
-Skip if you want to generate new GPG keys (recommended for fresh starts).
+The target is the deployment's own `DB_*` connection.
 
-## Step 2: Prepare the new stack
+## Kubernetes
 
-Clone this repository and configure:
+1. Put the source connection in `deploy/components/migrate/secrets-migrate.env` (or a KSOPS
+   Secret named `misp-migrate` in the overlay).
+2. Add the `migrate` component to the overlay. To copy attachments, patch the Job with a
+   volume for the old files and set `MIGRATE_SOURCE_FILES` to its mount path:
 
-```bash
-git clone https://github.com/oivindoh/misp-container.git
-cd misp-container/deploy
-```
+   ```yaml
+   # overlay: patch on the migrate Job
+   - op: add
+     path: /spec/template/spec/volumes/-
+     value: {name: source-files, persistentVolumeClaim: {claimName: old-misp-files}}
+   - op: add
+     path: /spec/template/spec/containers/0/volumeMounts/-
+     value: {name: source-files, mountPath: /mnt/source, readOnly: true}
+   ```
 
-Edit `compose-secrets.env` with your passwords:
-```bash
-MYSQL_PASSWORD=<your-db-password>
-MYSQL_ROOT_PASSWORD=<your-root-password>
-MISP_REDIS_PASSWORD=<your-redis-password>
-ADMIN_PASSWORD=<your-admin-password>
-SECURITY_SALT=<salt-from-the-old-instance>
-```
+3. Argo CD: sync. The Job runs in wave 0, the configure Job in wave 1, the Deployments in
+   wave 2. Kubectl: apply the Job alone first and wait for it, then apply the rest:
 
-Edit `compose.env` with your instance URL and UUID:
-```bash
-MISP_BASEURL=https://your-misp.example.com
-MISP_UUID=<uuid-from-the-old-instance>
-```
+   ```bash
+   kubectl apply -k overlay/ --selector app.kubernetes.io/name=migrate
+   kubectl -n misp wait --for=condition=complete job/migrate --timeout=1h
+   kubectl apply -k overlay/
+   ```
 
-## Step 3: Start infrastructure only
+4. Remove the component after the first successful sync. The finished Job stays for a day
+   (`ttlSecondsAfterFinished`) for its log.
 
-Start MySQL and Redis without MISP (so we can import the dump before MISP touches the DB):
+With the `netpol-cilium` component the Job may reach the source on port 3306 in the cluster
+or outside it; widen its policy for another port.
 
-```bash
-podman compose up -d mysql redis
-```
-
-Wait for MySQL to be healthy:
-```bash
-podman compose exec mysql mariadb -u root -p<root-password> -e "SELECT 1"
-```
-
-## Step 4: Import the database
-
-If you used `mysqldump`:
-```bash
-# Create the database if it doesn't exist
-podman compose exec -T mysql mariadb -u root -p<root-password> \
-    -e "CREATE DATABASE IF NOT EXISTS misp CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
-
-# Import the dump
-podman compose exec -T mysql mariadb -u root -p<root-password> \
-    --default-character-set=utf8mb4 misp < misp-backup.sql
-```
-
-If you used `mariadb-backup`:
-```bash
-# Stop the database, prepare and restore
-podman compose stop mysql
-podman compose exec -T mysql mbstream -x -C /var/lib/mysql < misp-backup.mbstream
-podman compose exec -T mysql mariadb-backup --prepare --target-dir=/var/lib/mysql
-podman compose start mysql
-```
-
-### Version check
-
-If migrating from MISP 2.4.x, the schema upgrade will run automatically on first startup. MISP's `cake Admin runUpdates` handles this. No manual migration needed.
-
-If migrating from a different MISP 2.5.x version, schema updates also run automatically.
-
-## Step 5: Restore files
-
-### Attachments (Compose only -- for Kubernetes, use the PVC or S3)
-
-This image stores attachments in `app/attachments/` (a dedicated volume), separate from `app/files/`, which ships in the image. Image upgrades never touch your uploaded data.
+## Compose
 
 ```bash
-# Extract into a temporary directory
-mkdir -p /tmp/misp-restore
-tar xzf misp-files.tar.gz -C /tmp/misp-restore
-
-# Create the web container (and its volumes) without starting it, then copy files in
-podman compose create web
-podman compose cp /tmp/misp-restore/files/. web:/var/www/MISP/app/attachments/
-```
-
-In Kubernetes, copy the files onto the `attachments` claim (a temporary pod with the claim mounted and `kubectl cp`), or use S3: see [Migrating to S3 storage](#migrating-to-s3-storage) below.
-
-### GPG keys (optional)
-
-```bash
-tar xzf misp-gnupg.tar.gz -C /tmp/misp-restore
-podman compose cp /tmp/misp-restore/.gnupg/. web:/var/www/MISP/.gnupg/
-```
-
-## Step 6: Start the full stack
-
-```bash
+cd deploy
+# source connection in components/migrate/secrets-migrate.env; salt, key and UUID in
+# compose-secrets.env and compose.env
+podman compose up -d mysql redis            # or: --profile postgres up -d postgres redis
+podman compose --profile migrate run --rm \
+    -v /srv/old-misp/app/files:/mnt/source:ro -e MIGRATE_SOURCE_FILES=/mnt/source migrate
 podman compose up -d
 ```
 
-MISP will:
-1. Run schema migrations if needed (`cake Admin runUpdates`)
-2. Apply settings: env-driven settings are enforced, defaults from `settings.yaml` are written only where the setting is missing
-3. Start PHP-FPM and background workers
+## Files copied by hand
 
-## Step 7: Verify
+| Data | Where it goes |
+|------|---------------|
+| Org logos (`app/webroot/img/orgs`) and custom images (`app/webroot/img/custom`) | The attachments claim under `img/orgs` and `img/custom` (Kubernetes); the `misp-img-orgs` and `misp-img-custom` volumes (Compose) |
+| Terms, server certificates | The `misp-certs` Secret (Kubernetes, see the README); the `misp-files-terms` and `misp-files-certs` volumes (Compose) |
+| GPG keyring | The `misp-gnupg` Secret from the old `private.asc` export; or `AUTOCONF_GPG=true` for a new key, re-exported to sync partners |
+| Attachments already on S3 | Nothing: point `PLUGIN_S3_*` at the same bucket |
 
-```bash
-# Check logs
-podman compose logs web --tail=20
+Sessions, the Redis cache, the CakePHP cache and log files are not copied.
 
-# Verify web UI
-open http://localhost:8080
+## Cut-over
 
-# Check event count
-curl -sf -H "Authorization: <your-api-key>" \
-    http://localhost:8080/events/index | jq length
-```
+1. Set `MISP.live=false` on the old instance so no event changes during the copy.
+2. Run the Job and the first sync. Check the copy: log in, open an event with an attachment,
+   list the sync servers.
+3. Move the DNS name or the ingress to the new instance.
+4. To go back, point the name back at the old instance and set `MISP.live=true` there; the
+   old database was only read.
 
-### Common issues after migration
+## After the copy
 
-**"MISP.live is not set"** -- The configure step sets this last. Web and worker containers wait for it and retry.
-
-**"CSRF validation failed"** -- If running multiple web replicas, ensure `SECURITY_SALT` and `MISP_UUID` are set and match the values from your old instance:
-```bash
-# Get from old DB
-SELECT value FROM system_settings WHERE setting='Security.salt';
-SELECT value FROM system_settings WHERE setting='MISP.uuid';
-```
-Set these in `compose-secrets.env` and `compose.env`:
-```bash
-SECURITY_SALT=<value-from-old-instance>
-MISP_UUID=<value-from-old-instance>
-```
-
-**"GPG key not found"** -- Either restore your old `.gnupg` directory or set `AUTOCONF_GPG=true` to generate a new key. If you generate a new key, you'll need to re-export it to sync partners.
-
-**Password doesn't work** -- The admin password from `ADMIN_PASSWORD` env var is only set on first run (when the user doesn't exist). If the user already exists in the imported DB, the env var is ignored. Use the password from your old instance.
-
-**Workers not processing** -- Check that `SIMPLEBACKGROUNDJOBS_SUPERVISOR_HOST` is set correctly: `worker`, the service name in both Compose and Kubernetes.
-
-## PostgreSQL as the target
-
-MISP's PostgreSQL support is a fresh-install path: the baseline schema and the migrations
-run on PostgreSQL, but MISP ships nothing that moves a MySQL or MariaDB database over. A
-`mysqldump` cannot be loaded into PostgreSQL. Migrate an existing instance onto the
-`mariadb` component; start new instances on `postgres` if you want that engine.
-
-## Migrating to S3 storage
-
-If your old instance uses local file storage and you want to switch to S3:
-
-1. Complete the migration above with local files first
-2. Set up your S3 bucket (AWS, MinIO, Garage, Ceph)
-3. Configure S3 in `compose.env` (the env var names follow the MISP setting names):
-   ```
-   PLUGIN_S3_BUCKET_NAME=misp-attachments
-   PLUGIN_S3_AWS_ENDPOINT=https://s3.example.com
-   PLUGIN_S3_AWS_ACCESS_KEY=...
-   PLUGIN_S3_AWS_SECRET_KEY=...
-   PLUGIN_S3_REGION=...
-   ```
-4. Migrate existing attachments to S3 using the MISP admin tool:
-   ```bash
-   podman compose exec web /var/www/MISP/app/Console/cake Admin migrateToS3
-   ```
+- **Passwords and authkeys** work as before when the salt and encryption key are the old
+  ones. `ADMIN_PASSWORD` applies only when the admin user does not exist.
+- **Settings** stored in the old database are kept, except those this image drives from
+  env (`MISP.baseurl`, Redis, workers, the attachments directory, ...), which the configure
+  Job enforces.
+- **A new GPG key** must be re-exported to sync partners.
 
 ## Migrating from official misp-docker
 
-The official [MISP/misp-docker](https://github.com/MISP/misp-docker) uses the same MySQL schema, so the database dump/restore works directly.
-
-Key differences to account for:
-- **User UID**: Official image runs as `www-data` (33), ours runs as UID 1000. File ownership in mounted volumes may need adjusting.
-- **No .dist pattern**: Our image doesn't use the `.dist` directory sync. `app/files` ships in the image; only `scripts/tmp`, `certs`, `terms` and `img/orgs` are volumes.
-- **No rsync/supervisord in web**: Workers run in a separate container, not inside the web container.
-- **No root at runtime**: The entrypoint never runs as root. All file permissions are set at build time.
+The database schema is the same, so the Job copies it directly. Differences to account for:
+the official image runs as `www-data` (33), this one as UID 1000, so copied files need
+`chown`; `app/files` ships in this image and only the attachments, `scripts/tmp`, `certs`,
+`terms` and `img/orgs` are volumes; workers run in their own container.
