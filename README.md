@@ -206,6 +206,18 @@ Every entrypoint imports `private.asc` from the optional Secret `misp-gnupg` at 
 in place. Compose sets `AUTOCONF_GPG=true` instead, which generates a key in the
 `misp-gnupg` volume on first start.
 
+### Sync server certificates
+
+MISP reads a sync server's certificate from `app/files/certs/<server id>.pem`. That directory
+is per pod, so supply the files as the optional Secret `misp-certs`; every pod copies them
+into place at start:
+
+```bash
+kubectl -n misp create secret generic misp-certs --from-file=3.pem --from-file=7.pem
+```
+
+A certificate uploaded through the UI lands on one replica only.
+
 ### Custom scripts
 
 Two hook points for custom Python during startup:

@@ -16,8 +16,8 @@ mise run test-all      # unit + integration
 
 | Suite | Tests | What it covers |
 |-------|-------|----------------|
-| Unit | 215 | Config engine, config.php rendering, advisory lock, app/Config preparation, task runner, sync engine, metrics exporter |
-| Integration | 99 | Full Compose stack: HTTP, auth, settings, PHP-FPM, workers, S3, org sync, metrics, modules enrichment |
+| Unit | 231 | Config engine, config.php rendering, advisory lock, app/Config preparation, task runner, sync engine, metrics exporter |
+| Integration | 103 | Full Compose stack: HTTP, auth, settings, PHP-FPM, workers, S3, org sync, metrics, modules enrichment |
 | Hub-spoke sync | 12 | 3 isolated MISP instances: pull, push, tag-filtered sync |
 
 Integration tests run all containers with `read_only: true` (except web, which needs to patch settings.yaml for version-gate tests) to catch filesystem write issues before they hit Kubernetes.

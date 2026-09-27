@@ -185,3 +185,25 @@ class TestPrepareConfig:
         with patch.dict(os.environ, {"MISP_CONFIG_DEFAULTS": str(defaults), "MYSQL_PORT": "3306", "SMTP_PORT": "25"}):
             init_mod.prepare_config()
         assert (config_dir / "core.php").read_text() == "<?php // mine"
+
+
+class TestPopulateCerts:
+    """Server certificates from the optional Secret mount."""
+
+    def test_copies_files_into_certs_dir(self, tmp_path):
+        from misp_container.init import populate_certs
+        src = tmp_path / "secret"
+        src.mkdir()
+        (src / "3.pem").write_text("cert")
+        (src / "..data").mkdir()
+        dst = tmp_path / "certs"
+        with patch.dict(os.environ, {"MISP_CERTS_SOURCE": str(src), "MISP_CERTS_DIR": str(dst)}):
+            populate_certs()
+        assert (dst / "3.pem").read_text() == "cert"
+        assert not (dst / "..data").exists()
+
+    def test_no_secret_is_noop(self, tmp_path):
+        from misp_container.init import populate_certs
+        with patch.dict(os.environ, {"MISP_CERTS_SOURCE": str(tmp_path / "absent"), "MISP_CERTS_DIR": str(tmp_path / "certs")}):
+            populate_certs()
+        assert not (tmp_path / "certs").exists()

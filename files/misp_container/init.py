@@ -21,6 +21,8 @@ log = getlog("prepare")
 MISP_CONFIG = f"{MISP_BASE}/app/Config"
 MISP_TMP = f"{MISP_BASE}/app/tmp"
 GNUPG_KEY_FILE = "/etc/misp-docker/gnupg/private.asc"
+CERTS_DIR = "/etc/misp-docker/certs"
+MISP_CERTS = f"{MISP_BASE}/app/files/certs"
 
 # shutil.copy2 copies extended attributes, including the SELinux label of the
 # source, which other containers cannot read. shutil.copy copies mode bits only.
@@ -44,6 +46,7 @@ def prepare():
     setup_tmp()
     prepare_config()
     populate_gnupg()
+    populate_certs()
 
 
 def setup_tmp():
@@ -132,6 +135,26 @@ def populate_gnupg():
         trust = "".join(f"{fpr}:6:\n" for fpr in fingerprints)
         subprocess.run(gpg + ["--import-ownertrust"], input=trust, text=True, check=True)
     log.info("GPG key imported (%d fingerprint(s))", len(fingerprints))
+
+
+def populate_certs():
+    """Copy sync server certificates from the mounted Secret into app/files/certs.
+
+    MISP stores a server's certificate as app/files/certs/<server id>.pem. The
+    directory is a per-pod volume, so the Secret (misp-certs) carries them to
+    every pod. Files uploaded through the UI on one replica stay on that replica.
+    """
+    src = Path(env("MISP_CERTS_SOURCE", CERTS_DIR))
+    if not src.is_dir():
+        return
+    dst = Path(env("MISP_CERTS_DIR", MISP_CERTS))
+    dst.mkdir(parents=True, exist_ok=True)
+    count = 0
+    for item in sorted(src.iterdir()):
+        if item.is_file():
+            _copy(item, dst / item.name)
+            count += 1
+    log.info("copied %d server certificate(s) from %s", count, src)
 
 
 def check_writable(path, purpose):

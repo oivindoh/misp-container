@@ -78,6 +78,9 @@ spec:
             - name: gnupg-key
               mountPath: /etc/misp-docker/gnupg
               readOnly: true
+            - name: certs
+              mountPath: /etc/misp-docker/certs
+              readOnly: true
             - name: attachments
               mountPath: /var/www/MISP/app/attachments
             - name: scheduler-tmp
@@ -140,3 +143,7 @@ spec:
         - name: attachments
           persistentVolumeClaim:
             claimName: attachments
+        - name: certs
+          secret:
+            secretName: misp-certs
+            optional: true

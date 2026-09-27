@@ -9,6 +9,7 @@ from __future__ import annotations
 import socket
 import ssl
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -380,17 +381,32 @@ def _check_tls_cert(hostname: str, port: int = 443, timeout: int = 5) -> float |
         return None
 
 
+# MISP stores servers.authkey as this marker plus ciphertext once
+# Security.encryption_key is set (EncryptedValue::ENCRYPTED_MAGIC)
+ENCRYPTED_MAGIC = "\x1f\x1d"
+
+
 def _check_server_auth(url: str, authkey: str, timeout: int = 5) -> bool:
-    """Check if a remote MISP server accepts our auth."""
+    """Check that a remote MISP server answers, with our auth when we have it.
+
+    An encrypted authkey cannot be sent, so for those any HTTP answer counts
+    as reachable, including 401 and 403.
+    """
+    if isinstance(authkey, bytes):
+        # pymysql returns the column as bytes; latin-1 keeps the marker bytes intact
+        authkey = authkey.decode("latin-1")
+    encrypted = authkey.startswith(ENCRYPTED_MAGIC)
+    headers = {"Accept": "application/json"}
+    if not encrypted:
+        headers["Authorization"] = authkey
     try:
         target = f"{url.rstrip('/')}/servers/getVersion"
-        req = urllib.request.Request(
-            target,
-            headers={"Authorization": authkey, "Accept": "application/json"},
-        )
+        req = urllib.request.Request(target, headers=headers)
         ctx = ssl.create_default_context()
         with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
             return 200 <= resp.status < 400
+    except urllib.error.HTTPError as e:
+        return encrypted and e.code in (401, 403)
     except Exception:
         return False
 
@@ -433,7 +449,7 @@ def _collect_network_metrics(servers: list[dict]) -> str:
         blocks.append(
             _metric(
                 "misp_server_reachable",
-                "Whether the remote MISP server is reachable and accepts auth",
+                "Whether the remote MISP server is reachable (auth verified unless the key is stored encrypted)",
                 "gauge",
                 reachable_samples,
             )

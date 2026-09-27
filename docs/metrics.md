@@ -38,7 +38,7 @@ The metrics container (`entrypoint-metrics.py` in the main image) exposes operat
 | `misp_server_push_enabled{id,name}` | gauge | Push enabled per server |
 | `misp_server_last_pull_event_id{id,name}` | gauge | Last pulled event ID |
 | `misp_server_last_push_event_id{id,name}` | gauge | Last pushed event ID |
-| `misp_server_reachable{id,name,url}` | gauge | Auth-verified connectivity (5min cache) |
+| `misp_server_reachable{id,name,url}` | gauge | Connectivity, auth-verified when the authkey is stored in clear (5min cache). With `Security.encryption_key` set, MISP stores authkeys encrypted and any HTTP answer counts as reachable |
 | `misp_server_tls_expiry_timestamp_seconds{id,name,url}` | gauge | TLS cert expiry as unix timestamp |
 
 **Background jobs:**

@@ -780,3 +780,38 @@ class TestSyncLogTable:
         assert args[0][1][1] == "success"
         conn.commit.assert_called_once()
         conn.close.assert_called_once()
+
+
+class TestCheckServerAuthEncrypted:
+    """With Security.encryption_key set, servers.authkey is ciphertext the probe cannot send."""
+
+    def _http_error(self, code):
+        import urllib.error
+        return urllib.error.HTTPError("https://x", code, "denied", {}, None)
+
+    def test_plain_key_rejected_is_unreachable(self):
+        with patch("misp_container.metrics.urllib.request.urlopen", side_effect=self._http_error(403)):
+            assert _check_server_auth("https://x", "a" * 40) is False
+
+    def test_encrypted_key_counts_http_answer_as_reachable(self):
+        from misp_container.metrics import ENCRYPTED_MAGIC
+        with patch("misp_container.metrics.urllib.request.urlopen", side_effect=self._http_error(403)):
+            assert _check_server_auth("https://x", ENCRYPTED_MAGIC + "cipher") is True
+
+    def test_encrypted_key_is_not_sent(self):
+        from misp_container.metrics import ENCRYPTED_MAGIC
+        seen = {}
+
+        def fake_urlopen(req, timeout=None, context=None):
+            seen["headers"] = dict(req.header_items())
+            raise self._http_error(401)
+
+        with patch("misp_container.metrics.urllib.request.urlopen", side_effect=fake_urlopen):
+            _check_server_auth("https://x", ENCRYPTED_MAGIC + "cipher")
+        assert "Authorization" not in seen["headers"]
+
+    def test_bytes_authkey_from_pymysql(self):
+        from misp_container.metrics import ENCRYPTED_MAGIC
+        with patch("misp_container.metrics.urllib.request.urlopen", side_effect=self._http_error(403)):
+            assert _check_server_auth("https://x", (ENCRYPTED_MAGIC + "cipher").encode("latin-1")) is True
+            assert _check_server_auth("https://x", b"a" * 40) is False

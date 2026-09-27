@@ -62,6 +62,9 @@ spec:
             - name: gnupg-key
               mountPath: /etc/misp-docker/gnupg
               readOnly: true
+            - name: certs
+              mountPath: /etc/misp-docker/certs
+              readOnly: true
             - name: configure-tmp
               mountPath: /tmp
           resources:
@@ -105,4 +108,8 @@ spec:
         - name: gnupg-key
           secret:
             secretName: misp-gnupg
+            optional: true
+        - name: certs
+          secret:
+            secretName: misp-certs
             optional: true
