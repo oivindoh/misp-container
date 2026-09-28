@@ -20,11 +20,13 @@ usable with Compose (podman) for development.
 
 One Dockerfile, three targets:
 
-| Target | Image | Size | Purpose |
-|--------|-------|------|---------|
-| `final` | `misp-container` | ~900 MB | PHP-FPM, workers, configure, org sync, metrics exporter; `app/files` (360 MB of lists, galaxies and geolocation data) ships in the image |
-| `caddy` | `misp-container-caddy` | ~64 MB | Static files and FastCGI reverse proxy (scratch image) |
-| `modules` | `misp-container-modules` | ~296 MB | MISP enrichment, import, export and action modules (distroless) |
+| Target | Image | On disk | Pull (compressed) | Purpose |
+|--------|-------|---------|-------------------|---------|
+| `final` | `misp-container` | 940 MB | 270 MB | PHP-FPM, workers, configure, org sync, metrics exporter, migrate; `app/files` (360 MB of lists, galaxies and geolocation data) ships in the image |
+| `caddy` | `misp-container-caddy` | 76 MB | 29 MB | Static files and FastCGI reverse proxy (scratch image) |
+| `modules` | `misp-container-modules` | 360 MB | 98 MB | MISP enrichment, import, export and action modules (distroless) |
+
+Sizes are the arm64 build of MISP 2.5.47; amd64 is within a few percent.
 
 Image tags match the MISP version (`2.5.47`, hotfixes `2.5.47-r1`). See
 [DEVELOPING.md](DEVELOPING.md) for releases.
@@ -89,8 +91,33 @@ never do, so they start in seconds and any number of them can run.
    the auth plugins.
 6. Sets `MISP.live=true`.
 
-A run on an already configured instance takes seconds. The Job is idempotent: run it as often
-as you like.
+The Job is idempotent: run it as often as you like.
+
+### Startup and footprint
+
+Measured on MISP 2.5.47 with the Compose stack on a podman machine (arm64, two cores):
+
+| What | Time |
+|------|------|
+| Configure Job on an empty database: schema import, `runUpdates`, about 150 settings, admin user, GPG | 14 s |
+| Configure Job on a configured instance | 1 to 3 s |
+| Web or worker pod, from start to serving, once the Job has run | 1 s |
+| Compose stack from `up` to the login page, images present, empty volumes | 40 s, of which MariaDB initialisation is 30 s |
+
+Idle memory per container, after the first start:
+
+| Container | Idle RSS | Note |
+|-----------|----------|------|
+| web | 36 MB | Grows with the PHP-FPM children under load (`PHP_FCGI_CHILDREN`, `PHP_MEMORY_LIMIT` per request) |
+| worker | 470 MB | 21 PHP worker processes under supervisord (`NUM_WORKERS_*`) |
+| modules | 145 MB | |
+| metrics | 21 MB | |
+| caddy | 11 MB | |
+| MariaDB | 140 MB | Default buffer pool |
+| Redis | 7 MB | `maxmemory` 128 MB |
+
+The base manifests request 1 GiB for a web pod and 128 MiB for a worker pod, with limits of
+4 GiB and 1 GiB. Patch them in the overlay to your load.
 
 ### Rollout order
 
