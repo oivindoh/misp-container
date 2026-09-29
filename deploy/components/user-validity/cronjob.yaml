@@ -1,0 +1,108 @@
+# Check every MISP account against the identity provider (MISP console):
+#   python3 -m misp_container.task check-user-validity
+# Needs the oidc or ldap group: MISP's check refuses to run without one. The
+# check reports each user as valid or invalid and changes nothing. To disable
+# the users that the identity provider no longer backs, replace the task with
+# block-invalid-users (README, "Periodic tasks").
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: user-validity
+  labels:
+    app.kubernetes.io/name: user-validity
+    app.kubernetes.io/component: misp-console-task
+spec:
+  schedule: "30 5 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 3600
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: user-validity
+            app.kubernetes.io/component: misp-console-task
+        spec:
+          restartPolicy: Never
+          securityContext:
+            runAsUser: 1000
+            runAsGroup: 1000
+            fsGroup: 1000
+            runAsNonRoot: true
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: task
+              image: ghcr.io/oivindoh/misp-container
+              command: ["/usr/bin/tini", "--", "python3", "-m", "misp_container.task", "check-user-validity"]
+              envFrom:
+                - configMapRef:
+                    name: misp-env
+                - secretRef:
+                    name: misp-db
+                - secretRef:
+                    name: misp-app
+              volumeMounts:
+                - name: files-scripts-tmp
+                  mountPath: /var/www/MISP/app/files/scripts/tmp
+                - name: files-certs
+                  mountPath: /var/www/MISP/app/files/certs
+                - name: files-terms
+                  mountPath: /var/www/MISP/app/files/terms
+                - name: files-img-orgs
+                  mountPath: /var/www/MISP/app/files/img/orgs
+                - name: misp-config
+                  mountPath: /var/www/MISP/app/Config
+                - name: misp-tmp
+                  mountPath: /var/www/MISP/app/tmp
+                - name: misp-gnupg
+                  mountPath: /var/www/MISP/.gnupg
+                - name: gnupg-key
+                  mountPath: /etc/misp-docker/gnupg
+                  readOnly: true
+                - name: task-tmp
+                  mountPath: /tmp
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 256Mi
+                limits:
+                  cpu: 1000m
+                  memory: 1Gi
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: [ALL]
+          volumes:
+            - name: files-scripts-tmp
+              emptyDir:
+                sizeLimit: 100Mi
+            - name: files-certs
+              emptyDir:
+                sizeLimit: 10Mi
+            - name: files-terms
+              emptyDir:
+                sizeLimit: 10Mi
+            - name: files-img-orgs
+              emptyDir:
+                sizeLimit: 10Mi
+            - name: misp-config
+              emptyDir:
+                sizeLimit: 10Mi
+            - name: misp-tmp
+              emptyDir:
+                sizeLimit: 500Mi
+            - name: misp-gnupg
+              emptyDir:
+                sizeLimit: 10Mi
+            - name: task-tmp
+              emptyDir:
+                sizeLimit: 100Mi
+            - name: gnupg-key
+              secret:
+                secretName: misp-gnupg
+                optional: true

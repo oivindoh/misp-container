@@ -1,12 +1,14 @@
-"""Periodic MISP tasks through the REST API.
+"""Periodic MISP tasks.
 
-Usage: python3 -m misp_container.task <task>
+Usage: python3 -m misp_container.task <task> [workflow id]
 
 Runs as a Kubernetes CronJob (deploy/components/cronjobs) or on demand from
-Compose. Each task is one or a few API calls; MISP queues the real work as
-background jobs for the workers.
+Compose. API tasks make one or a few API calls, and MISP queues the real work
+as background jobs for the workers. Console tasks have no API: the pod renders
+app/Config and runs MISP's console, as the configure Job does.
 """
 
+import subprocess
 import sys
 
 from .api import MISPClient, APIError
@@ -19,19 +21,58 @@ log = getlog("task")
 ENDPOINTS = {
     "cache-feeds": "/feeds/cacheFeeds/all",
     "fetch-feeds": "/feeds/fetchFromAllFeeds",
+    "cache-servers": "/servers/cache/all",
     "update-galaxies": "/galaxies/update",
     "update-taxonomies": "/taxonomies/update",
     "update-warninglists": "/warninglists/update",
     "update-noticelists": "/noticelists/update",
+    "update-object-templates": "/objectTemplates/update",
 }
 
-# Server tasks: one GET per sync server that has the flag enabled
+# Server tasks: one POST per sync server that has the flag enabled
+# (MISP answers GET on these actions with 405)
 SERVER_TASKS = {
     "pull-servers": ("pull", "/servers/pull/{id}"),
     "push-servers": ("push", "/servers/push/{id}"),
 }
 
-TASKS = tuple(ENDPOINTS) + tuple(SERVER_TASKS)
+# Index tasks: list the items first, then act on them
+INDEX_TASKS = ("push-taxii", "sharing-group-blueprints")
+
+# Ad-hoc workflow by ID: python3 -m misp_container.task workflow <id>
+WORKFLOW_TASK = "workflow"
+
+# Console tasks: (shell, command) for app/Console/cake
+CAKE_TASKS = {
+    "periodic-summary": ("Server", "sendPeriodicSummaryToUsers"),
+    "check-user-validity": ("Admin", "checkUserValidity"),
+    "block-invalid-users": ("Admin", "blockInvalidUsers"),
+}
+
+API_TASKS = tuple(ENDPOINTS) + tuple(SERVER_TASKS) + INDEX_TASKS + (WORKFLOW_TASK,)
+TASKS = API_TASKS + tuple(CAKE_TASKS)
+
+# Every task type and action that MISP's scheduler offers
+# (app/Console/Command/SchedulerWorkerShell.php), with the task that does the
+# same work. scripts/check_scheduler_coverage.py fails a MISP release whose
+# scheduler offers one that is missing here.
+SCHEDULER_COVERAGE = {
+    ("Server", "pull"): "pull-servers",
+    ("Server", "push"): "push-servers",
+    ("Server", "cache"): "cache-servers",
+    ("Feed", "fetch"): "fetch-feeds",
+    ("Feed", "cache"): "cache-feeds",
+    ("TAXII", "push"): "push-taxii",
+    ("Workflow", ""): WORKFLOW_TASK,
+    ("Periodic Summary", "send"): "periodic-summary",
+    ("Admin", "updateGalaxies"): "update-galaxies",
+    ("Admin", "updateTaxonomies"): "update-taxonomies",
+    ("Admin", "updateWarningLists"): "update-warninglists",
+    ("Admin", "updateNoticeLists"): "update-noticelists",
+    ("Admin", "updateObjectTemplates"): "update-object-templates",
+    ("Admin", "checkUserValidity"): "check-user-validity",
+    ("Admin", "blockInvalidUsers"): "block-invalid-users",
+}
 
 # MISP answers these calls after queueing the job; feed and server calls can
 # still take a while on a busy instance.
@@ -65,32 +106,62 @@ def queued_jobs(metrics_url: str, timeout: int = 5):
     return total if seen else None
 
 
-def run_task(client, name: str) -> dict:
-    """Run one task. Returns {"calls": n, "errors": [...]}."""
+def _items(response, key: str) -> list[dict]:
+    """The records of a MISP index, whether wrapped as {"Key": {...}} or not."""
+    items = []
+    for item in response if isinstance(response, list) else []:
+        inner = item.get(key, item) if isinstance(item, dict) else None
+        if isinstance(inner, dict):
+            items.append(inner)
+    return items
+
+
+def _enabled(value) -> bool:
+    return value in (True, 1, "1", "true")
+
+
+def run_task(client, name: str, arg: str = "") -> dict:
+    """Run one API task. Returns {"calls": n, "errors": [...]}."""
     calls = 0
     errors = []
 
-    if name in ENDPOINTS:
-        path = ENDPOINTS[name]
-        log.info("POST %s", path)
+    def post(path, label=""):
+        nonlocal calls
+        log.info("POST %s%s", path, f" ({label})" if label else "")
         try:
-            client.post(path, {})
+            result = client.post(path, {})
             calls += 1
+            return result
         except APIError as e:
             errors.append(str(e))
+            return None
+
+    if name in ENDPOINTS:
+        post(ENDPOINTS[name])
     elif name in SERVER_TASKS:
         flag, template = SERVER_TASKS[name]
         for server in client.get_servers().values():
-            if not server.get(flag):
-                continue
-            path = template.format(id=server["id"])
-            log.info("GET %s (%s)", path, server.get("name", ""))
-            try:
-                client.get(path)
-                calls += 1
-            except APIError as e:
-                errors.append(str(e))
+            if server.get(flag):
+                post(template.format(id=server["id"]), label=server.get("name", ""))
         log.info("%s: %d server(s)", name, calls)
+    elif name == "push-taxii":
+        for server in _items(client.get("/taxiiServers/index"), "TaxiiServer"):
+            if _enabled(server.get("enabled")):
+                post(f"/taxiiServers/push/{server['id']}", label=server.get("name", ""))
+        log.info("%s: %d TAXII server(s)", name, calls)
+    elif name == "sharing-group-blueprints":
+        blueprints = _items(client.get("/sharingGroupBlueprints/index"), "SharingGroupBlueprint")
+        # MISP answers an execute without blueprints with 404
+        if blueprints:
+            post("/sharingGroupBlueprints/execute")
+        log.info("%s: %d blueprint(s)", name, len(blueprints))
+    elif name == WORKFLOW_TASK:
+        if not arg.isdigit():
+            raise ValueError("the workflow task needs a numeric workflow ID")
+        result = post(f"/workflows/executeWorkflow/{arg}")
+        if isinstance(result, dict) and result.get("success") is False:
+            calls -= 1
+            errors.append(f"workflow {arg}: {result.get('outcome', 'failed')}")
     else:
         raise ValueError(f"unknown task {name!r}; choose one of {', '.join(TASKS)}")
 
@@ -99,12 +170,36 @@ def run_task(client, name: str) -> dict:
     return {"calls": calls, "errors": errors}
 
 
+def run_cake_task(name: str) -> int:
+    """Run one console task in this pod. Returns the console's exit code."""
+    from . import CAKE
+    from .env import apply_defaults
+    from .init import prepare
+
+    apply_defaults()
+    prepare()
+    args = CAKE_TASKS[name]
+    log.info("cake %s", " ".join(args))
+    result = subprocess.run([CAKE, *args], capture_output=True, text=True)
+    for line in (result.stdout + result.stderr).splitlines():
+        if line.strip():
+            log.info("%s", line)
+    if result.returncode != 0:
+        log.error("cake %s exited %d", " ".join(args), result.returncode)
+    return result.returncode
+
+
 def main(argv: list[str]) -> None:
     setup_logging("task")
-    if len(argv) != 1 or argv[0] not in TASKS:
-        log.error("usage: python3 -m misp_container.task <%s>", "|".join(TASKS))
+    name = argv[0] if argv else ""
+    arg_count = 2 if name == WORKFLOW_TASK else 1
+    if name not in TASKS or len(argv) != arg_count:
+        log.error("usage: python3 -m misp_container.task <%s> (workflow takes a workflow ID)",
+                  "|".join(TASKS))
         sys.exit(2)
-    name = argv[0]
+
+    if name in CAKE_TASKS:
+        sys.exit(1 if run_cake_task(name) else 0)
 
     api_key = env("ADMIN_KEY")
     if not api_key:
@@ -122,7 +217,7 @@ def main(argv: list[str]) -> None:
 
     client = MISPClient(base_url, api_key)
     client.timeout = REQUEST_TIMEOUT
-    result = run_task(client, name)
+    result = run_task(client, name, argv[1] if len(argv) > 1 else "")
     # A partner that refuses one pull is that partner's problem (the metrics
     # exporter reports it); the run only fails when no call succeeded.
     sys.exit(1 if result["errors"] and not result["calls"] else 0)

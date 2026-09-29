@@ -41,7 +41,11 @@ bumps `CORE_TAG`, resolves `files/composer.lock` for that release, builds the im
 the Compose stack, regenerates the settings catalogue from that MISP, and opens a PR with
 all three changes. CI then builds, scans and runs
 every suite on the PR, with the strict settings check and the rejected-`cake` check as the
-early warning for changed settings and defaults. The PR body lists the new settings by level. A
+early warning for changed settings and defaults, and the scheduler coverage check
+(`scripts/check_scheduler_coverage.py`) for new periodic work. When MISP's scheduler offers a
+task type, action or admin action that no task covers, that check fails: add the task to
+`files/misp_container/task.py` (`SCHEDULER_COVERAGE`) and a CronJob to the `cronjobs`
+component. The PR body lists the new settings by level. A
 setting that appears there with a value this image should enforce moves to `settings.yaml`;
 when a release changes a secure default we already curate, give it `since: <that tag>` so
 existing instances pick the new value up once.
@@ -200,7 +204,7 @@ files/
     settings-upstream.yaml  # Generated catalogue of every other MISP setting (track_only)
   entrypoint-configure.py   # Configure Job entrypoint
   entrypoint-web.py         # PHP-FPM entrypoint
-  entrypoint-worker.py      # Worker/scheduler entrypoint
+  entrypoint-worker.py      # Worker entrypoint
   entrypoint-sync.py        # Org sync entrypoint (org-sync Job)
   entrypoint-metrics.py     # Prometheus metrics HTTP server (metrics Deployment)
   Caddyfile                 # Caddy configuration
@@ -211,6 +215,7 @@ scripts/
   release.sh                # mise run release
   update-settings.sh        # Regenerates the catalogue from a live stack
   update_settings.py        # The catalogue tool (--check in the integration suite)
+  check_scheduler_coverage.py  # Fails when MISP's scheduler offers work no task covers
   update-composer-lock.sh   # Resolves files/composer.lock through the composer-lock stage
 tests/
   test_*.py                 # Unit tests (see tests/README.md)

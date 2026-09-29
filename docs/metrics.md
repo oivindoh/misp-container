@@ -3,8 +3,9 @@
 ## TL;DR
 
 The metrics Deployment (`entrypoint-metrics.py` in the main image) exposes Prometheus metrics
-on port 9191 from the database and from probes of the configured sync servers: instance
-health, content counts, server sync state and certificate expiry, job queues, org sync runs.
+on port 9191 from the database, from MISP's job queues in Redis and from probes of the
+configured sync servers: instance health, content counts, server sync state and certificate
+expiry, job queues, org sync runs.
 Scrape `/metrics`; `/healthz` and `/ready` answer 200.
 
 ## Endpoints
@@ -49,9 +50,13 @@ Scrape `/metrics`; `/healthz` and `/ready` answer 200.
 **Background jobs:**
 | Metric | Type | Description |
 |--------|------|-------------|
-| `misp_jobs_queued{worker}` | gauge | Current queue depth per worker |
+| `misp_jobs_queued{worker}` | gauge | Jobs waiting or running per worker queue, read from Redis. Absent when Redis cannot be read |
 | `misp_server_jobs_total{id,name,job_type,status}` | counter | Pull/push jobs per server |
 | `misp_jobs_total{worker,job_type,status}` | counter | Non-sync jobs by worker and type |
+| `misp_scheduled_tasks_enabled{type}` | gauge | Tasks enabled under MISP's Scheduled tasks page. No scheduler runs in this deployment, so these never run; the task runner does the periodic work |
+
+The `status` label of the job counters is `completed`, `failed` or `unfinished`. MISP keeps a
+job at `unfinished` while it waits and runs; a job whose worker died stays `unfinished`.
 
 **Org sync container:**
 | Metric | Type | Description |
@@ -69,6 +74,7 @@ Scrape `/metrics`; `/healthz` and `/ready` answer 200.
 
 - **No DB cache**: metrics are fresh on every scrape. All queries are cheap (information_schema for large tables, exact counts for small tables).
 - **Network check cache**: remote server auth probes and TLS cert checks are cached for 5 minutes to avoid hammering sync partners.
+- **Queue depth from Redis**: waiting jobs are the queue lists (`LLEN <namespace>:<queue>`) and running jobs the `<namespace>:running:<queue>:<id>` keys, in the database and namespace of `SimpleBackgroundJobs.redis_*`. A failed Redis read counts in `misp_scrape_errors`.
 - **Counters for jobs**: `misp_server_jobs_total` and `misp_jobs_total` are counters. Use `increase(...[1h])` in PromQL for time-windowed views. MISP prunes completed jobs, which Prometheus handles as counter resets.
 - **information_schema for big tables**: `events`, `attributes`, and `shadow_attributes` use InnoDB's `TABLE_ROWS` estimate (~10-20% accuracy) instead of `COUNT(*)` to avoid full index scans on large instances.
 
@@ -92,6 +98,10 @@ Scrape `/metrics`; `/healthz` and `/ready` answer 200.
 - alert: MISPJobQueueBacklog
   expr: misp_jobs_queued > 50
   for: 5m
+
+# A task enabled under MISP's Scheduled tasks never runs here
+- alert: MISPScheduledTaskEnabled
+  expr: misp_scheduled_tasks_enabled > 0
 
 # A configure run failed in the last day
 - alert: MISPConfigureFailed

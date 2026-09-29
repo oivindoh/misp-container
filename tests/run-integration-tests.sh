@@ -272,13 +272,15 @@ sleep 3
 sv_user=$(${COMPOSE} exec -T worker printenv SUPERVISOR_USERNAME 2>/dev/null || echo supervisor)
 sv_pass=$(${COMPOSE} exec -T worker printenv SUPERVISOR_PASSWORD 2>/dev/null || echo supervisor)
 worker_output=$(${COMPOSE} exec -T worker supervisorctl -s unix:///tmp/supervisor.sock -u "$sv_user" -p "$sv_pass" status 2>/dev/null || true)
-for queue in default prio email cache update scheduler; do
+for queue in default prio email cache update; do
     if echo "$worker_output" | grep -q "${queue}.*RUNNING"; then
         pass "worker queue '${queue}' is running"
     else
         fail "worker queue '${queue}' is not running"
     fi
 done
+# Periodic work belongs to the task runner; MISP's own scheduler never runs
+assert_not_contains "worker: no scheduler program" "$worker_output" "scheduler"
 
 # Verify web container can reach worker supervisord via TCP (same path MISP uses)
 sv_status=$(${COMPOSE} exec -T web python3 -c "
@@ -668,6 +670,24 @@ assert_eq "task: pull-servers exits 0" "0" "$task_rc"
 task_output=$(${COMPOSE} run --rm --no-deps -T -e ADMIN_KEY="" sync python3 -m misp_container.task pull-servers 2>&1) && task_rc=0 || task_rc=$?
 assert_eq "task: missing ADMIN_KEY exits 1" "1" "$task_rc"
 
+# The tasks that replace MISP's scheduler: with no TAXII servers and no
+# blueprints the index tasks make no call and still exit 0
+for task_name in cache-servers update-object-templates push-taxii sharing-group-blueprints; do
+    task_output=$(${COMPOSE} run --rm --no-deps -T -e ADMIN_KEY="${ADMIN_KEY}" -e SYNC_BASE_URL="http://caddy:8080" \
+        sync python3 -m misp_container.task "$task_name" 2>&1) && task_rc=0 || task_rc=$?
+    assert_eq "task: ${task_name} exits 0" "0" "$task_rc"
+done
+assert_contains "task: push-taxii lists the TAXII servers" "$(${COMPOSE} run --rm --no-deps -T -e ADMIN_KEY="${ADMIN_KEY}" \
+    -e SYNC_BASE_URL="http://caddy:8080" sync python3 -m misp_container.task push-taxii 2>&1)" "push-taxii: 0 TAXII server(s)"
+
+# Console tasks render app/Config and run MISP's console; in Compose the worker has the volumes
+task_output=$(${COMPOSE} exec -T worker python3 -m misp_container.task periodic-summary 2>&1) && task_rc=0 || task_rc=$?
+assert_eq "task: periodic-summary exits 0" "0" "$task_rc"
+assert_contains "task: periodic-summary ran MISP's console" "$task_output" "periodic summary"
+task_output=$(${COMPOSE} exec -T worker python3 -m misp_container.task check-user-validity 2>&1) && task_rc=0 || task_rc=$?
+assert_eq "task: check-user-validity exits 0 with OIDC enabled" "0" "$task_rc"
+assert_contains "task: check-user-validity reports the admin" "$task_output" "test-admin@example.com"
+
 
 section "Org sync"
 
@@ -982,6 +1002,30 @@ else
 
         # Jobs queue depth metric should exist
         assert_contains "metrics: jobs queued metric present" "$metrics_output" "misp_jobs_queued"
+        # Nothing runs MISP's Scheduled tasks here; the exporter counts enabled ones
+        assert_contains "metrics: scheduled tasks metric present" "$metrics_output" "misp_scheduled_tasks_enabled 0"
+
+        # The depth comes from Redis: a job waits there while no worker runs
+        default_depth() {
+            curl -sf "http://localhost:${METRICS_PORT}/metrics" 2>/dev/null \
+                | grep '^misp_jobs_queued{worker="default"}' | awk '{print $2}'
+        }
+        ${COMPOSE} stop worker >/dev/null 2>&1
+        curl -sf -X POST -H "Authorization: ${ADMIN_KEY}" -H "Accept: application/json" \
+            -H "Content-Type: application/json" -d '{}' \
+            "http://localhost:${TEST_PORT}/servers/cache/all" >/dev/null 2>&1
+        depth=$(default_depth)
+        if [ "${depth:-0}" -ge 1 ]; then
+            pass "metrics: a waiting job shows in misp_jobs_queued (default=${depth})"
+        else
+            fail "metrics: a waiting job does not show in misp_jobs_queued (default=${depth:-none})"
+        fi
+        ${COMPOSE} start worker >/dev/null 2>&1
+        retries=30
+        until [ "$(default_depth)" = "0" ] || [ $retries -le 0 ]; do
+            sleep 1; retries=$((retries - 1))
+        done
+        assert_eq "metrics: misp_jobs_queued returns to 0 once the worker runs" "0" "$(default_depth)"
 
         # Sync log metric should be present after sync ran earlier in this test
         if echo "$metrics_output" | grep -q "misp_sync_runs_24h"; then
@@ -1113,6 +1157,15 @@ if PYTHONPATH="${SCRIPT_DIR}/../files" python3 "${SCRIPT_DIR}/../scripts/update_
     pass "settings: every MISP setting is curated or catalogued"
 else
     fail "settings: new or stale settings (run scripts/update-settings.sh and review)"
+fi
+
+# Every task type and action MISP's scheduler offers must have a task runner task
+sched_shell="${WORK_DIR}/SchedulerWorkerShell.php"
+${COMPOSE} exec -T web cat /var/www/MISP/app/Console/Command/SchedulerWorkerShell.php > "$sched_shell" 2>/dev/null || true
+if python3 "${SCRIPT_DIR}/../scripts/check_scheduler_coverage.py" "$sched_shell"; then
+    pass "scheduler: every task MISP's scheduler offers has a task runner task"
+else
+    fail "scheduler: MISP's scheduler offers work the task runner does not cover (see files/misp_container/task.py)"
 fi
 
 # Every default this image applies must be accepted by this MISP version

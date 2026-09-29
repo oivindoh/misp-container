@@ -11,7 +11,7 @@ usable with Compose (podman) for development.
 - Every MISP setting has an env var (`MISP.redis_host` -> `MISP_REDIS_HOST`). Curated defaults
   live in `files/misp-config/settings.yaml`; every other setting is catalogued.
 - Kubernetes: `deploy/base` is MISP itself, `deploy/components/` holds the optional parts
-  (database, cache, ingress, network policies, cronjobs, PDBs), `deploy/overlays/prod` shows
+  (database, cache, ingress, network policies, cronjobs for all periodic work, PDBs), `deploy/overlays/prod` shows
   an overlay with KSOPS secrets.
 - Compose: `cd deploy && podman compose up -d`, login `admin@admin.test` /
   `ChangeMe-Str0ng!Pass#2026` at `http://localhost:8080`.
@@ -22,7 +22,7 @@ One Dockerfile, three targets:
 
 | Target | Image | On disk | Pull (compressed) | Purpose |
 |--------|-------|---------|-------------------|---------|
-| `final` | `misp-container` | 940 MB | 270 MB | PHP-FPM, workers, configure, org sync, metrics exporter, migrate; `app/files` (360 MB of lists, galaxies and geolocation data) ships in the image |
+| `final` | `misp-container` | 890 MB | 250 MB | PHP-FPM, workers, configure, org sync, metrics exporter, task runner, migrate; `app/files` (360 MB of lists, galaxies and geolocation data) ships in the image |
 | `caddy` | `misp-container-caddy` | 76 MB | 29 MB | Static files and FastCGI reverse proxy (scratch image) |
 | `modules` | `misp-container-modules` | 360 MB | 98 MB | MISP enrichment, import, export and action modules (distroless) |
 
@@ -48,7 +48,6 @@ Default login: `admin@admin.test` / `ChangeMe-Str0ng!Pass#2026`.
 flowchart LR
     cfg[configure Job<br/>sync wave 1] -->|MISP.live = true| web[web Deployment<br/>caddy + php-fpm, wave 2]
     cfg -->|MISP.live = true| worker[worker Deployment<br/>supervisord, wave 2]
-    cfg -->|MISP.live = true| sched[scheduler Deployment<br/>1 replica, wave 2]
     web --> sync[org-sync Job<br/>wave 3]
     cfg --> db[(MariaDB)]
     cfg --> redis[(Redis)]
@@ -59,6 +58,8 @@ flowchart LR
     web -->|:9001| worker
     web -->|:6666| modules[modules]
     metrics[metrics] --> db
+    metrics --> redis
+    tasks[task CronJobs] -->|API| web
 ```
 
 The `misp-container` image serves six roles. Every entrypoint first renders `app/Config`
@@ -70,9 +71,9 @@ then does its own job:
 | configure | `entrypoint-configure.py` | Job, once per rollout | Schema import or migration, settings, admin user, GPG, auth plugins. Sets `MISP.live=true` last |
 | web | `entrypoint-web.py` | Deployment, scalable | Waits for `MISP.live=true`, then runs PHP-FPM on 9002 behind caddy on 8080 |
 | worker | `entrypoint-worker.py` | Deployment, scalable | Waits for `MISP.live=true`, then runs the `default`, `prio`, `email`, `update` and `cache` queues under supervisord |
-| scheduler | `entrypoint-worker.py` | Deployment, 1 replica | Runs MISP's `scheduler_worker` only, for MISP-internal scheduling (workflows) |
 | org-sync | `entrypoint-sync.py` | Job, after each rollout | Applies `orgs.yaml` through the API |
 | metrics | `entrypoint-metrics.py` | Deployment | Prometheus exporter on 9191 |
+| task | `python3 -m misp_container.task` | CronJobs (components `cronjobs`, `user-validity`) | All periodic work, see [Periodic tasks](#periodic-tasks). MISP's own scheduler never runs |
 
 ### The configure Job
 
@@ -148,7 +149,6 @@ removes itself after ten minutes, so the next apply or reconcile creates it agai
 |------------|----------|-------|
 | web | any | Sessions live in Redis; org logos and attachments are on a shared claim |
 | worker | any | Redis `BRPOP` gives each job to one worker. A stopping worker gets `WORKER_STOP_GRACE` seconds (default 300) to finish; a job on a worker that dies is lost |
-| scheduler | 1 | Two schedulers run everything twice. Periodic tasks belong to the `cronjobs` component; do not also enable them under MISP's Scheduled tasks |
 
 ## Configuration
 
@@ -238,7 +238,8 @@ deploy/
 | `redis` | Deployment without persistence | You run an external Redis (`MISP_REDIS_HOST`) |
 | `ingress-haproxy` | Ingress for the haproxy class | Another ingress or a Gateway routes to the `web` Service |
 | `netpol-cilium` | CiliumNetworkPolicies for every pod | The cluster does not run Cilium |
-| `cronjobs` | Feed, sync and update CronJobs through the API | The MISP scheduler runs these tasks |
+| `cronjobs` | The periodic task CronJobs, see [Periodic tasks](#periodic-tasks) | You want no periodic work |
+| `user-validity` | A daily check of every account against the OIDC or LDAP identity provider | Neither the `oidc` nor the `ldap` group is enabled |
 | `housekeeping` | Nightly deletes in `jobs`, `logs`, `audit_logs` (`HOUSEKEEPING_<TABLE>_DAYS`) | Retention is handled elsewhere |
 | `pdb` | PodDisruptionBudgets for web and worker | One replica of each |
 | `migrate` | One-off Job copying an existing MySQL/MariaDB MISP into the database, see [docs/migration.md](docs/migration.md) | Always, once the Job has run |
@@ -268,8 +269,8 @@ reads too:
 
 | Secret | File | Keys | Who gets it |
 |--------|------|------|-------------|
-| `misp-db` | `secrets-db.env` | `DB_USER`, `DB_PASSWORD`, `MYSQL_ROOT_PASSWORD` (mariadb only) | configure, web, worker, scheduler, org-sync, housekeeping, the mariadb or postgres component; metrics gets user and password only |
-| `misp-app` | `secrets-app.env` | `MISP_REDIS_PASSWORD`, `GNUPG_PASSWORD`, `SECURITY_ENCRYPTION_KEY`, `SECURITY_SALT` | configure, web, worker, scheduler, redis |
+| `misp-db` | `secrets-db.env` | `DB_USER`, `DB_PASSWORD`, `MYSQL_ROOT_PASSWORD` (mariadb only) | configure, web, worker, org-sync, housekeeping, console task CronJobs, the mariadb or postgres component; metrics gets user and password only |
+| `misp-app` | `secrets-app.env` | `MISP_REDIS_PASSWORD`, `GNUPG_PASSWORD`, `SECURITY_ENCRYPTION_KEY`, `SECURITY_SALT` | configure, web, worker, redis, console task CronJobs; metrics gets `MISP_REDIS_PASSWORD` only |
 | `misp-admin` | `secrets-admin.env` | `ADMIN_PASSWORD`, `ADMIN_KEY` | configure, org-sync, cronjobs. With `ADMIN_KEY` empty MISP generates a key, org-sync exits without changes, and the cronjobs fail with a clear message |
 | `misp-migrate` | `components/migrate/secrets-migrate.env` | `MIGRATE_SOURCE_*`, `MIGRATE_FORCE` | The migrate Job only |
 
@@ -312,25 +313,66 @@ file header of `deploy/components/netpol-cilium/networkpolicy.yaml` lists every 
 
 ### Periodic tasks
 
-The task runner in the main image calls the MISP API for the periodic work:
-`cache-feeds`, `fetch-feeds`, `pull-servers`, `push-servers`, `update-galaxies`,
-`update-taxonomies`, `update-warninglists`, `update-noticelists`. The `cronjobs` component
-schedules them; `ADMIN_KEY` must be set. Before dispatching, a run reads the queue depth from
-the metrics exporter and dispatches nothing while `TASK_MAX_QUEUED` jobs (default 200) or more
-are queued or running, so a slow worker pool does not pile up work. A partner that refuses a
-pull or push is logged and shows in the metrics; a run exits 1 only when no call succeeded.
+The task runner in the main image does all periodic work. MISP's own scheduler
+(`scheduler_worker`) never runs, so a task enabled under MISP's Scheduled tasks page runs
+nowhere; `misp_scheduled_tasks_enabled` counts them (see [docs/metrics.md](docs/metrics.md)).
+Manual actions in the UI and the API, such as a pull, a push or fetching one event from a
+remote server, do not use a scheduler: the workers run them.
+
+| Task | Does | Kind | CronJob schedule |
+|------|------|------|------------------|
+| `pull-servers` | Pull from every server with pull enabled | API | every 5 minutes |
+| `push-servers` | Push to every server with push enabled | API | every 15 minutes |
+| `cache-servers` | Cache the events of every server | API | 02:40 |
+| `fetch-feeds` | Fetch every enabled feed | API | 02:30 |
+| `cache-feeds` | Cache every feed | API | 02:20 |
+| `push-taxii` | Push to every enabled TAXII server | API | hourly |
+| `sharing-group-blueprints` | Apply the sharing group blueprints | API | hourly |
+| `update-galaxies`, `update-taxonomies`, `update-warninglists`, `update-noticelists`, `update-object-templates` | Update MISP's bundled definitions | API | 03:00 to 03:40 |
+| `periodic-summary` | Send the daily, weekly (Mondays) and monthly (the first) summaries users subscribed to | console | 06:00, no retry |
+| `check-user-validity` | Report every account as valid or invalid at the OIDC or LDAP provider | console | 05:30 (`user-validity` component) |
+| `block-invalid-users` | Disable the accounts the provider no longer backs | console | patch `user-validity` to it |
+| `workflow <id>` | Run one ad-hoc workflow | API | an overlay adds the CronJob |
+
+API tasks call the MISP API with `ADMIN_KEY`, which must be set. Before dispatching, a run
+reads the queue depth (`misp_jobs_queued`, which the metrics exporter reads from MISP's job
+queues in Redis) and dispatches nothing while `TASK_MAX_QUEUED` jobs (default 200) or more
+are waiting or running, so a slow worker pool does not pile up work. An unreachable exporter
+or Redis does not block dispatch. A partner that refuses a pull or push is logged and shows
+in the metrics; a run exits 1 only when no call succeeded.
+
+Console tasks have no API. The pod renders `app/Config` and runs MISP's console, with the
+configure Job's volumes and the `misp-db` and `misp-app` Secrets. The periodic summary
+needs a mail relay (`SMTP_FQDN`, `SMTP_PORT`).
+
+Every task CronJob pod carries `app.kubernetes.io/component: misp-task` (API) or
+`misp-console-task` (console); the network policies select on that label. A CronJob an
+overlay adds, for one server or one workflow, copies a CronJob of its kind and keeps the
+label. To disable users instead of reporting them:
+
+```yaml
+# overlay: with the user-validity component
+patches:
+  - target: {kind: CronJob, name: user-validity}
+    patch: |-
+      - op: replace
+        path: /spec/jobTemplate/spec/template/spec/containers/0/command/5
+        value: block-invalid-users
+```
+
 On demand:
 
 ```bash
 kubectl -n misp create job --from=cronjob/pull-servers pull-now
-podman compose run --rm --no-deps sync python3 -m misp_container.task pull-servers   # Compose
+podman compose run --rm --no-deps sync python3 -m misp_container.task pull-servers   # Compose, API task
+podman compose exec worker python3 -m misp_container.task periodic-summary          # Compose, console task
 ```
 
 ## Compose
 
 `deploy/docker-compose.yml` is the single-host development stack: the same images and
 entrypoints, named volumes instead of claims, `AUTOCONF_GPG=true` (a key generated on first
-start), the scheduler inside the worker container, and no housekeeping CronJobs. Values come
+start), and no CronJobs: run periodic tasks on demand (see [Periodic tasks](#periodic-tasks)). Values come
 from `deploy/base/*.env` with `deploy/compose.env` and `deploy/compose-secrets.env` on top.
 `MISP_IMAGE_TAG` selects the image tag.
 

@@ -43,13 +43,13 @@ Run with: `mise run test` or `PYTHONPATH=files python -m pytest tests/ -v`
 | Suite | Tests | What it verifies |
 |-------|-------|------------------|
 | Non-root operation | 3 | All containers run as UID 1000 |
-| HTTP / Caddy | 3 | Login page, static CSS, root redirect |
+| HTTP / Caddy | 4 | Login page, static CSS, root redirect |
 | Admin user config | 5 | Email, password (no forced reset), org name, org UUID, last_pw_change |
 | Database settings | 3 | DB persistence, setting count, BASE_URL in DB |
-| Workers | 6 | All supervisor queues running (default, prio, email, cache, update, scheduler) |
+| Workers | 7 | The five queues run under supervisord, no scheduler program, web reaches supervisord over TCP |
 | Background jobs | 1 | Event publish triggers job, worker completes it (status=4) |
 | PHP-FPM | 1 | Listening on port 9002 |
-| Distribution files and app/Config | 4 | taxonomies in the image, bootstrap.php patch, database.php host, config.php content |
+| Distribution files and app/Config | 11 | taxonomies in the image, bootstrap.php patch, database.php host, config.php content |
 | GPG | 1 | Auto-generated key in .gnupg volume |
 | MISP API | 2 | Version endpoint, event create via API |
 | Warm restart | 2 | Settings cache reload, minimum_config unchanged |
@@ -58,7 +58,7 @@ Run with: `mise run test` or `PYTHONPATH=files python -m pytest tests/ -v`
 | Custom auth | 2 | Header login (200), no-header redirect (302) |
 | OIDC login | 7 | Redirect to dex, its form, the callback, the user's email, role by name, default organisation, mixed auth |
 | Multi-replica web | 6 | configure service ran once, two web replicas serve without configuring |
-| Org sync | 11 | Org/user/tag/server creation, server authkey (DB verify), sync user authkey prefix, taxonomy enable, disabled user, custom warninglist create/update, warm run idempotency |
+| Settings and scheduler coverage | 3 | Every MISP setting curated or catalogued, every scheduler task covered by a task, no rejected `cake` setting |
 
 **Files:**
 - `run-integration-tests.sh` -- test script
@@ -73,7 +73,7 @@ Run with: `mise run test-integration`
 
 ## Hub-spoke sync test
 
-**12 tests** verifying MISP server-to-server synchronization across 3 isolated instances.
+**20 tests** verifying MISP server-to-server synchronization across 3 isolated instances.
 
 **Stack:** 3 MISP instances (A, B, C), each with dedicated MySQL + Redis + web + caddy + worker. 18 containers total.
 
@@ -96,6 +96,10 @@ Run with: `mise run test-integration`
 | Tagging | 2 | Events on B tagged with release-to:A and release-to:C |
 | Pull (tag-filtered) | 4 | A gets only release-to:A events, C gets only release-to:C events |
 | Push (tag-filtered) | 2 | B pushes tagged event to A, untagged event stays on B |
+| Hub layout | 8 | A and C hold no active servers; B pulls from both, then pushes each spoke only its own tagged event |
+
+Pulls and pushes are POSTs; a refused call fails the suite. Before each check the suite waits
+until no job on the instance is unfinished.
 
 **Files:**
 - `run-sync-test.sh` -- test script

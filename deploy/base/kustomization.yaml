@@ -1,4 +1,4 @@
-# MISP itself: configure Job, web, worker, scheduler, metrics, modules,
+# MISP itself: configure Job, web, worker, metrics, modules,
 # org-sync Job, Services, config and the attachments claim. Database, cache,
 # ingress, network policies, cronjobs and PDBs are components under
 # deploy/components/ that an overlay opts into.
@@ -14,7 +14,6 @@ resources:
   - job-org-sync.yaml
   - deployment-web.yaml
   - deployment-worker.yaml
-  - deployment-scheduler.yaml
   - deployment-metrics.yaml
   - deployment-modules.yaml
   - service-web.yaml

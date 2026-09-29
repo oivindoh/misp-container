@@ -104,7 +104,7 @@ def populate_gnupg():
     """Import the instance GPG key from the mounted Secret, if one is present.
 
     The key is an armoured secret key export at GNUPG_KEY_FILE. Every pod
-    (web, worker, scheduler) imports the same key, so all replicas sign with it.
+    (configure, web, worker) imports the same key, so all replicas sign with it.
     """
     key_file = Path(env("GNUPG_KEY_FILE", GNUPG_KEY_FILE))
     if not key_file.is_file():

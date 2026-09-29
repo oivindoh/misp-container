@@ -12,18 +12,23 @@ from misp_container import task
 
 
 class FakeClient:
-    def __init__(self, servers=None):
+    def __init__(self, servers=None, indexes=None, answers=None):
         self.calls = []
         self.servers = servers or {}
+        self.indexes = indexes or {}
+        self.answers = answers or {}
         self.timeout = 30
 
     def get(self, path):
         self.calls.append(("GET", path))
-        return {"ok": True}
+        return self.indexes.get(path, {"ok": True})
 
     def post(self, path, data):
         self.calls.append(("POST", path))
-        return {"ok": True}
+        answer = self.answers.get(path, {"ok": True})
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
 
     def get_servers(self):
         return self.servers
@@ -42,7 +47,7 @@ class TestRunTask:
             "https://b": {"id": "2", "name": "b", "pull": False},
         })
         result = task.run_task(client, "pull-servers")
-        assert client.calls == [("GET", "/servers/pull/1")]
+        assert client.calls == [("POST", "/servers/pull/1")]
         assert result["calls"] == 1
 
     def test_push_only_servers_with_push_enabled(self):
@@ -51,16 +56,107 @@ class TestRunTask:
             "https://b": {"id": "2", "name": "b", "push": True},
         })
         task.run_task(client, "push-servers")
-        assert client.calls == [("GET", "/servers/push/2")]
+        assert client.calls == [("POST", "/servers/push/2")]
+
+    def test_cache_servers_and_object_templates(self):
+        client = FakeClient()
+        task.run_task(client, "cache-servers")
+        task.run_task(client, "update-object-templates")
+        assert client.calls == [("POST", "/servers/cache/all"), ("POST", "/objectTemplates/update")]
+
+    def test_push_taxii_only_enabled_servers(self):
+        client = FakeClient(indexes={"/taxiiServers/index": [
+            {"TaxiiServer": {"id": "1", "name": "on", "enabled": True}},
+            {"TaxiiServer": {"id": "2", "name": "off", "enabled": False}},
+            {"id": "3", "name": "flat", "enabled": "1"},
+        ]})
+        result = task.run_task(client, "push-taxii")
+        assert client.calls == [("GET", "/taxiiServers/index"),
+                                ("POST", "/taxiiServers/push/1"), ("POST", "/taxiiServers/push/3")]
+        assert result["calls"] == 2
+
+    def test_blueprints_execute_once_when_there_are_any(self):
+        client = FakeClient(indexes={"/sharingGroupBlueprints/index": [
+            {"SharingGroupBlueprint": {"id": "1"}}, {"SharingGroupBlueprint": {"id": "2"}},
+        ]})
+        task.run_task(client, "sharing-group-blueprints")
+        assert client.calls[-1] == ("POST", "/sharingGroupBlueprints/execute")
+        assert client.calls.count(("POST", "/sharingGroupBlueprints/execute")) == 1
+
+    def test_no_blueprints_no_execute(self):
+        client = FakeClient(indexes={"/sharingGroupBlueprints/index": []})
+        result = task.run_task(client, "sharing-group-blueprints")
+        assert client.calls == [("GET", "/sharingGroupBlueprints/index")]
+        assert result == {"calls": 0, "errors": []}
+
+    def test_workflow_by_id(self):
+        client = FakeClient(answers={"/workflows/executeWorkflow/7": {"success": True, "outcome": "ok"}})
+        result = task.run_task(client, "workflow", "7")
+        assert client.calls == [("POST", "/workflows/executeWorkflow/7")]
+        assert result == {"calls": 1, "errors": []}
+
+    def test_failed_workflow_counts_as_no_success(self):
+        client = FakeClient(answers={"/workflows/executeWorkflow/7": {"success": False, "outcome": "blocked"}})
+        result = task.run_task(client, "workflow", "7")
+        assert result["calls"] == 0
+        assert "blocked" in result["errors"][0]
+
+    def test_workflow_needs_a_numeric_id(self):
+        with pytest.raises(ValueError):
+            task.run_task(FakeClient(), "workflow", "abc")
+
+    def test_refused_call_is_an_error(self):
+        client = FakeClient(answers={"/servers/cache/all": task.APIError(405, "Method Not Allowed", "/servers/cache/all")})
+        result = task.run_task(client, "cache-servers")
+        assert result["calls"] == 0 and "405" in result["errors"][0]
 
     def test_unknown_task_raises(self):
         with pytest.raises(ValueError):
             task.run_task(FakeClient(), "no-such-task")
 
     def test_every_task_name_is_listed(self):
-        for name in ("cache-feeds", "fetch-feeds", "pull-servers", "push-servers",
-                     "update-galaxies", "update-taxonomies", "update-warninglists", "update-noticelists"):
+        for name in ("cache-feeds", "fetch-feeds", "cache-servers", "pull-servers", "push-servers",
+                     "push-taxii", "sharing-group-blueprints", "workflow",
+                     "update-galaxies", "update-taxonomies", "update-warninglists", "update-noticelists",
+                     "update-object-templates", "periodic-summary", "check-user-validity",
+                     "block-invalid-users"):
             assert name in task.TASKS
+
+
+class TestCakeTasks:
+    def _run(self, name, returncode=0):
+        from subprocess import CompletedProcess
+        done = CompletedProcess([], returncode, stdout="Started periodic summary\n", stderr="")
+        with patch("misp_container.init.prepare") as prepare, \
+                patch("misp_container.env.apply_defaults"), \
+                patch("misp_container.task.subprocess.run", return_value=done) as run:
+            rc = task.run_cake_task(name)
+        return rc, prepare, run
+
+    def test_renders_config_then_runs_the_console(self):
+        rc, prepare, run = self._run("periodic-summary")
+        prepare.assert_called_once()
+        assert run.call_args[0][0][1:] == ["Server", "sendPeriodicSummaryToUsers"]
+        assert rc == 0
+
+    def test_user_validity_variants(self):
+        _, _, run = self._run("check-user-validity")
+        assert run.call_args[0][0][1:] == ["Admin", "checkUserValidity"]
+        _, _, run = self._run("block-invalid-users")
+        assert run.call_args[0][0][1:] == ["Admin", "blockInvalidUsers"]
+
+    def test_console_failure_exits_1_without_an_admin_key(self):
+        with patch.dict(os.environ, {"ADMIN_KEY": ""}), \
+                patch("misp_container.task.run_cake_task", return_value=255):
+            with pytest.raises(SystemExit) as exc:
+                task.main(["check-user-validity"])
+        assert exc.value.code == 1
+
+    def test_console_success_exits_0(self):
+        with patch("misp_container.task.run_cake_task", return_value=0):
+            with pytest.raises(SystemExit) as exc:
+                task.main(["periodic-summary"])
+        assert exc.value.code == 0
 
 
 class TestMain:
@@ -73,6 +169,16 @@ class TestMain:
     def test_no_task_argument_exits_2(self):
         with pytest.raises(SystemExit) as exc:
             task.main([])
+        assert exc.value.code == 2
+
+    def test_workflow_without_an_id_exits_2(self):
+        with pytest.raises(SystemExit) as exc:
+            task.main(["workflow"])
+        assert exc.value.code == 2
+
+    def test_extra_argument_exits_2(self):
+        with pytest.raises(SystemExit) as exc:
+            task.main(["update-galaxies", "7"])
         assert exc.value.code == 2
 
 

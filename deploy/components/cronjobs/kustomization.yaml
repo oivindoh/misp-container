@@ -1,9 +1,10 @@
 apiVersion: kustomize.config.k8s.io/v1alpha1
 kind: Component
 
-# Periodic MISP tasks through the API: feed caching and fetching, server pull
-# and push, galaxy, taxonomy, warninglist and noticelist updates.
-# ADMIN_KEY must be set in misp-admin.
+# Periodic MISP tasks: feed caching and fetching, server caching, pull and
+# push, TAXII push, sharing group blueprints, galaxy, taxonomy, warninglist,
+# noticelist and object template updates through the API, and the periodic
+# summaries through MISP's console. ADMIN_KEY must be set in misp-admin.
 resources:
   - cronjobs.yaml
 # The task image tag follows the base's images transformer only inside the

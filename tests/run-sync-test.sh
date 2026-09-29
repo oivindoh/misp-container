@@ -54,15 +54,22 @@ wait_for_instance() {
     [ $retries -gt 0 ] || { echo "ERROR: $name not ready"; exit 1; }
 }
 
+# MISP keeps a job at status 0 while it waits and runs, then writes 3 (failed) or 4 (done)
 wait_for_sync_jobs() {
     local mysql_svc="$1" retries=30
     while [ $retries -gt 0 ]; do
         local pending=$(${COMPOSE} exec -T "$mysql_svc" mariadb -u misp -pmisp-sync-test -N misp -e \
-            "SELECT COUNT(*) FROM jobs WHERE status IN (1,2);" 2>/dev/null | tr -d '[:space:]')
+            "SELECT COUNT(*) FROM jobs WHERE status NOT IN (3,4);" 2>/dev/null | tr -d '[:space:]')
         [ "${pending:-1}" = "0" ] && return 0
         sleep 2; retries=$((retries - 1))
     done
     return 1
+}
+
+# Pull and push accept POST only; a refused call fails the suite
+sync_action() {
+    local key="$1" port="$2" path="$3"
+    api_post "$key" "$port" "$path" '{}' > /dev/null || fail "POST ${path} on port ${port} was refused"
 }
 
 # Run the sync container against a specific instance
@@ -243,12 +250,11 @@ B_SERVER_A_ID=$(echo "$B_SERVERS" | jq -r '.[] | select(.Server.name=="Spoke A")
 B_SERVER_C_ID=$(echo "$B_SERVERS" | jq -r '.[] | select(.Server.name=="Spoke C") | .Server.id')
 echo "  B servers: A=$B_SERVER_A_ID, C=$B_SERVER_C_ID"
 
-api_get "$ADMIN_KEY_B" 18092 "/servers/pull/${B_SERVER_A_ID}/full" > /dev/null || true
+sync_action "$ADMIN_KEY_B" 18092 "/servers/pull/${B_SERVER_A_ID}/full"
 echo "  B: triggered pull from A"
-api_get "$ADMIN_KEY_B" 18092 "/servers/pull/${B_SERVER_C_ID}/full" > /dev/null || true
+sync_action "$ADMIN_KEY_B" 18092 "/servers/pull/${B_SERVER_C_ID}/full"
 echo "  B: triggered pull from C"
 
-sleep 10
 wait_for_sync_jobs "b-mysql" || true
 
 # Show pull results
@@ -295,12 +301,11 @@ C_SERVER_B_ID=$(api_get "$ADMIN_KEY_C" 18093 "/servers" | jq -r '.[] | select(.S
 ${COMPOSE} exec -T a-redis redis-cli -a redis-sync-test FLUSHALL 2>/dev/null
 ${COMPOSE} exec -T c-redis redis-cli -a redis-sync-test FLUSHALL 2>/dev/null
 
-api_get "$ADMIN_KEY_A" 18091 "/servers/pull/${A_SERVER_B_ID}/full" > /dev/null || true
+sync_action "$ADMIN_KEY_A" 18091 "/servers/pull/${A_SERVER_B_ID}/full"
 echo "  A: triggered pull from B"
-api_get "$ADMIN_KEY_C" 18093 "/servers/pull/${C_SERVER_B_ID}/full" > /dev/null || true
+sync_action "$ADMIN_KEY_C" 18093 "/servers/pull/${C_SERVER_B_ID}/full"
 echo "  C: triggered pull from B"
 
-sleep 10
 wait_for_sync_jobs "a-mysql" || true
 wait_for_sync_jobs "c-mysql" || true
 
@@ -352,10 +357,9 @@ api_post "$ADMIN_KEY_B" 18092 "/events/publish/${PUSH_NO_ID}" '{}' > /dev/null |
 echo "  B: created event $PUSH_YES_ID (tagged release-to:A) and $PUSH_NO_ID (untagged)"
 
 # Push from B to A
-api_get "$ADMIN_KEY_B" 18092 "/servers/push/${B_SERVER_A_ID}/full" > /dev/null || true
+sync_action "$ADMIN_KEY_B" 18092 "/servers/push/${B_SERVER_A_ID}/full"
 echo "  B: triggered push to A"
 
-sleep 10
 wait_for_sync_jobs "b-mysql" || true
 
 # Verify A received only the tagged event
@@ -477,11 +481,10 @@ B_SERVERS2=$(api_get "$ADMIN_KEY_B" 18092 "/servers")
 B_SRV_A2=$(echo "$B_SERVERS2" | jq -r '.[] | select(.Server.name=="Spoke A") | .Server.id')
 B_SRV_C2=$(echo "$B_SERVERS2" | jq -r '.[] | select(.Server.name=="Spoke C") | .Server.id')
 
-api_get "$ADMIN_KEY_B" 18092 "/servers/pull/${B_SRV_A2}/full" > /dev/null || true
-api_get "$ADMIN_KEY_B" 18092 "/servers/pull/${B_SRV_C2}/full" > /dev/null || true
+sync_action "$ADMIN_KEY_B" 18092 "/servers/pull/${B_SRV_A2}/full"
+sync_action "$ADMIN_KEY_B" 18092 "/servers/pull/${B_SRV_C2}/full"
 echo "  B: triggered pull from A and C"
 
-sleep 10
 wait_for_sync_jobs "b-mysql" || true
 
 B_EVENTS2=$(api_get "$ADMIN_KEY_B" 18092 "/events/index")
@@ -503,11 +506,10 @@ api_post "$ADMIN_KEY_B" 18092 "/events/publish/${B_EVT_C2_ID}" '{}' > /dev/null 
 echo "  B: tagged and republished events"
 
 # B pushes to A and C
-api_get "$ADMIN_KEY_B" 18092 "/servers/push/${B_SRV_A2}/full" > /dev/null || true
-api_get "$ADMIN_KEY_B" 18092 "/servers/push/${B_SRV_C2}/full" > /dev/null || true
+sync_action "$ADMIN_KEY_B" 18092 "/servers/push/${B_SRV_A2}/full"
+sync_action "$ADMIN_KEY_B" 18092 "/servers/push/${B_SRV_C2}/full"
 echo "  B: triggered push to A and C"
 
-sleep 10
 wait_for_sync_jobs "b-mysql" || true
 
 echo ""

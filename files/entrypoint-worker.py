@@ -35,24 +35,6 @@ stderr_logfile=/dev/stderr
 stderr_logfile_maxbytes=0
 """
 
-SCHEDULER_TEMPLATE = """
-[program:scheduler]
-directory={misp_base}
-command={cake} scheduler_worker
-process_name=%(program_name)s
-numprocs=1
-autostart=true
-autorestart=true
-stopwaitsecs={stopwait}
-stopasgroup=true
-killasgroup=true
-stdout_logfile=/dev/stdout
-stdout_logfile_maxbytes=0
-stderr_logfile=/dev/stderr
-stderr_logfile_maxbytes=0
-"""
-
-
 def generate_supervisord_config():
     """Generate supervisord config for worker queues."""
     log.info("generating supervisord configuration")
@@ -99,17 +81,10 @@ password={sv_pass}
                 name=name, misp_base=MISP_BASE, cake=CAKE, numprocs=numprocs, stopwait=stopwait,
             ))
 
-    if env("ENABLE_SCHEDULER") == "true":
-        sections.append(SCHEDULER_TEMPLATE.format(misp_base=MISP_BASE, cake=CAKE, stopwait=stopwait))
-    else:
-        log.info("scheduler disabled (ENABLE_SCHEDULER=false)")
-
     # MISP's BackgroundJobsTool filters processes by group name 'misp-workers'.
     # Group all worker programs under this name so the diagnostic page sees them.
     worker_programs = [name for name in ("default", "prio", "email", "update", "cache")
                        if int(env(f"NUM_WORKERS_{name.upper()}", "0")) > 0]
-    if env("ENABLE_SCHEDULER") == "true":
-        worker_programs.append("scheduler")
     if worker_programs:
         sections.append(f"\n[group:misp-workers]\nprograms={','.join(worker_programs)}\n")
 

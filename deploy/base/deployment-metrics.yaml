@@ -39,8 +39,8 @@ spec:
           envFrom:
             - configMapRef:
                 name: misp-env
-          # Database credentials only: the exporter never needs the admin or
-          # application secrets
+          # The database credentials and the Redis password only: the exporter
+          # never needs the admin secrets or the other application secrets
           env:
             - name: DB_USER
               valueFrom:
@@ -52,6 +52,11 @@ spec:
                 secretKeyRef:
                   name: misp-db
                   key: DB_PASSWORD
+            - name: MISP_REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: misp-app
+                  key: MISP_REDIS_PASSWORD
           resources:
             requests:
               cpu: 5m

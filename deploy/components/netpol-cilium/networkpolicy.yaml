@@ -2,14 +2,20 @@
 #
 # Traffic flow:
 #   haproxy-controller ns --> caddy :8080
-#   cronjobs              --> caddy :8080, metrics :9191
+#   task cronjobs         --> caddy :8080, metrics :9191
+#   console task cronjobs --> mariadb :3306, redis :6379, SMTP out, HTTPS out (IdP)
 #   caddy                 --> php-fpm :9002  (localhost in same pod)
 #   php-fpm               --> mariadb :3306, redis :6379, HTTPS out (IdP, partners)
 #   worker                --> mariadb :3306, redis :6379, HTTPS out (partners, feeds)
 #   configure job         --> mariadb :3306, redis :6379
 #   org-sync job          --> caddy :8080, mariadb :3306
 #   housekeeping          --> mariadb :3306
+#   metrics               --> mariadb :3306, redis :6379, HTTPS out (partner probes)
 #   all pods              --> kube-dns :53
+#
+# Task CronJob pods carry app.kubernetes.io/component: misp-task (API tasks) or
+# misp-console-task (tasks that run MISP's console); the rules select on that
+# label, so a CronJob an overlay adds only needs the label.
 #
 # Everything else is denied by default.
 
@@ -29,19 +35,10 @@ spec:
     - fromEndpoints:
         - matchLabels:
             io.kubernetes.pod.namespace: haproxy-controller
-        - matchExpressions:
-            - key: app.kubernetes.io/name
-              operator: In
-              values:
-                - org-sync
-                - cache-feeds
-                - fetch-feeds
-                - pull-servers
-                - push-servers
-                - update-galaxies
-                - update-taxonomies
-                - update-warninglists
-                - update-noticelists
+        - matchLabels:
+            app.kubernetes.io/name: org-sync
+        - matchLabels:
+            app.kubernetes.io/component: misp-task
       toPorts:
         - ports:
             - port: "8080"
@@ -247,18 +244,17 @@ spec:
             - port: "53"
               protocol: TCP
 ---
-# -- worker + scheduler --
-# No ingress needed. Egress to MariaDB, Redis, and DNS.
+# -- worker --
+# Ingress from web to supervisord. Egress to MariaDB, Redis, HTTPS out, the mail
+# relay (the email queue) and DNS.
 apiVersion: cilium.io/v2
 kind: CiliumNetworkPolicy
 metadata:
   name: worker
 spec:
   endpointSelector:
-    matchExpressions:
-      - key: app.kubernetes.io/name
-        operator: In
-        values: [worker, scheduler]
+    matchLabels:
+      app.kubernetes.io/name: worker
   ingress:
     # Web pod connects to supervisord for job management
     - fromEndpoints:
@@ -318,26 +314,16 @@ spec:
             - port: "53"
               protocol: TCP
 ---
-# -- MISP API cronjobs (feeds, sync, updates) --
-# Egress to web pod (caddy :8080) and DNS only.
+# -- MISP API task cronjobs (feeds, sync, updates) --
+# Egress to web pod (caddy :8080), the metrics exporter and DNS only.
 apiVersion: cilium.io/v2
 kind: CiliumNetworkPolicy
 metadata:
   name: cronjob
 spec:
   endpointSelector:
-    matchExpressions:
-      - key: app.kubernetes.io/name
-        operator: In
-        values:
-          - cache-feeds
-          - fetch-feeds
-          - pull-servers
-          - push-servers
-          - update-galaxies
-          - update-taxonomies
-          - update-warninglists
-          - update-noticelists
+    matchLabels:
+      app.kubernetes.io/component: misp-task
   ingress: []
   egress:
     - toEndpoints:
@@ -354,6 +340,78 @@ spec:
       toPorts:
         - ports:
             - port: "9191"
+              protocol: TCP
+    - toEndpoints:
+        - matchLabels:
+            io.kubernetes.pod.namespace: kube-system
+            k8s-app: kube-dns
+      toPorts:
+        - ports:
+            - port: "53"
+              protocol: UDP
+            - port: "53"
+              protocol: TCP
+---
+# -- Console task cronjobs (periodic summary, user validity) --
+# Run MISP's console in the pod. Egress to the database, Redis, a mail relay in
+# or outside the cluster (the summaries), HTTPS out (the identity provider)
+# and DNS.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: console-task
+spec:
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/component: misp-console-task
+  ingress: []
+  egress:
+    - toEndpoints:
+        - matchLabels:
+            app.kubernetes.io/name: mysql
+      toPorts:
+        - ports:
+            - port: "3306"
+              protocol: TCP
+    - toEndpoints:
+        - matchLabels:
+            app.kubernetes.io/name: postgres
+      toPorts:
+        - ports:
+            - port: "5432"
+              protocol: TCP
+    - toEndpoints:
+        - matchLabels:
+            app.kubernetes.io/name: redis
+      toPorts:
+        - ports:
+            - port: "6379"
+              protocol: TCP
+    # Mail relay (SMTP_FQDN, SMTP_PORT), in or outside the cluster
+    - toEntities:
+        - cluster
+        - world
+      toPorts:
+        - ports:
+            - port: "25"
+              protocol: TCP
+            - port: "465"
+              protocol: TCP
+            - port: "587"
+              protocol: TCP
+    # Outbound HTTPS: the OIDC provider, external LDAP over TLS
+    - toCIDRSet:
+        - cidr: 0.0.0.0/0
+          except:
+            - 10.0.0.0/8
+            - 172.16.0.0/12
+            - 192.168.0.0/16
+        - cidr: "::/0"
+          except:
+            - fc00::/7
+      toPorts:
+        - ports:
+            - port: "443"
               protocol: TCP
     - toEndpoints:
         - matchLabels:
@@ -465,8 +523,9 @@ spec:
               protocol: TCP
 ---
 # -- metrics exporter --
-# No ingress from within the cluster (Prometheus scrapes via annotations/ServiceMonitor).
-# Egress to MariaDB (metrics queries) and external HTTPS (server reachability checks).
+# Ingress from Prometheus and the task runner CronJobs.
+# Egress to the database (metric queries), Redis (job queue depth) and external
+# HTTPS (server reachability checks).
 apiVersion: cilium.io/v2
 kind: CiliumNetworkPolicy
 metadata:
@@ -486,18 +545,8 @@ spec:
               protocol: TCP
     # The task runner reads the queue depth before dispatching
     - fromEndpoints:
-        - matchExpressions:
-            - key: app.kubernetes.io/name
-              operator: In
-              values:
-                - cache-feeds
-                - fetch-feeds
-                - pull-servers
-                - push-servers
-                - update-galaxies
-                - update-taxonomies
-                - update-warninglists
-                - update-noticelists
+        - matchLabels:
+            app.kubernetes.io/component: misp-task
       toPorts:
         - ports:
             - port: "9191"
@@ -517,6 +566,14 @@ spec:
       toPorts:
         - ports:
             - port: "5432"
+              protocol: TCP
+    # Redis (job queue depth)
+    - toEndpoints:
+        - matchLabels:
+            app.kubernetes.io/name: redis
+      toPorts:
+        - ports:
+            - port: "6379"
               protocol: TCP
     # External HTTPS (server reachability + TLS cert checks)
     - toCIDRSet:
@@ -545,7 +602,8 @@ spec:
               protocol: TCP
 ---
 # -- MariaDB --
-# Accepts connections from web, worker, scheduler, and housekeeping pods.
+# Accepts connections from web, worker, configure, org-sync, migrate, housekeeping,
+# metrics and console task pods.
 apiVersion: cilium.io/v2
 kind: CiliumNetworkPolicy
 metadata:
@@ -561,7 +619,7 @@ spec:
         - matchLabels:
             app.kubernetes.io/name: worker
         - matchLabels:
-            app.kubernetes.io/name: scheduler
+            app.kubernetes.io/component: misp-console-task
         - matchLabels:
             app.kubernetes.io/name: configure
         - matchLabels:
@@ -595,7 +653,8 @@ spec:
               protocol: TCP
 ---
 # -- PostgreSQL --
-# Accepts connections from web, worker, scheduler, and housekeeping pods.
+# Accepts connections from web, worker, configure, org-sync, migrate, housekeeping,
+# metrics and console task pods.
 apiVersion: cilium.io/v2
 kind: CiliumNetworkPolicy
 metadata:
@@ -611,7 +670,7 @@ spec:
         - matchLabels:
             app.kubernetes.io/name: worker
         - matchLabels:
-            app.kubernetes.io/name: scheduler
+            app.kubernetes.io/component: misp-console-task
         - matchLabels:
             app.kubernetes.io/name: configure
         - matchLabels:
@@ -645,7 +704,7 @@ spec:
               protocol: TCP
 ---
 # -- Redis --
-# Accepts connections from web, worker, and scheduler pods.
+# Accepts connections from web, worker, configure, metrics and console task pods.
 apiVersion: cilium.io/v2
 kind: CiliumNetworkPolicy
 metadata:
@@ -661,9 +720,11 @@ spec:
         - matchLabels:
             app.kubernetes.io/name: worker
         - matchLabels:
-            app.kubernetes.io/name: scheduler
+            app.kubernetes.io/component: misp-console-task
         - matchLabels:
             app.kubernetes.io/name: configure
+        - matchLabels:
+            app.kubernetes.io/name: metrics
       toPorts:
         - ports:
             - port: "6379"

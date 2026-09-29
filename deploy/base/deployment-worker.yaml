@@ -1,6 +1,6 @@
 # Scalable job workers -- safe to run multiple replicas.
-# The MISP scheduler is disabled because periodic tasks are handled
-# by Kubernetes CronJobs (cronjobs.yaml) instead.
+# MISP's own scheduler never runs: periodic tasks are Kubernetes CronJobs
+# (the cronjobs component).
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -37,9 +37,6 @@ spec:
         - name: worker
           image: ghcr.io/oivindoh/misp-container
           command: ["/usr/bin/tini", "--", "python3", "/entrypoint-worker.py"]
-          env:
-            - name: ENABLE_SCHEDULER
-              value: "false"
           envFrom:
             - configMapRef:
                 name: misp-env

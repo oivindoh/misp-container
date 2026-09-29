@@ -1,7 +1,8 @@
 """MISP Prometheus metrics exporter.
 
-Collects operational metrics from the MISP database and remote server
-connectivity checks, exposing them in Prometheus exposition format.
+Collects operational metrics from the MISP database, the background job
+queues in Redis and remote server connectivity checks, exposing them in
+Prometheus exposition format.
 """
 
 from __future__ import annotations
@@ -12,6 +13,8 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+
+from functools import lru_cache
 
 from .env import env
 from .log import get as getlog
@@ -102,6 +105,112 @@ class _DictCursor:
 
     def fetchall(self):
         return [self._row(r) for r in self._cur.fetchall()]
+
+
+# ---------------------------------------------------------------------------
+# Background job queues (Redis)
+# ---------------------------------------------------------------------------
+
+# MISP's SimpleBackgroundJobs queues. MISP never enqueues on "scheduler".
+QUEUES = ("default", "prio", "email", "update", "cache")
+
+
+class RedisError(Exception):
+    pass
+
+
+class _Redis:
+    """The few Redis commands the exporter needs, over one socket (RESP2)."""
+
+    def __init__(self, host: str, port, password: str = "", database=0, timeout: float = 3):
+        self._sock = socket.create_connection((host, int(port)), timeout=timeout)
+        self._reader = self._sock.makefile("rb")
+        if password:
+            self.call("AUTH", password)
+        if int(database or 0):
+            self.call("SELECT", database)
+
+    def call(self, *args):
+        parts = [b"*%d\r\n" % len(args)]
+        for arg in args:
+            data = str(arg).encode()
+            parts.append(b"$%d\r\n%s\r\n" % (len(data), data))
+        self._sock.sendall(b"".join(parts))
+        return self._reply()
+
+    def _reply(self):
+        line = self._reader.readline()
+        if not line.endswith(b"\r\n"):
+            raise RedisError("connection closed")
+        kind, rest = line[:1], line[1:-2]
+        if kind == b"+":
+            return rest.decode()
+        if kind == b"-":
+            raise RedisError(rest.decode(errors="replace"))
+        if kind == b":":
+            return int(rest)
+        if kind == b"$":
+            size = int(rest)
+            if size < 0:
+                return None
+            return self._reader.read(size + 2)[:-2].decode(errors="replace")
+        if kind == b"*":
+            size = int(rest)
+            return None if size < 0 else [self._reply() for _ in range(size)]
+        raise RedisError(f"unexpected reply {line[:40]!r}")
+
+    def scan(self, pattern: str) -> list[str]:
+        keys, cursor = [], "0"
+        while True:
+            cursor, batch = self.call("SCAN", cursor, "MATCH", pattern, "COUNT", 1000)
+            keys.extend(batch)
+            if cursor == "0":
+                return keys
+
+    def close(self) -> None:
+        self._reader.close()
+        self._sock.close()
+
+
+@lru_cache(maxsize=1)
+def _job_redis_settings() -> dict[str, str]:
+    """The Redis connection MISP uses for background jobs: env over settings.yaml."""
+    from .config import load_settings_yaml
+    wanted = {f"SimpleBackgroundJobs.redis_{k}": k
+              for k in ("host", "port", "password", "database", "namespace")}
+    found = {}
+    for specs in load_settings_yaml().values():
+        for spec in specs:
+            if spec.name in wanted:
+                found[wanted[spec.name]] = spec.effective_value
+    return found
+
+
+def _collect_queue_metrics() -> str:
+    """Jobs waiting in or running from each queue, read where MISP keeps them.
+
+    MISP's jobs table is no queue: a row has status 0 while its job waits and
+    runs, and 3 or 4 once it ends. The live state is in Redis: a list per queue
+    for waiting jobs, and a running:<queue>:<id> key while a worker runs one.
+    """
+    cfg = _job_redis_settings()
+    ns = cfg.get("namespace") or "background_jobs"
+    client = _Redis(cfg.get("host") or "redis", cfg.get("port") or 6379,
+                    cfg.get("password", ""), cfg.get("database") or 1)
+    try:
+        counts = {q: int(client.call("LLEN", f"{ns}:{q}")) for q in QUEUES}
+        running_prefix = f"{ns}:running:"
+        for key in client.scan(f"{running_prefix}*"):
+            queue = key[len(running_prefix):].split(":", 1)[0]
+            counts[queue] = counts.get(queue, 0) + 1
+    finally:
+        client.close()
+    return _metric(
+        "misp_jobs_queued",
+        "Background jobs waiting or running by worker queue (Redis)",
+        "gauge",
+        [({"worker": q}, n) for q, n in sorted(counts.items())],
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -259,28 +368,13 @@ def _collect_db_metrics() -> tuple[str, list[dict]]:
                 log.debug("servers: %s", e)
 
             # -- Jobs ----------------------------------------------------------
-            # Queue depth is a gauge (point-in-time). Job totals are counters
-            # (monotonic until MISP prunes the table -- Prometheus handles
-            # counter resets via increase()/rate()). No time window here;
-            # let PromQL handle windowing.
+            # Job totals are counters (monotonic until MISP prunes the table --
+            # Prometheus handles counter resets via increase()/rate()). The
+            # queue depth comes from Redis (_collect_queue_metrics).
             try:
-                status_map = {1: "queued", 2: "running", 3: "failed", 4: "completed"}
-
-                # Queue depth: current jobs waiting to be processed
-                cur.execute(
-                    "SELECT worker, COUNT(*) AS cnt FROM jobs "
-                    "WHERE status IN (1, 2) GROUP BY worker"
-                )
-                qrows = cur.fetchall()
-                blocks.append(
-                    _metric(
-                        "misp_jobs_queued",
-                        "Jobs currently queued or running by worker",
-                        "gauge",
-                        [({"worker": r["worker"] or "unknown"}, r["cnt"]) for r in qrows]
-                        if qrows else [({}, 0)],
-                    )
-                )
+                # MISP writes 0 when it creates a job and 3 or 4 when the job
+                # ends; 0 covers waiting, running and lost jobs alike
+                status_map = {0: "unfinished", 1: "queued", 2: "running", 3: "failed", 4: "completed"}
 
                 # All jobs in one query -- LEFT JOIN to servers for pull/push,
                 # split into server vs non-server in Python.
@@ -351,6 +445,26 @@ def _collect_db_metrics() -> tuple[str, list[dict]]:
                     )
             except Exception as e:
                 log.debug("jobs: %s", e)
+
+            # Tasks under MISP's Scheduled tasks page: no scheduler_worker
+            # runs in this deployment, so an enabled one never runs
+            try:
+                from . import db as dbmod
+                cur.execute(
+                    "SELECT type, COUNT(*) AS cnt FROM scheduled_tasks "
+                    f"WHERE enabled = {dbmod.bool_lit(True)} GROUP BY type"
+                )
+                rows = cur.fetchall()
+                blocks.append(
+                    _metric(
+                        "misp_scheduled_tasks_enabled",
+                        "Tasks enabled under MISP's Scheduled tasks, which nothing runs here",
+                        "gauge",
+                        [({"type": r["type"]}, r["cnt"]) for r in rows] if rows else [({}, 0)],
+                    )
+                )
+            except Exception as e:
+                log.debug("scheduled tasks: %s", e)
 
             # Sync container log (our custom table)
             try:
@@ -530,6 +644,13 @@ def collect_all() -> str:
         errors += 1
 
     try:
+        queue_output = _collect_queue_metrics()
+    except Exception as e:
+        log.warning("cannot read the job queues from Redis: %s", e)
+        queue_output = ""
+        errors += 1
+
+    try:
         net_output = _collect_network_metrics(servers)
     except Exception as e:
         log.error("network metrics collection failed: %s", e)
@@ -555,7 +676,7 @@ def collect_all() -> str:
         ]
     )
 
-    parts = [p for p in (db_output, net_output, meta) if p]
+    parts = [p for p in (db_output, queue_output, net_output, meta) if p]
     return "\n\n".join(parts) + "\n"
 
 
