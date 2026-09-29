@@ -21,7 +21,7 @@ The stack suites build the images with compose, start full MISP stacks, and tear
 
 ## Unit tests
 
-**406 tests** covering the Python entrypoint library (`files/misp_container/`), the scripts and the compose files.
+Tests of the Python entrypoint library (`files/misp_container/`), the scripts and the compose files.
 
 | File | What it tests |
 |------|---------------|
@@ -61,34 +61,34 @@ Run with: `mise run test-upstream`. `mise run test-integration` and the CI job
 
 ## Integration tests
 
-**132 tests** verifying the full MISP stack in Compose.
+The full MISP stack in Compose, checked feature by feature.
 
 **Stack:** 1 MISP instance (configure + web x2 + caddy + worker + MariaDB or PostgreSQL + Redis + Garage S3 + dex)
 
-| Suite | Tests | What it verifies |
-|-------|-------|------------------|
-| Non-root operation | 3 | All containers run as UID 1000 |
-| HTTP / Caddy | 4 | Login page, static CSS, root redirect |
-| Admin user config | 5 | Email, password (no forced reset), org name, org UUID, last_pw_change |
-| Database settings | 3 | DB persistence, setting count, BASE_URL in DB |
-| Workers | 7 | The five queues run under supervisord, no scheduler program, web reaches supervisord over TCP |
-| Background jobs | 1 | Event publish triggers job, worker completes it (status=4) |
-| PHP-FPM | 1 | Listening on port 9002 |
-| Distribution files and app/Config | 11 | taxonomies in the image, bootstrap.php is MISP's default plus the logging block, database.php host, config.php content |
-| GPG | 1 | Auto-generated key in .gnupg volume |
-| MISP API | 2 | Version endpoint, event create via API |
-| Warm restart | 2 | Settings cache reload, minimum_config unchanged |
-| Version-gated defaults | 3 | Defaults version saved, version gate stability, envar precedence |
-| S3 attachment storage | 4 | Garage S3 bootstrap, upload, download, bucket verification |
-| Custom auth | 2 | Header login (200), no-header redirect (302) |
-| OIDC login | 7 | Redirect to dex, its form, the callback, the user's email, role by name, default organisation, mixed auth |
-| Task runner | 13 | API tasks, the index tasks without items, the console tasks `periodic-summary` and `check-user-validity`, a missing `ADMIN_KEY` |
-| Org sync | 18 | Org/user/tag/server creation, server authkey (DB verify), sync user authkey prefix, taxonomy enable, disabled user, custom warninglist create/update, warm run idempotency |
-| Metrics exporter | 22 | Endpoints, core metrics, no scrape errors, a waiting job in `misp_jobs_queued` and back to 0, `misp_scheduled_tasks_enabled` |
-| MISP modules | 6 | Enrichment through the modules service |
-| Logging | 9 | JSON lines from configure and none in text, MISP's own log in the web and worker output once, no CakeLog files on disk, the relay forwarding `server-sync.log`, every log file MISP wrote in web and worker relayed |
-| Multi-replica web | 6 | configure service ran once, two web replicas serve without configuring |
-| Settings | 2 | Every MISP setting curated or catalogued, no rejected `cake` setting |
+| Suite | What it verifies |
+|-------|------------------|
+| Non-root operation | All containers run as UID 1000 |
+| HTTP / Caddy | Login page, static CSS, root redirect |
+| Admin user config | Email, password (no forced reset), org name, org UUID, last_pw_change |
+| Database settings | DB persistence, setting count, BASE_URL in DB |
+| Workers | The five queues run under supervisord, no scheduler program, web reaches supervisord over TCP |
+| Background jobs | Event publish triggers job, worker completes it (status=4) |
+| PHP-FPM | Listening on port 9002 |
+| Distribution files and app/Config | taxonomies in the image, bootstrap.php is MISP's default plus the logging block, database.php host, config.php content |
+| GPG | Auto-generated key in .gnupg volume |
+| MISP API | Version endpoint, event create via API |
+| Warm restart | Settings cache reload, minimum_config unchanged |
+| Version-gated defaults | Defaults version saved, version gate stability, envar precedence |
+| S3 attachment storage | Garage S3 bootstrap, upload, download, bucket verification |
+| Custom auth | Header login (200), no-header redirect (302) |
+| OIDC login | Redirect to dex, its form, the callback, the user's email, role by name, default organisation, mixed auth |
+| Task runner | API tasks, the index tasks without items, the console tasks `periodic-summary` and `check-user-validity`, a missing `ADMIN_KEY` |
+| Org sync | Org/user/tag/server creation, server authkey (DB verify), sync user authkey prefix, taxonomy enable, disabled user, custom warninglist create/update, warm run idempotency |
+| Metrics exporter | Endpoints, core metrics, no scrape errors, a waiting job in `misp_jobs_queued` and back to 0, `misp_scheduled_tasks_enabled` |
+| MISP modules | Enrichment through the modules service |
+| Logging | JSON lines from configure and none in text, MISP's own log in the web and worker output once, no CakeLog files on disk, the relay forwarding `server-sync.log`, every log file MISP wrote in web and worker relayed |
+| Multi-replica web | configure service ran once, two web replicas serve without configuring |
+| Settings | Every MISP setting curated or catalogued, no rejected `cake` setting |
 
 **Files:**
 - `e2e/test_integration.py` -- the suite, in the order above; later sections use the state earlier ones leave
@@ -127,7 +127,7 @@ localhost breaks the image pulls there.
 
 ## Hub-spoke sync test
 
-**20 tests** verifying MISP server-to-server synchronization across 3 isolated instances.
+MISP server-to-server synchronisation across 3 isolated instances.
 
 **Stack:** 3 MISP instances (A, B, C), each with dedicated MySQL + Redis + web + caddy + worker. 18 containers total.
 
@@ -143,14 +143,14 @@ localhost breaks the image pulls there.
         +--push tag:A------+
 ```
 
-| Phase | Tests | What it verifies |
-|-------|-------|------------------|
-| Setup | 2 | All 3 instances ready, configured via sync container |
-| Pull (unfiltered) | 2 | B pulls events from A and C (1 event each) |
-| Tagging | 2 | Events on B tagged with release-to:A and release-to:C |
-| Pull (tag-filtered) | 4 | A gets only release-to:A events, C gets only release-to:C events |
-| Push (tag-filtered) | 2 | B pushes tagged event to A, untagged event stays on B |
-| Hub layout | 8 | A and C hold no active servers; B pulls from both, then pushes each spoke only its own tagged event |
+| Phase | What it verifies |
+|-------|------------------|
+| Setup | All 3 instances ready, configured via sync container |
+| Pull (unfiltered) | B pulls events from A and C (1 event each) |
+| Tagging | Events on B tagged with release-to:A and release-to:C |
+| Pull (tag-filtered) | A gets only release-to:A events, C gets only release-to:C events |
+| Push (tag-filtered) | B pushes tagged event to A, untagged event stays on B |
+| Hub layout | A and C hold no active servers; B pulls from both, then pushes each spoke only its own tagged event |
 
 Pulls and pushes are POSTs; a refused call fails the suite. Before each check the suite waits
 until no job on the instance is unfinished.
@@ -165,7 +165,7 @@ Run with: `mise run test-sync`
 
 ## Migration suite
 
-`e2e/test_migration.py` (pytest, 51 tests) starts the integration stack on MariaDB, seeds it (an org with a
+`e2e/test_migration.py` starts the integration stack on MariaDB, seeds it (an org with a
 user, a sync user with a known authkey, a sync server, an event with an attachment) and
 records the row counts. The mounted source files hold an attachment in each place MISP keeps
 one on disk: flat, under `bucket_<n>/` and under `shadow/`. The suite then runs the migrate Job
@@ -174,7 +174,7 @@ into a second MariaDB and checks the refusals (a non-empty target, an identity m
 org, the server, the event, the attachment download, the fixture attachments under MISP's
 keys, `MISP.live` set by the configure step, and the run in the sync log. The same copy and
 checks then run onto PostgreSQL with the attachments uploaded into an S3 bucket in garage,
-plus the id sequences. One parametrized list of 17 checks runs against both copies. A last run
+plus the id sequences. One parametrized list of checks runs against both copies. A last run
 copies that bucket into a second one and compares every key and byte.
 
 **Files:**
@@ -190,7 +190,7 @@ Run with: `mise run test-migration` (`-- --skip-build`, `-- --keep`)
 
 ## Smoke test
 
-`e2e/test_smoke.py` (17 tests) checks a live MISP through its API: the login page, API auth,
+`e2e/test_smoke.py` checks a live MISP through its API: the login page, API auth,
 the version, `MISP.baseurl` and `MISP.live`, the org, event and user indexes, supervisord and
 the five worker queues, the enrichment URL, and an event created and deleted. `--url` names
 the MISP; without `--key` only the login page is checked; without `--url` the module skips.

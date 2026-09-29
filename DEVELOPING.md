@@ -28,15 +28,15 @@ mise run test-kind       # the base on a kind cluster, then the smoke test
 
 ## Tests
 
-| Suite | Tests | What it covers |
-|-------|-------|----------------|
-| Unit | 406 | Config engine, config.php rendering, advisory lock, database helpers, app/Config preparation, task runner, sync engine, metrics exporter |
-| Upstream guard | 11 | The MISP in the image against what the image patches or depends on (see below) |
-| Integration | 132 | Full Compose stack: HTTP, auth, settings, PHP-FPM, workers, S3, org sync, metrics, modules enrichment, logging |
-| Hub-spoke sync | 20 | 3 isolated MISP instances: pull, push, tag-filtered sync |
-| Migration | 51 | The migrate Job: a seeded MariaDB copied onto a second MariaDB with the attachments on the volume, and onto PostgreSQL with the attachments in S3, refusals, the copy checked through the API, and a bucket copied into another |
-| Kustomize render | 12 renders | The base alone, with each component and with all of them, against the Kubernetes and CRD schemas |
-| Kubernetes (kind) | 17 | The base with `mariadb` and `redis` on a kind cluster, then the smoke test |
+| Suite | What it covers |
+|-------|----------------|
+| Unit | Config engine, config.php rendering, advisory lock, database helpers, app/Config preparation, task runner, sync engine, metrics exporter |
+| Upstream guard | The MISP in the image against what the image patches or depends on (see below) |
+| Integration | Full Compose stack: HTTP, auth, settings, PHP-FPM, workers, S3, org sync, metrics, modules enrichment, logging |
+| Hub-spoke sync | 3 isolated MISP instances: pull, push, tag-filtered sync |
+| Migration | The migrate Job: a seeded MariaDB copied onto a second MariaDB with the attachments on the volume, and onto PostgreSQL with the attachments in S3, refusals, the copy checked through the API, and a bucket copied into another |
+| Kustomize render | The base alone, with each component and with all of them, against the Kubernetes and CRD schemas |
+| Kubernetes (kind) | The base with `mariadb` and `redis` on a kind cluster, then the smoke test |
 
 The integration suite runs every container with `read_only: true` (except web, whose version-gate checks patch `settings.yaml` in place) to catch filesystem writes before Kubernetes does. Under podman the suite also turns off the writable tmpfs that podman gives a read-only container, so `/tmp` is read-only locally as it is under docker and in Kubernetes. `--durations=5` lists the slowest steps. Set `COMPOSE_CMD` and `CONTAINER_CMD` for another runner; CI uses `docker compose` and `docker`.
 
