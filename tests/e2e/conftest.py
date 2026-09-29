@@ -31,6 +31,22 @@ def options(request):
             "key": request.config.getoption("--key")}
 
 
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item, call):
+    """At a module's first failure, dump every service's log.
+
+    The dump at the end of a module misses a container that a later step
+    removed, such as a web replica after a scale-down.
+    """
+    outcome = yield
+    report = outcome.get_result()
+    stack = getattr(item, "funcargs", {}).get("stack")
+    if report.failed and stack is not None and stack.files and not getattr(stack, "dumped", False):
+        stack.dumped = True
+        suite = item.module.__name__.removeprefix("test_")
+        report.sections.append(("compose logs", str(stack.dump_logs(f"{suite}-first-failure"))))
+
+
 @pytest.fixture(scope="module")
 def failed_in_module(request):
     """A callable: True when a test of this module has failed so far."""

@@ -156,7 +156,7 @@ jobs:
           name: integration-report
           path: |
             ${{ runner.temp }}/integration-junit.xml
-            ${{ runner.temp }}/integration-compose-logs.txt
+            ${{ runner.temp }}/*-compose-logs.txt
           if-no-files-found: ignore
 
   integration-postgres:
@@ -219,7 +219,7 @@ jobs:
           name: integration-postgres-report
           path: |
             ${{ runner.temp }}/integration-postgres-junit.xml
-            ${{ runner.temp }}/integration-compose-logs.txt
+            ${{ runner.temp }}/*-compose-logs.txt
           if-no-files-found: ignore
 
   hub-spoke:
@@ -282,7 +282,7 @@ jobs:
           name: sync-report
           path: |
             ${{ runner.temp }}/sync-junit.xml
-            ${{ runner.temp }}/sync-compose-logs.txt
+            ${{ runner.temp }}/*-compose-logs.txt
           if-no-files-found: ignore
 
   migration:
@@ -345,7 +345,7 @@ jobs:
           name: migration-report
           path: |
             ${{ runner.temp }}/migration-junit.xml
-            ${{ runner.temp }}/migration-compose-logs.txt
+            ${{ runner.temp }}/*-compose-logs.txt
           if-no-files-found: ignore
 
   # Applies the Kustomize base with the mariadb and redis components to a kind

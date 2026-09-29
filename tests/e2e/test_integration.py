@@ -445,22 +445,42 @@ def test_custom_auth_without_header_redirects(custom_auth):
 
 # -- OIDC login through dex ----------------------------------------------------------
 
+# The browser side of the login, in the compose network. The sync container is
+# read-only like the Kubernetes Jobs, so the cookies stay in memory.
+OIDC_FLOW = """
+import http.cookiejar, json, urllib.error, urllib.parse, urllib.request
+jar = urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar())
+class Stay(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):
+        return None
+follow = urllib.request.build_opener(jar)
+stay = urllib.request.build_opener(jar, Stay)
+def open_(opener, url, data=None, accept=None):
+    request = urllib.request.Request(url, data=data, headers={"Accept": accept} if accept else {})
+    try:
+        return opener.open(request, timeout=30)
+    except urllib.error.HTTPError as e:
+        return e
+auth = open_(stay, "http://caddy:8080/users/login?OidcAuth=enable").headers.get("Location", "")
+print("auth=" + auth)
+form = open_(follow, auth).geturl()
+print("form=" + form)
+login = urllib.parse.urlencode({"login": "oidc@example.com", "password": "oidc-test-password"}).encode()
+final = open_(follow, form, data=login)
+print(f"final={final.geturl()} {final.status}")
+me = open_(follow, "http://caddy:8080/users/view/me.json", accept="application/json").read()
+try:
+    print(json.dumps(json.loads(me)))
+except ValueError:
+    print("{}")
+"""
+
+
 @pytest.fixture(scope="module")
 def oidc(stack):
-    # The flow runs inside the compose network: the login page starts it (mixed
-    # auth needs ?OidcAuth=enable), dex's local connector takes the credentials,
-    # and the callback lands on http://caddy:8080/users/login
-    _, out = stack.run("sync", "bash", "-c", """
-set -e
-J=/tmp/oidc-jar
-AUTH=$(curl -s -o /dev/null -w "%{redirect_url}" -c $J "http://caddy:8080/users/login?OidcAuth=enable")
-echo "auth=$AUTH"
-FORM=$(curl -s -L -o /dev/null -w "%{url_effective}" -b $J -c $J "$AUTH")
-echo "form=$FORM"
-FINAL=$(curl -s -L -o /dev/null -w "%{url_effective} %{http_code}" -b $J -c $J --data-urlencode "login=oidc@example.com" --data-urlencode "password=oidc-test-password" "$FORM")
-echo "final=$FINAL"
-curl -s -b $J -H "Accept: application/json" http://caddy:8080/users/view/me.json | jq -c . || echo "{}"
-""")
+    # Mixed auth needs ?OidcAuth=enable to start the flow; dex's local connector
+    # takes the credentials, and the callback lands on http://caddy:8080/users/login
+    _, out = stack.run("sync", "python3", "-c", OIDC_FLOW)
     user = next((json.loads(line) for line in reversed(out.splitlines()) if line.startswith("{")), {})
     return {"out": out, "user": user}
 

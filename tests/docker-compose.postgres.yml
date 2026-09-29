@@ -7,6 +7,8 @@ x-postgres-env: &postgres-env
     - base/secrets-db.env
     - base/secrets-app.env
     - base/secrets-admin.env
+    - compose.env
+    - compose-secrets.env
     - ../tests/test-compose.env
     - ../tests/test-compose-secrets.env
     - ../tests/postgres.env

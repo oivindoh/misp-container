@@ -36,7 +36,7 @@ mise run test-kind       # the base on a kind cluster, then the smoke test
 | Kustomize render | 12 renders | The base alone, with each component and with all of them, against the Kubernetes and CRD schemas |
 | Kubernetes (kind) | 17 | The base with `mariadb` and `redis` on a kind cluster, then the smoke test |
 
-The integration suite runs every container with `read_only: true` (except web, whose version-gate checks patch `settings.yaml` in place) to catch filesystem writes before Kubernetes does. `--durations=5` lists the slowest steps. Set `COMPOSE_CMD` and `CONTAINER_CMD` for another runner; CI uses `docker compose` and `docker`.
+The integration suite runs every container with `read_only: true` (except web, whose version-gate checks patch `settings.yaml` in place) to catch filesystem writes before Kubernetes does. Under podman the suite also turns off the writable tmpfs that podman gives a read-only container, so `/tmp` is read-only locally as it is under docker and in Kubernetes. `--durations=5` lists the slowest steps. Set `COMPOSE_CMD` and `CONTAINER_CMD` for another runner; CI uses `docker compose` and `docker`.
 
 ## New MISP releases
 

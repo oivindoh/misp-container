@@ -1,12 +1,18 @@
 # Test overlay -- overrides deploy/docker-compose.yml with test-specific values.
 # Used by tests/e2e/test_integration.py
 
+# Every env_file list here repeats the list it overrides, then adds the test
+# files. podman-compose appends an override list and docker compose merges it
+# and drops repeats; only a repeated prefix gives both runners the same settings
+# (tests/test_compose_files.py).
 x-test-env: &test-env
   env_file:
     - base/base.env
     - base/secrets-db.env
     - base/secrets-app.env
     - base/secrets-admin.env
+    - compose.env
+    - compose-secrets.env
     - ../tests/test-compose.env
     - ../tests/test-compose-secrets.env
 
@@ -36,6 +42,8 @@ services:
       - base/secrets-db.env
       - base/secrets-app.env
       - base/secrets-admin.env
+      - compose.env
+      - compose-secrets.env
       - ../tests/test-compose.env
       - ../tests/test-compose-secrets.env
 
@@ -46,6 +54,8 @@ services:
       - base/secrets-db.env
       - base/secrets-app.env
       - base/secrets-admin.env
+      - compose.env
+      - compose-secrets.env
       - ../tests/test-compose.env
       - ../tests/test-compose-secrets.env
     ports:
@@ -59,6 +69,7 @@ services:
   mysql:
     env_file:
       - base/secrets-db.env
+      - compose-secrets.env
       - ../tests/test-compose-secrets.env
     environment:
       MARIADB_DATABASE: misp
@@ -67,12 +78,14 @@ services:
   # makes podman-compose concatenate it
   redis:
     env_file:
+      - compose-secrets.env
       - ../tests/test-compose-secrets.env
 
   # PostgreSQL for the second run of the suite (tests/e2e/test_integration.py --db-engine postgres)
   postgres:
     env_file:
       - base/secrets-db.env
+      - compose-secrets.env
       - ../tests/test-compose-secrets.env
 
   # OIDC provider for the login test (tests/dex.yaml)

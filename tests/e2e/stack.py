@@ -4,6 +4,11 @@ COMPOSE_CMD selects the compose runner (default "podman compose") and
 CONTAINER_CMD the engine behind it (default "podman"). The engine runs exec
 and logs directly: it costs a third of a compose call, which parses every
 compose file each time.
+
+podman mounts a writable tmpfs on /tmp, /run and /var/tmp of a read-only
+container; docker and Kubernetes (readOnlyRootFilesystem) do not. Under
+podman-compose the stack turns that off, so a local run fails on the same
+writes as CI and a cluster.
 """
 
 from __future__ import annotations
@@ -23,6 +28,7 @@ DEPLOY = REPO / "deploy"
 TESTS = REPO / "tests"
 # podman-compose prints the ID of every container it creates or starts
 CONTAINER_ID_LINE = re.compile(r"^[0-9a-f]{64}$")
+PODMAN_STRICT_READ_ONLY = "--podman-run-args=--read-only-tmpfs=false"
 
 
 def scratch_dir() -> Path:
@@ -53,6 +59,8 @@ class Stack:
         self.project = self.files[0].resolve().parent.name if self.files else ""
         self.base_url = f"http://localhost:{port}"
         self.runner = shlex.split(os.environ.get("COMPOSE_CMD", "podman compose"))
+        if "podman" in Path(self.runner[0]).name:
+            self.runner.append(PODMAN_STRICT_READ_ONLY)
         self.engine = os.environ.get("CONTAINER_CMD", "podman")
         self._ids: dict[str, str] = {}
 

@@ -20,7 +20,7 @@ The stack suites build the images with compose, start full MISP stacks, and tear
 
 ## Unit tests
 
-**344 tests** covering the Python entrypoint library (`files/misp_container/`) and the scripts.
+**350 tests** covering the Python entrypoint library (`files/misp_container/`), the scripts and the compose files.
 
 | File | What it tests |
 |------|---------------|
@@ -36,6 +36,7 @@ The stack suites build the images with compose, start full MISP stacks, and tear
 | `test_config_php.py` | config.php rendering from settings.yaml, PHP escaping and typing |
 | `test_init.py` | app/Config rendering, database.php/email.php generation, GPG key import, writable check |
 | `test_admin.py` | SQL escape function |
+| `test_compose_files.py` | The test overlays repeat the env files they override, so podman-compose and docker compose start each service with the same settings |
 | `test_sync.py` | Org sync engine: config normalization, merge logic, UUID validation, env expansion, role/org/tag/user/server/taxonomy/warninglist/sharing group apply logic, build rules (pull vs push tag format), allow_external user placement, default_role, disable unmanaged resources, full orchestrator flow |
 
 Run with: `mise run test` or `PYTHONPATH=files python -m pytest tests/ -v`
@@ -181,11 +182,23 @@ them out (`--ignore=tests/e2e`).
 | Piece | Does |
 |-------|------|
 | `stack.py` | The `Stack` class: compose calls, `exec` and logs through the engine (a third of a compose call), SQL through the image's db layer, HTTP to MISP, waits, the log dump after a failure |
-| `conftest.py` | `--skip-build`, `--keep` (leave the stack up), `--db-engine`, `--url` and `--key` for the smoke test, and a fixture that tells a module whether one of its tests failed |
+| `conftest.py` | `--skip-build`, `--keep` (leave the stack up), `--db-engine`, `--url` and `--key` for the smoke test, a fixture that tells a module whether one of its tests failed, and the log dump at a module's first failure |
 
 A suite is one module. Module fixtures run each step once and hand its result on; the tests
-run in file order. After a failure the teardown writes every service's log to
-`$TMPDIR/<suite>-compose-logs.txt`, which CI uploads with the JUnit report.
+run in file order. At a module's first failure every service's log goes to
+`$TMPDIR/<suite>-first-failure-compose-logs.txt`, and after a failure the teardown writes
+`$TMPDIR/<suite>-compose-logs.txt`. CI uploads both with the JUnit report. The first dump
+keeps the log of a container that a later step removes, such as a web replica.
+
+The suites behave the same under podman-compose, locally, and docker compose, in CI:
+
+- **Read-only containers.** podman mounts a writable tmpfs on `/tmp`, `/run` and `/var/tmp`
+  of a read-only container; docker and Kubernetes do not. Under podman the `Stack` passes
+  `--read-only-tmpfs=false`, so a write there fails locally as it fails in CI and on a cluster.
+- **Env files.** An overlay's `env_file` list repeats the list it overrides, then adds its own
+  files. podman-compose appends an override list; docker compose merges it and drops repeats.
+  Only a repeated prefix gives both the same settings; `test_compose_files.py` fails on a list
+  that breaks the rule.
 
 ## CI
 
