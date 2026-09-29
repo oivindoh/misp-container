@@ -15,7 +15,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$SCRIPT_DIR/.." && pwd)"
 COMPOSE="${COMPOSE_CMD:-podman compose} -f ${REPO}/deploy/docker-compose.yml -f ${REPO}/tests/docker-compose.test.yml"
-PORT=18080
+PORT=28080
 BUILD=1
 KEEP=0
 for arg in "$@"; do

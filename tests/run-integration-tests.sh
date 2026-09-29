@@ -127,7 +127,7 @@ wait_for_misp() {
 
 # --- Setup ------------------------------------------------------------------
 
-TEST_PORT=18080  # use a non-standard port to avoid conflicts
+TEST_PORT=28080  # use a non-standard port to avoid conflicts
 MISP_VERSION=$(grep '^ARG CORE_TAG=' "${SCRIPT_DIR}/../Dockerfile" | cut -d= -f2)
 
 echo "============================================="

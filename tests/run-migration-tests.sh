@@ -19,7 +19,7 @@ PROFILES="--profile migrate --profile migrate-target --profile postgres"
 COMPOSE="${CC} ${FILES} ${PROFILES}"
 ENGINE="${CONTAINER_CMD:-podman}"
 WORK_DIR="$(cd "${TMPDIR:-/tmp}" && pwd -P)"
-TEST_PORT=18080
+TEST_PORT=28080
 SKIP_BUILD=0
 for arg in "$@"; do
     case "$arg" in

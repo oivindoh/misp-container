@@ -27,7 +27,7 @@ services:
   caddy:
     read_only: true
     ports:
-      - "18080:8080"
+      - "28080:8080"
 
   sync:
     read_only: true
