@@ -15,7 +15,9 @@ and configures the copy as on any release upgrade.
    mounted copy of the old `MISP.attachments_dir` (`app/files` by default).
 3. Set the old instance read-only (`MISP.live=false`), then run the Job before the first
    configure run: Argo CD orders it (sync wave 0) when the `migrate` component is in the
-   overlay; with kubectl or Compose, run it by hand first.
+   overlay; with kubectl or Compose, run it by hand first. A deployment that has synced
+   once holds a fresh install, which the Job refuses (exit 3): set `MIGRATE_FORCE=true` to
+   drop it before the copy (see [Onto a running deployment](#onto-a-running-deployment)).
 4. Remove the component (or profile) once the Job has succeeded. Users log in again; org
    logos, custom images, terms and the GPG keyring are copied by hand.
 
@@ -98,8 +100,22 @@ The target is the deployment's own `DB_*` connection.
    kubectl apply -k overlay/
    ```
 
-4. Remove the component after the first successful sync. The finished Job stays for a day
-   (`ttlSecondsAfterFinished`) for its log.
+4. Remove the component after the first successful sync. Argo CD runs the Job again on every
+   sync while the component is in the overlay: with `MIGRATE_FORCE=true` the next sync drops
+   the migrated database and copies again, and with `false` the Job exits 3 and the sync
+   fails. The finished Job stays for a day (`ttlSecondsAfterFinished`) for its log.
+
+### Onto a running deployment
+
+A deployment that has synced once holds a fresh install. Nothing in it is kept: the Job
+drops every table when `MIGRATE_FORCE=true`, then copies. The web and worker pods keep
+running; they answer with errors while the copy runs, and MISP shows itself as offline
+(`MISP.live=false`) until the configure Job has upgraded the copy.
+
+1. Set `MIGRATE_FORCE=true` in `secrets-migrate.env`, add the component and sync as above.
+   Argo CD runs the configure Job again in the same sync. With kubectl, delete the finished
+   configure Job before the final `kubectl apply`, so that it runs on the copy.
+2. Remove the component, with `MIGRATE_FORCE`, in the next commit.
 
 With the `netpol-cilium` component the Job may reach the source on port 3306 in the cluster
 or outside it; widen its policy for another port.
