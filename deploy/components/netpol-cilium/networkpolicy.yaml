@@ -213,7 +213,8 @@ spec:
 # -- migrate job --
 # Reads the source database (in the cluster or outside it, port 3306 unless
 # MIGRATE_SOURCE_PORT says otherwise; widen the toPorts for another port) and
-# writes the target.
+# writes the target. Reaches S3 on 443 for the attachments; widen the toPorts
+# for a store on another port.
 apiVersion: cilium.io/v2
 kind: CiliumNetworkPolicy
 metadata:
@@ -244,6 +245,8 @@ spec:
       toPorts:
         - ports:
             - port: "3306"
+              protocol: TCP
+            - port: "443"
               protocol: TCP
     - toEndpoints:
         - matchLabels:

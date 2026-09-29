@@ -21,7 +21,7 @@ The stack suites build the images with compose, start full MISP stacks, and tear
 
 ## Unit tests
 
-**377 tests** covering the Python entrypoint library (`files/misp_container/`), the scripts and the compose files.
+**406 tests** covering the Python entrypoint library (`files/misp_container/`), the scripts and the compose files.
 
 | File | What it tests |
 |------|---------------|
@@ -38,6 +38,7 @@ The stack suites build the images with compose, start full MISP stacks, and tear
 | `test_config_php.py` | config.php rendering from settings.yaml, PHP escaping and typing |
 | `test_init.py` | app/Config rendering, database.php/email.php generation, GPG key import, writable check |
 | `test_admin.py` | SQL escape function |
+| `test_s3.py` | The migrate Job's S3 client: AWS's Signature Version 4 examples, path-style and virtual-hosted requests, paged listing, errors |
 | `test_compose_files.py` | The test overlays repeat the env files they override, so podman-compose and docker compose start each service with the same settings |
 | `test_sync.py` | Org sync engine: config normalization, merge logic, UUID validation, env expansion, role/org/tag/user/server/taxonomy/warninglist/sharing group apply logic, build rules (pull vs push tag format), allow_external user placement, default_role, disable unmanaged resources, full orchestrator flow |
 
@@ -49,7 +50,8 @@ Run with: `mise run test` or `PYTHONPATH=files python -m pytest tests/ -v`
 with the repository mounted, and reports each check as one test. A check reads MISP's own
 files and fails when MISP changed something this repository patches or depends on: the job
 queues, the Redis keys of the jobs, the scheduler's tasks, the API routes the image calls,
-what `bootstrap.php` loads and logs to, and the files MISP writes under `app/tmp/logs`. The
+the keys MISP gives attachments, what `bootstrap.php` loads and logs to, and the files MISP
+writes under `app/tmp/logs`. The
 last check runs the logging block that `init.py` renders through PHP, in both formats. A
 failure names the change, the MISP file and the file of ours to revisit; DEVELOPING.md lists
 the checks. No stack starts, so the guard reports even when MISP no longer starts.
@@ -163,20 +165,25 @@ Run with: `mise run test-sync`
 
 ## Migration suite
 
-`e2e/test_migration.py` (pytest, 48 tests) starts the integration stack on MariaDB, seeds it (an org with a
+`e2e/test_migration.py` (pytest, 51 tests) starts the integration stack on MariaDB, seeds it (an org with a
 user, a sync user with a known authkey, a sync server, an event with an attachment) and
-records the row counts. It then runs the migrate Job into a second MariaDB and checks the
-refusals (a non-empty target, an identity mismatch, `MIGRATE_FORCE`), points the stack at the
-copy and checks it: row counts, both authkeys, the org, the server, the event, the attachment
-download, the fixture attachment copied from the mounted source files, `MISP.live` set by the
-configure step, and the run in the sync log. The same copy and checks then run onto
-PostgreSQL, plus the id sequences. One parametrized list of 17 checks runs against both copies.
+records the row counts. The mounted source files hold an attachment in each place MISP keeps
+one on disk: flat, under `bucket_<n>/` and under `shadow/`. The suite then runs the migrate Job
+into a second MariaDB and checks the refusals (a non-empty target, an identity mismatch,
+`MIGRATE_FORCE`), points the stack at the copy and checks it: row counts, both authkeys, the
+org, the server, the event, the attachment download, the fixture attachments under MISP's
+keys, `MISP.live` set by the configure step, and the run in the sync log. The same copy and
+checks then run onto PostgreSQL with the attachments uploaded into an S3 bucket in garage,
+plus the id sequences. One parametrized list of 17 checks runs against both copies. A last run
+copies that bucket into a second one and compares every key and byte.
 
 **Files:**
 - `e2e/test_migration.py` -- the suite; module fixtures carry each step's state to the next
 - `e2e/stack.py`, `e2e/conftest.py` -- the stack helper and the options every pytest suite shares (see below)
 - `docker-compose.migrate.yml` -- overlay: the second MariaDB (`mysql-target`) and the migrate service with the fixture files mounted
 - `docker-compose.migrate-mysql.yml`, `migrate-target-mysql.env` -- point the stack at `mysql-target` after the copy
+- `docker-compose.migrate-s3.yml`, `migrate-target-s3.env` -- point the stack at `postgres` with the attachments in the bucket `misp-migrated`, after the copy
+- `e2e/garage.py` -- layout, keys and buckets in the test stack's garage
 - `migrate-orgs.yaml` -- seed content for the org sync
 
 Run with: `mise run test-migration` (`-- --skip-build`, `-- --keep`)

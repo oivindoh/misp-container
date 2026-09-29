@@ -30,11 +30,11 @@ mise run test-kind       # the base on a kind cluster, then the smoke test
 
 | Suite | Tests | What it covers |
 |-------|-------|----------------|
-| Unit | 377 | Config engine, config.php rendering, advisory lock, database helpers, app/Config preparation, task runner, sync engine, metrics exporter |
-| Upstream guard | 10 | The MISP in the image against what the image patches or depends on (see below) |
+| Unit | 406 | Config engine, config.php rendering, advisory lock, database helpers, app/Config preparation, task runner, sync engine, metrics exporter |
+| Upstream guard | 11 | The MISP in the image against what the image patches or depends on (see below) |
 | Integration | 132 | Full Compose stack: HTTP, auth, settings, PHP-FPM, workers, S3, org sync, metrics, modules enrichment, logging |
 | Hub-spoke sync | 20 | 3 isolated MISP instances: pull, push, tag-filtered sync |
-| Migration | 48 | The migrate Job: a seeded MariaDB copied onto a second MariaDB and onto PostgreSQL, refusals, the copy checked through the API |
+| Migration | 51 | The migrate Job: a seeded MariaDB copied onto a second MariaDB with the attachments on the volume, and onto PostgreSQL with the attachments in S3, refusals, the copy checked through the API, and a bucket copied into another |
 | Kustomize render | 12 renders | The base alone, with each component and with all of them, against the Kubernetes and CRD schemas |
 | Kubernetes (kind) | 17 | The base with `mariadb` and `redis` on a kind cluster, then the smoke test |
 
@@ -70,6 +70,7 @@ revisit.
 | `job-keys` | `BackgroundJobsTool.php` | `misp_container/metrics.py` | keeps waiting or running jobs under other Redis keys |
 | `scheduler-tasks` | `SchedulerWorkerShell.php` | `SCHEDULER_COVERAGE` in `misp_container/task.py` | offers periodic work that no task covers |
 | `api-routes` | `app/Controller/` | the file and line that calls the route | drops a controller or an action the image calls |
+| `attachment-keys` | `AttachmentTool.php`, `AWSS3Client.php` | `attachment_key()` in `misp_container/migrate.py`, `misp_container/s3.py` | keys attachments another way, or stops sending path-style S3 requests |
 | `cakeresque` | `bootstrap.default.php` | the `composer-prep` stage of the `Dockerfile` | loads CakeResque while SimpleBackgroundJobs is on |
 | `cakelog-streams` | `bootstrap.default.php` | `LOG_BLOCK` in `misp_container/init.py` | configures a CakeLog file stream that the logging block does not drop |
 | `shell-streams` | CakePHP's `Shell.php` | `LOG_BLOCK` in `misp_container/init.py` | checks other stream names before it adds its console streams |

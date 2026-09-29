@@ -56,26 +56,124 @@ class TestIdentity:
         assert migrate.check_identity({"MISP.uuid": "u"}, {"MISP_UUID": "u"}) == []
 
 
-class TestFiles:
-    def test_plan_takes_event_dirs_only(self, tmp_path, monkeypatch):
-        src = tmp_path / "files"
-        for d in ("12", "7", "img/orgs", "terms", "taxonomies", "scripts"):
-            (src / d).mkdir(parents=True)
-        monkeypatch.setenv("MISP_ATTACHMENTS_DIR", str(tmp_path / "att"))
-        plan = migrate.plan_files(src)
-        targets = {s.relative_to(src).as_posix(): d for s, d in plan}
-        assert targets == {"12": tmp_path / "att" / "12", "7": tmp_path / "att" / "7"}
+class FakeBucket(migrate.Bucket):
+    """A bucket held in a dict: key -> bytes."""
 
-    def test_copy_files_copies_trees(self, tmp_path, monkeypatch):
-        src = tmp_path / "files"
-        (src / "3" / "9").mkdir(parents=True)
-        (src / "3" / "9" / "blob").write_bytes(b"data")
-        monkeypatch.setenv("MISP_ATTACHMENTS_DIR", str(tmp_path / "att"))
-        assert migrate.copy_files(src) == 1
-        assert (tmp_path / "att" / "3" / "9" / "blob").read_bytes() == b"data"
+    def __init__(self, name, objects=None):
+        super().__init__(name=name, access_key="a", secret_key="s")
+        self.objects = dict(objects or {})
 
-    def test_missing_source_dir_is_empty_plan(self, tmp_path):
-        assert migrate.plan_files(tmp_path / "nope") == []
+    def keys(self, prefix=""):
+        return iter(sorted(k for k in self.objects if k.startswith(prefix)))
+
+    def download(self, key, path):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(self.objects[key])
+        return len(self.objects[key])
+
+    def upload(self, key, path):
+        self.objects[key] = path.read_bytes()
+
+
+def tree(root, files):
+    for rel, data in files.items():
+        (root / rel).parent.mkdir(parents=True, exist_ok=True)
+        (root / rel).write_bytes(data)
+    return root
+
+
+class TestAttachmentKey:
+    @pytest.mark.parametrize("rel,key", [
+        ("12/34", "12/34"),
+        ("12/34_thumb", "12/34_thumb"),
+        ("bucket_1000/1234/5", "1234/5"),
+        ("shadow/12/34", "shadow/12/34"),
+        ("shadow/bucket_0/12/34", "shadow/12/34"),
+        ("taxonomies/tlp/machinetag.json", None),
+        ("12", None),
+        ("bucket_0/notanevent/1", None),
+    ])
+    def test_key(self, rel, key):
+        assert migrate.attachment_key(rel) == key
+
+
+class TestCopyAttachments:
+    SOURCE = {"12/34": b"flat", "bucket_0/56/7": b"bucketed", "shadow/12/35": b"proposal",
+              "taxonomies/x": b"ships in the image"}
+    KEYS = {"12/34": b"flat", "56/7": b"bucketed", "shadow/12/35": b"proposal"}
+
+    def test_directory_to_volume(self, tmp_path):
+        target = tmp_path / "att"
+        assert migrate.copy_attachments(tree(tmp_path / "src", self.SOURCE), target) == 3
+        found = {p.relative_to(target).as_posix(): p.read_bytes() for p in target.rglob("*") if p.is_file()}
+        assert found == self.KEYS
+
+    def test_directory_to_bucket(self, tmp_path):
+        bucket = FakeBucket("target")
+        assert migrate.copy_attachments(tree(tmp_path / "src", self.SOURCE), bucket) == 3
+        assert bucket.objects == self.KEYS
+
+    def test_bucket_to_volume(self, tmp_path):
+        target = tmp_path / "att"
+        assert migrate.copy_attachments(FakeBucket("source", self.KEYS), target) == 3
+        assert (target / "shadow/12/35").read_bytes() == b"proposal"
+
+    def test_bucket_to_bucket(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(migrate.tempfile, "gettempdir", lambda: str(tmp_path))
+        target = FakeBucket("target")
+        assert migrate.copy_attachments(FakeBucket("source", {**self.KEYS, "notes.txt": b"x"}), target) == 3
+        assert target.objects == self.KEYS
+        assert not (tmp_path / "migrate-attachment").exists()
+
+
+class TestAttachmentConfig:
+    S3 = {"PLUGIN_S3_BUCKET_NAME": "misp", "PLUGIN_S3_AWS_ENDPOINT": "http://garage:3900/",
+          "PLUGIN_S3_REGION": "garage", "PLUGIN_S3_AWS_ACCESS_KEY": "GK1", "PLUGIN_S3_AWS_SECRET_KEY": "s"}
+
+    def env(self, monkeypatch, values):
+        for key in [*self.S3, "MIGRATE_SOURCE_FILES", "MIGRATE_SOURCE_S3_BUCKET", "MIGRATE_SOURCE_S3_ACCESS_KEY",
+                    "MIGRATE_SOURCE_S3_SECRET_KEY", "PLUGIN_S3_AWS_COMPATIBLE", "PLUGIN_S3_AWS_VALIDATE_CA"]:
+            monkeypatch.delenv(key, raising=False)
+        for key, value in values.items():
+            monkeypatch.setenv(key, value)
+
+    def test_target_is_the_volume_without_a_bucket(self, monkeypatch, tmp_path):
+        self.env(monkeypatch, {"MISP_ATTACHMENTS_DIR": str(tmp_path)})
+        assert migrate.attachment_target() == tmp_path
+
+    def test_target_is_the_deployments_bucket(self, monkeypatch):
+        self.env(monkeypatch, self.S3)
+        bucket = migrate.attachment_target()
+        assert (bucket.name, bucket.endpoint, bucket.region, bucket.verify) == ("misp", "http://garage:3900", "garage", True)
+
+    def test_aws_target_ignores_the_endpoint(self, monkeypatch):
+        self.env(monkeypatch, {**self.S3, "PLUGIN_S3_AWS_COMPATIBLE": "false", "PLUGIN_S3_REGION": ""})
+        bucket = migrate.attachment_target()
+        assert (bucket.endpoint, bucket.region) == ("", "eu-west-1")
+
+    def test_a_bucket_needs_keys(self, monkeypatch):
+        self.env(monkeypatch, {"PLUGIN_S3_BUCKET_NAME": "misp"})
+        with pytest.raises(migrate.ConfigError, match="PLUGIN_S3_AWS_ACCESS_KEY and PLUGIN_S3_AWS_SECRET_KEY"):
+            migrate.attachment_target()
+
+    def test_one_source_only(self, monkeypatch, tmp_path):
+        self.env(monkeypatch, {"MIGRATE_SOURCE_FILES": str(tmp_path), "MIGRATE_SOURCE_S3_BUCKET": "old",
+                               "MIGRATE_SOURCE_S3_ACCESS_KEY": "a", "MIGRATE_SOURCE_S3_SECRET_KEY": "s"})
+        with pytest.raises(migrate.ConfigError, match="not both"):
+            migrate.attachment_source()
+
+    def test_a_missing_source_directory(self, monkeypatch, tmp_path):
+        self.env(monkeypatch, {"MIGRATE_SOURCE_FILES": str(tmp_path / "nope")})
+        with pytest.raises(migrate.ConfigError, match="no directory"):
+            migrate.attachment_source()
+
+    def test_no_source(self, monkeypatch):
+        self.env(monkeypatch, {})
+        assert migrate.attachment_source() is None
+
+    def test_validate_ca_off(self, monkeypatch):
+        self.env(monkeypatch, {**self.S3, "PLUGIN_S3_AWS_VALIDATE_CA": "false"})
+        assert migrate.attachment_target().verify is False
 
 
 class _ReadCursor:

@@ -499,8 +499,9 @@ and org-sync runs. See
 ## Migration
 
 The migrate Job (`migrate` component, Compose profile `migrate`) copies an existing MySQL
-or MariaDB MISP database into this deployment, on either engine, and the event attachments
-onto the attachments volume; the configure Job then upgrades the copy. See
+or MariaDB MISP database into this deployment, on either engine, and the attachments from a
+mounted directory or an S3 bucket into the deployment's bucket or attachments volume; the
+configure Job then upgrades the copy. See
 [docs/migration.md](docs/migration.md).
 
 ## Development

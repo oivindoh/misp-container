@@ -105,6 +105,43 @@ CakeLog::config('error', array(
 ));
 """
 
+ATTACHMENT_TOOL = """<?php
+class AttachmentTool
+{
+    public function attachmentDirIsS3()
+    {
+        $attachmentsDir = Configure::read('MISP.attachments_dir');
+        return $attachmentsDir && str_starts_with($attachmentsDir, "s3");
+    }
+
+    private function getPath($shadow, $eventId, $attributeId, $pathSuffix, $forceNonBucketed = false)
+    {
+        $path = $shadow ? ('shadow' . DS) : '';
+        if (Configure::read('MISP.attachments_bucketed') && empty($forceNonBucketed) && !$this->attachmentDirIsS3()) {
+            return $path . 'bucket_' . (1000*(floor($eventId / 1000))) . DS . $eventId . DS . $attributeId . $pathSuffix;
+        }
+        return $path . $eventId . DS . $attributeId . $pathSuffix;
+    }
+}
+"""
+
+AWS_S3_CLIENT = """<?php
+class AWSS3Client
+{
+    public function initTool()
+    {
+        if ($settings['aws_compatible']) {
+            $s3Config = array(
+                 'version' => 'latest',
+                 'region' => $settings['region'],
+                 'endpoint' => $settings['aws_endpoint'],
+                 'use_path_style_endpoint' => true,
+            );
+        }
+    }
+}
+"""
+
 # The files MISP writes under app/tmp/logs directly, one line each, as 2.5.47 writes them
 LOG_WRITERS = {
     "app/Lib/Tools/ServerSyncTool.php":
@@ -135,6 +172,8 @@ def misp(tmp_path):
     write(root, cu.SCHEDULER_SHELL, SCHEDULER_SHELL)
     write(root, cu.CONSOLE_SHELL, CONSOLE_SHELL)
     write(root, cu.BOOTSTRAP, BOOTSTRAP)
+    write(root, cu.ATTACHMENT_TOOL, ATTACHMENT_TOOL)
+    write(root, cu.AWS_S3_CLIENT, AWS_S3_CLIENT)
     for rel, text in LOG_WRITERS.items():
         write(root, rel, text)
     actions: dict[str, list[str]] = {}
@@ -229,6 +268,21 @@ class TestApiRoutes:
     def test_a_removed_controller(self, misp):
         (misp / cu.CONTROLLERS / "TaxiiServersController.php").unlink()
         assert all("MISP has no TaxiiServersController.php" in p for p in problems(misp, "api-routes"))
+
+
+class TestAttachmentKeys:
+    def test_buckets_on_s3(self, misp):
+        edit(misp, cu.ATTACHMENT_TOOL, " && !$this->attachmentDirIsS3()", "")
+        assert "bucket_<n> on disk only" in problems(misp, "attachment-keys")[0]
+
+    def test_a_new_key_shape(self, misp):
+        edit(misp, cu.ATTACHMENT_TOOL, "return $path . $eventId . DS . $attributeId . $pathSuffix;",
+             "return $path . $eventId . '-' . $attributeId . $pathSuffix;")
+        assert "<event>/<attribute><suffix>" in problems(misp, "attachment-keys")[0]
+
+    def test_virtual_hosted_requests(self, misp):
+        edit(misp, cu.AWS_S3_CLIENT, "'use_path_style_endpoint' => true", "'use_path_style_endpoint' => false")
+        assert "path-style" in problems(misp, "attachment-keys")[0]
 
 
 class TestBootstrap:

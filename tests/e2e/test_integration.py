@@ -20,6 +20,7 @@ import urllib.request
 
 import pytest
 
+import garage
 from misp_container import WORKER_QUEUES
 from misp_container.logrelay import FILES as RELAYED
 from stack import DEPLOY, REPO, TESTS, Stack, env_file, scratch_dir
@@ -33,39 +34,14 @@ MISP_VERSION = next(line.split("=", 1)[1].strip() for line in (REPO / "Dockerfil
                     if line.startswith("ARG CORE_TAG="))
 METRICS = "http://localhost:19191"
 MODULES = "http://localhost:16666"
-GARAGE = "http://localhost:3903"
-GARAGE_ADMIN = "s3cr3t-admin-t0ken"
 SYNC_ORG_UUID = "4f1ed2b2-1821-49da-bf2c-b7ab639d9b19"
-
-
-def garage(method, path, data=None):
-    request = urllib.request.Request(GARAGE + path, method=method,
-                                     data=json.dumps(data).encode() if data is not None else None,
-                                     headers={"Authorization": f"Bearer {GARAGE_ADMIN}",
-                                              "Content-Type": "application/json"})
-    with urllib.request.urlopen(request, timeout=10) as response:
-        return json.loads(response.read() or b"{}")
 
 
 def bootstrap_garage():
     """Layout, key and bucket for the S3 section; returns (access key, secret, bucket id)."""
-    deadline = time.monotonic() + 30
-    while True:
-        try:
-            node = garage("GET", "/v2/GetClusterStatus")["nodes"][0]["id"]
-            break
-        except Exception:
-            if time.monotonic() > deadline:
-                raise
-            time.sleep(1)
-    garage("POST", "/v2/UpdateClusterLayout",
-           {"roles": [{"id": node, "zone": "dc1", "capacity": 1073741824, "tags": []}]})
-    garage("POST", "/v2/ApplyClusterLayout", {"version": 1})
-    key = garage("POST", "/v2/CreateKey", {"name": "misp-test"})
-    bucket = garage("POST", "/v2/CreateBucket", {"globalAlias": "misp-attachments"})
-    garage("POST", "/v2/AllowBucketKey", {"bucketId": bucket["id"], "accessKeyId": key["accessKeyId"],
-                                          "permissions": {"read": True, "write": True, "owner": True}})
-    return key["accessKeyId"], key["secretAccessKey"], bucket["id"]
+    garage.layout()
+    access, secret = garage.key("misp-test")
+    return access, secret, garage.bucket("misp-attachments", access)
 
 
 @pytest.fixture(scope="module")
@@ -421,7 +397,7 @@ def test_s3_attachment_downloads(stack, s3_event):
 
 def test_s3_objects_in_the_bucket(stack, s3_event):
     time.sleep(2)
-    info = garage("GET", f"/v2/GetBucketInfo?id={stack.s3[2]}")
+    info = garage.call("GET", f"/v2/GetBucketInfo?id={stack.s3[2]}")
     assert (info.get("objects") or 0) > 0 or (info.get("bytes") or 0) > 0
 
 

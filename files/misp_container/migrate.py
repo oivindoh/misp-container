@@ -4,10 +4,14 @@ Usage: python3 -m misp_container.migrate
 
 Source: MIGRATE_SOURCE_HOST, MIGRATE_SOURCE_PORT (3306), MIGRATE_SOURCE_NAME
 (misp), MIGRATE_SOURCE_USER, MIGRATE_SOURCE_PASSWORD, MIGRATE_SOURCE_TLS.
-Target: the deployment's DB_* connection, on either engine. Files:
-MIGRATE_SOURCE_FILES names a mounted copy of the source's attachments
-directory (MISP.attachments_dir, app/files by default); its event directories
-go to this deployment's attachments volume.
+Target: the deployment's DB_* connection, on either engine.
+
+Attachments come from one of two sources: MIGRATE_SOURCE_FILES, a mounted
+copy of the source's attachments directory (MISP.attachments_dir, app/files
+by default), or MIGRATE_SOURCE_S3_BUCKET with MIGRATE_SOURCE_S3_ENDPOINT,
+_REGION, _ACCESS_KEY, _SECRET_KEY, _VALIDATE_CA and _CA. They go to this
+deployment's bucket when PLUGIN_S3_BUCKET_NAME is set, and to its attachments
+volume otherwise. The Job checks both buckets before it copies the database.
 
 Same engine (target mysql): every table is created from the source's own
 CREATE TABLE and copied whole; the configure step then runs MISP's schema
@@ -27,12 +31,15 @@ import os
 import re
 import shutil
 import sys
+import tempfile
 import time
 from pathlib import Path
+from typing import Iterator
 
 from . import MISP_BASE, db
 from .env import env
 from .log import setup as setup_logging, get as getlog
+from .s3 import Bucket, S3Error
 
 log = getlog("migrate")
 
@@ -301,30 +308,103 @@ def check_identity(source_values: dict, environment=None) -> list[str]:
     return problems
 
 
-def plan_files(source: Path) -> list[tuple[Path, Path]]:
-    """(source dir, target dir) pairs: the event directories of a mounted
-    attachments directory. Everything else under app/files ships in the image."""
-    plan = []
-    if not source.is_dir():
-        return plan
-    attachments = Path(env("MISP_ATTACHMENTS_DIR", f"{MISP_BASE}/app/attachments"))
-    for entry in sorted(source.iterdir()):
-        if entry.is_dir() and entry.name.isdigit():
-            plan.append((entry, attachments / entry.name))
-    return plan
+class ConfigError(Exception):
+    """The attachment source or target is set up wrong."""
 
 
-def copy_files(source: Path) -> int:
-    """Copy the event attachments from a mounted attachments directory."""
+def attachment_key(rel: str) -> str | None:
+    """MISP's key for a file under an attachments directory; None for a file that is no attachment.
+
+    MISP stores <event>/<attribute><suffix>, under shadow/ for a proposal, and on
+    disk with MISP.attachments_bucketed also under bucket_<n>/. On S3 and in this
+    image's attachments volume the key has no bucket level (AttachmentTool::getPath()).
+    """
+    parts = [p for p in rel.split("/") if p]
+    shadow = parts[:1] == ["shadow"]
+    if shadow:
+        parts = parts[1:]
+    if parts and re.fullmatch(r"bucket_\d+", parts[0]):
+        parts = parts[1:]
+    if len(parts) < 2 or not parts[0].isdigit():
+        return None
+    return "/".join((["shadow"] if shadow else []) + parts)
+
+
+def bucket_from_env(name: str, endpoint: str, region: str, access_key: str, secret_key: str,
+                    validate_ca: str, ca: str) -> Bucket | None:
+    """A Bucket from the env vars named, None when the bucket name is unset."""
+    if not env(name):
+        return None
+    missing = [k for k in (access_key, secret_key) if not env(k)]
+    if missing:
+        raise ConfigError(f"{name} is set but {' and '.join(missing)} not: the Job signs its S3 requests "
+                          "with an access key")
+    verify = False if env(validate_ca, "true").lower() == "false" else (env(ca) or True)
+    return Bucket(name=env(name), access_key=env(access_key), secret_key=env(secret_key),
+                  region=env(region) or "eu-west-1", endpoint=env(endpoint).rstrip("/"), verify=verify)
+
+
+def attachment_source() -> Path | Bucket | None:
+    files = env("MIGRATE_SOURCE_FILES")
+    bucket = bucket_from_env("MIGRATE_SOURCE_S3_BUCKET", "MIGRATE_SOURCE_S3_ENDPOINT", "MIGRATE_SOURCE_S3_REGION",
+                             "MIGRATE_SOURCE_S3_ACCESS_KEY", "MIGRATE_SOURCE_S3_SECRET_KEY",
+                             "MIGRATE_SOURCE_S3_VALIDATE_CA", "MIGRATE_SOURCE_S3_CA")
+    if files and bucket:
+        raise ConfigError("set MIGRATE_SOURCE_FILES or MIGRATE_SOURCE_S3_BUCKET, not both")
+    if files and not Path(files).is_dir():
+        raise ConfigError(f"MIGRATE_SOURCE_FILES={files} is no directory: mount the source's attachments there")
+    return Path(files) if files else bucket
+
+
+def attachment_target() -> Path | Bucket:
+    """This deployment's bucket when it stores attachments on S3, its attachments volume otherwise."""
+    bucket = bucket_from_env("PLUGIN_S3_BUCKET_NAME", "PLUGIN_S3_AWS_ENDPOINT", "PLUGIN_S3_REGION",
+                             "PLUGIN_S3_AWS_ACCESS_KEY", "PLUGIN_S3_AWS_SECRET_KEY", "PLUGIN_S3_AWS_VALIDATE_CA",
+                             "PLUGIN_S3_AWS_CA")
+    # MISP uses the endpoint only for an AWS-compatible store (Plugin.S3_aws_compatible)
+    if bucket and env("PLUGIN_S3_AWS_COMPATIBLE", "true").lower() in ("false", "0"):
+        bucket.endpoint = ""
+    return bucket or Path(env("MISP_ATTACHMENTS_DIR", f"{MISP_BASE}/app/attachments"))
+
+
+def check_bucket(bucket: Path | Bucket | None) -> None:
+    """Fail before the database copy when a bucket cannot be listed."""
+    if isinstance(bucket, Bucket):
+        next(iter(bucket.keys("0")), None)
+
+
+def source_attachments(source: Path | Bucket) -> Iterator[tuple[str, str]]:
+    """(key, where in the source) for every attachment; other files are left out."""
+    if isinstance(source, Bucket):
+        for name in source.keys():
+            key = attachment_key(name)
+            if key:
+                yield key, name
+        return
+    for path in sorted(source.rglob("*")):
+        if path.is_file():
+            key = attachment_key(path.relative_to(source).as_posix())
+            if key:
+                yield key, str(path)
+
+
+def copy_attachments(source: Path | Bucket, target: Path | Bucket) -> int:
+    """Copy every attachment from source to target under MISP's key; returns the count."""
     copied = 0
-    for src, dst in plan_files(source):
-        dst.mkdir(parents=True, exist_ok=True)
-        for path in src.rglob("*"):
-            if path.is_file():
-                rel = path.relative_to(src)
-                (dst / rel).parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy(path, dst / rel)
-                copied += 1
+    spool = Path(tempfile.gettempdir()) / "migrate-attachment"
+    for key, where in source_attachments(source):
+        if isinstance(source, Bucket) and isinstance(target, Bucket):
+            source.download(where, spool)
+            target.upload(key, spool)
+        elif isinstance(source, Bucket):
+            source.download(where, target / key)
+        elif isinstance(target, Bucket):
+            target.upload(key, Path(where))
+        else:
+            (target / key).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy(where, target / key)
+        copied += 1
+    spool.unlink(missing_ok=True)
     return copied
 
 
@@ -395,6 +475,14 @@ def run() -> None:
     log.info("migrating %s@%s:%s/%s (mysql) into %s at %s", source["user"], source["host"],
              source["port"], source["database"], target_engine, db.settings()["host"])
 
+    try:
+        files_from, files_to = attachment_source(), attachment_target()
+        check_bucket(files_from)
+        check_bucket(files_to)
+    except (ConfigError, S3Error) as e:
+        log.error("%s", e)
+        sys.exit(EXIT_CONFIG)
+
     db.wait_for_db()
     try:
         src = db.connect_to(source, db.MYSQL)
@@ -436,12 +524,16 @@ def run() -> None:
         # again once the copy is upgraded and configured.
         db.set_system_setting("MISP.live", "false")
 
-        files = env("MIGRATE_SOURCE_FILES")
-        if files:
-            n = copy_files(Path(files))
-            log.info("attachments copied from %s: %d files", files, n)
+        if files_from is None:
+            log.info("neither MIGRATE_SOURCE_FILES nor MIGRATE_SOURCE_S3_BUCKET is set; attachments are not copied")
         else:
-            log.info("MIGRATE_SOURCE_FILES is not set; attachments are not copied")
+            try:
+                n = copy_attachments(files_from, files_to)
+            except (S3Error, OSError) as e:
+                log.error("attachment copy failed: %s", e)
+                record("error", started, repr(e))
+                sys.exit(EXIT_COPY)
+            log.info("attachments copied from %s to %s: %d files", files_from, files_to, n)
     finally:
         dst.close()
         src.close()

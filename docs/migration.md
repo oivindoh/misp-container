@@ -2,8 +2,8 @@
 
 The migrate Job copies an existing MISP database (MySQL or MariaDB: the official misp-docker,
 a VM, a bare-metal install) into this deployment, on the `mariadb` or the `postgres` component,
-and copies the event attachments onto the attachments volume. The configure Job then upgrades
-and configures the copy as on any release upgrade.
+and copies the attachments into this deployment's store: its S3 bucket, or the attachments
+volume. The configure Job then upgrades and configures the copy as on any release upgrade.
 
 ## TL;DR
 
@@ -12,7 +12,8 @@ and configures the copy as on any release upgrade.
    `compose-secrets.env` and `compose.env`). The Job refuses to run when a value it can read
    on the source differs.
 2. Give the Job the source connection (`secrets-migrate.env`) and, to copy attachments, a
-   mounted copy of the old `MISP.attachments_dir` (`app/files` by default).
+   mounted copy of the old `MISP.attachments_dir` (`app/files` by default) or the old S3
+   bucket (`MIGRATE_SOURCE_S3_*`).
 3. Set the old instance read-only (`MISP.live=false`), then run the Job before the first
    configure run: Argo CD orders it (sync wave 0) when the `migrate` component is in the
    overlay; with kubectl or Compose, run it by hand first. A deployment that has synced
@@ -24,9 +25,10 @@ and configures the copy as on any release upgrade.
 ```mermaid
 flowchart LR
     S[(old MISP<br/>MySQL / MariaDB)] -->|rows, table by table| J[migrate Job]
-    F[/old app/files/] -->|event directories| J
+    F[/old app/files/] -->|attachments| J
+    B[/old S3 bucket/] -->|or: objects| J
     J --> T[(mariadb or postgres<br/>component)]
-    J --> A[/attachments claim/]
+    J --> A[/S3 bucket or<br/>attachments claim/]
     T --> C[configure Job<br/>runUpdates, settings, MISP.live]
     C --> W[web, worker]
 ```
@@ -40,7 +42,7 @@ flowchart LR
 | Schema | each table created from the source's own `CREATE TABLE` (MySQL 8 collations mapped for MariaDB) | this image's PostgreSQL baseline; the source must be at the same `db_version` and ledger state (exit 5) |
 | Rows | every table, whole | every table the baseline has, by column name; flags become booleans, zero dates become NULL; the id sequences move past the copied ids |
 | After | `MISP.live=false` on the copy, so web and worker wait for the configure Job | same |
-| Files | the event directories of `MIGRATE_SOURCE_FILES` into the attachments volume | same |
+| Files | the attachments of `MIGRATE_SOURCE_FILES` or `MIGRATE_SOURCE_S3_BUCKET` into the deployment's bucket or attachments volume (see [Attachments](#attachments)) | same |
 
 The Job holds the configure lock while it copies. A configure Job that starts meanwhile waits
 for it, and then runs `cake Admin runUpdates` on the copy: a source on an older MISP release is
@@ -53,14 +55,30 @@ a configure run to upgrade it, then a cross-engine copy from that database onto 
 | Exit code | Meaning |
 |-----------|---------|
 | 0 | Copied |
-| 1 | The copy failed part way; the target holds a partial copy, run again with `MIGRATE_FORCE=true` |
-| 2 | Configuration: no `MIGRATE_SOURCE_HOST`, or the source refuses the connection |
+| 1 | The copy failed part way, rows or attachments; the target holds a partial copy, run again with `MIGRATE_FORCE=true` |
+| 2 | Configuration: no `MIGRATE_SOURCE_HOST`, the source refuses the connection, both attachment sources set, a bucket without an access key, or a bucket the Job cannot list |
 | 3 | The target database is not empty |
 | 4 | An identity setting on the source differs from this deployment's |
 | 5 | The source schema is not this image's (cross engine only) |
 
 The run is recorded in `misp_container_sync_log` (operation `migrate`), so the metrics
 exporter reports it like a configure run.
+
+### Attachments
+
+| Source | Target: `PLUGIN_S3_BUCKET_NAME` set | Target: no bucket |
+|--------|-------------------------------------|-------------------|
+| `MIGRATE_SOURCE_FILES`, a mounted directory | uploaded to the deployment's bucket | copied onto the attachments volume |
+| `MIGRATE_SOURCE_S3_BUCKET`, the old bucket | copied bucket to bucket, one object at a time through `/tmp` | downloaded onto the attachments volume |
+| neither | no attachments copied | same |
+
+MISP keeps an attachment at `<event id>/<attribute id>` with a suffix for derived files, and
+the attachments of a proposal under `shadow/`. A source with `MISP.attachments_bucketed` also
+has a `bucket_<n>/` level on disk; the Job drops it, as MISP does on S3 and in this image's
+volume. Other files in the old directory (taxonomies, scripts, images) ship in the image and
+are left out. The Job lists both buckets before it copies the database and stops there (exit
+2) when it cannot. It signs its S3 requests with an access key, and reaches an
+AWS-compatible store path-style at its endpoint, as MISP does.
 
 ## Configuration
 
@@ -69,17 +87,22 @@ exporter reports it like a configure run.
 | `MIGRATE_SOURCE_HOST`, `MIGRATE_SOURCE_PORT` | The source database (port 3306 by default) |
 | `MIGRATE_SOURCE_NAME`, `MIGRATE_SOURCE_USER`, `MIGRATE_SOURCE_PASSWORD` | Database (`misp` by default) and a user that can read it |
 | `MIGRATE_SOURCE_TLS` | `true` for a TLS connection |
-| `MIGRATE_SOURCE_FILES` | A mounted copy of the source's attachments directory; unset copies no files |
+| `MIGRATE_SOURCE_FILES` | A mounted copy of the source's attachments directory |
+| `MIGRATE_SOURCE_S3_BUCKET`, `MIGRATE_SOURCE_S3_ENDPOINT`, `MIGRATE_SOURCE_S3_REGION` | The source's bucket, instead of `MIGRATE_SOURCE_FILES`; the endpoint of an AWS-compatible store, empty for AWS; the region (`eu-west-1` by default, as in MISP) |
+| `MIGRATE_SOURCE_S3_ACCESS_KEY`, `MIGRATE_SOURCE_S3_SECRET_KEY` | A key that can list and read the source bucket |
+| `MIGRATE_SOURCE_S3_VALIDATE_CA`, `MIGRATE_SOURCE_S3_CA` | `false` skips the TLS check; a CA bundle for it |
 | `MIGRATE_FORCE` | `true` drops a non-empty target first |
 
-The target is the deployment's own `DB_*` connection.
+The target is the deployment's own `DB_*` connection, and for attachments its own `PLUGIN_S3_*`
+settings (the key needs write access to the bucket) or its attachments volume.
 
 ## Kubernetes
 
 1. Put the source connection in `deploy/components/migrate/secrets-migrate.env` (or a KSOPS
    Secret named `misp-migrate` in the overlay).
-2. Add the `migrate` component to the overlay. To copy attachments, patch the Job with a
-   volume for the old files and set `MIGRATE_SOURCE_FILES` to its mount path:
+2. Add the `migrate` component to the overlay. To copy attachments from the old bucket, set
+   `MIGRATE_SOURCE_S3_*`. To copy them from a directory, patch the Job with a volume for the
+   old files and set `MIGRATE_SOURCE_FILES` to its mount path:
 
    ```yaml
    # overlay: patch on the migrate Job
@@ -117,8 +140,8 @@ running; they answer with errors while the copy runs, and MISP shows itself as o
    configure Job before the final `kubectl apply`, so that it runs on the copy.
 2. Remove the component, with `MIGRATE_FORCE`, in the next commit.
 
-With the `netpol-cilium` component the Job may reach the source on port 3306 in the cluster
-or outside it; widen its policy for another port.
+With the `netpol-cilium` component the Job may reach the source on port 3306 and S3 on 443, in
+the cluster or outside it; widen its policy for another port.
 
 ## Compose
 
@@ -132,6 +155,10 @@ podman compose --profile migrate run --rm \
 podman compose up -d
 ```
 
+With the attachments in the old bucket, set `MIGRATE_SOURCE_S3_*` in `secrets-migrate.env`
+and run the Job without the mount. With `PLUGIN_S3_BUCKET_NAME` set in `compose.env`, the
+attachments go to that bucket.
+
 ## Files copied by hand
 
 | Data | Where it goes |
@@ -139,7 +166,7 @@ podman compose up -d
 | Org logos (`app/webroot/img/orgs`) and custom images (`app/webroot/img/custom`) | The attachments claim under `img/orgs` and `img/custom` (Kubernetes); the `misp-img-orgs` and `misp-img-custom` volumes (Compose) |
 | Terms, server certificates | The `misp-certs` Secret (Kubernetes, see the README); the `misp-files-terms` and `misp-files-certs` volumes (Compose) |
 | GPG keyring | The `misp-gnupg` Secret from the old `private.asc` export; or `AUTOCONF_GPG=true` for a new key, re-exported to sync partners |
-| Attachments already on S3 | Nothing: point `PLUGIN_S3_*` at the same bucket |
+| Attachments already on S3 | Nothing: point `PLUGIN_S3_*` at the same bucket, or copy them to a new one with `MIGRATE_SOURCE_S3_*` |
 
 Sessions, the Redis cache, the CakePHP cache and log files are not copied.
 

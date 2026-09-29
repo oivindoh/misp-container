@@ -170,7 +170,8 @@ services:
   #    podman compose --profile migrate run --rm migrate
   #    Source connection: components/migrate/secrets-migrate.env. To copy the
   #    attachments, mount the source's attachments directory at /mnt/source and
-  #    set MIGRATE_SOURCE_FILES=/mnt/source. See docs/migration.md.
+  #    set MIGRATE_SOURCE_FILES=/mnt/source, or set MIGRATE_SOURCE_S3_* for the
+  #    source's bucket. See docs/migration.md.
   migrate:
     <<: *misp-image
     profiles: [migrate]

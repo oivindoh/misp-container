@@ -38,6 +38,8 @@ BACKGROUND_JOBS = "app/Lib/Tools/BackgroundJobsTool.php"
 SCHEDULER_SHELL = "app/Console/Command/SchedulerWorkerShell.php"
 CONSOLE_SHELL = "app/Lib/cakephp/lib/Cake/Console/Shell.php"
 CONTROLLERS = "app/Controller"
+ATTACHMENT_TOOL = "app/Lib/Tools/AttachmentTool.php"
+AWS_S3_CLIENT = "app/Lib/Tools/AWSS3Client.php"
 BOOTSTRAP = "app/Config/bootstrap.default.php"
 # The directories of MISP's own PHP code, and the parts in them that are not MISP's
 MISP_PHP = ("app/Model", "app/Lib", "app/Controller", "app/Console", "app/Plugin")
@@ -132,6 +134,29 @@ def job_keys(root: Path) -> list[str]:
 
 def scheduler_tasks(root: Path) -> list[str]:
     return [f"not covered by the task runner: {item}" for item in uncovered(read(root, SCHEDULER_SHELL))]
+
+
+# -- attachment keys -----------------------------------------------------------------
+
+ATTACHMENT_LAYOUT = {
+    "the key <event>/<attribute><suffix>":
+        r"return\s+\$path\s*\.\s*\$eventId\s*\.\s*DS\s*\.\s*\$attributeId\s*\.\s*\$pathSuffix\s*;",
+    "the prefix shadow/ for a proposal": r"\$shadow\s*\?\s*\(\s*'shadow'\s*\.\s*DS\s*\)",
+    "the level bucket_<n> on disk only, never on S3":
+        r"attachments_bucketed'\)\s*&&\s*empty\(\$forceNonBucketed\)\s*&&\s*!\$this->attachmentDirIsS3\(\)",
+    "S3 whenever MISP.attachments_dir starts with s3": r"str_starts_with\(\s*\$attachmentsDir\s*,\s*[\"']s3[\"']\s*\)",
+}
+
+
+def attachment_keys(root: Path) -> list[str]:
+    tool = strip_php_comments(read(root, ATTACHMENT_TOOL))
+    problems = [f"MISP's AttachmentTool::getPath() no longer has {what}: the migrate Job writes attachments "
+                f"under keys MISP does not read" for what, pattern in ATTACHMENT_LAYOUT.items()
+                if not re.search(pattern, tool)]
+    if not re.search(r"'use_path_style_endpoint'\s*=>\s*true", strip_php_comments(read(root, AWS_S3_CLIENT))):
+        problems.append("MISP's AWSS3Client no longer sends path-style requests to Plugin.S3_aws_endpoint; "
+                        "the migrate Job's S3 client does")
+    return problems
 
 
 # -- API routes ----------------------------------------------------------------------
@@ -296,6 +321,8 @@ CHECKS = [
     Check("job-keys", BACKGROUND_JOBS, "files/misp_container/metrics.py _collect_queue_metrics()", job_keys),
     Check("scheduler-tasks", SCHEDULER_SHELL, "files/misp_container/task.py SCHEDULER_COVERAGE", scheduler_tasks),
     Check("api-routes", CONTROLLERS, "the file and line named in each problem", api_routes),
+    Check("attachment-keys", f"{ATTACHMENT_TOOL}, {AWS_S3_CLIENT}",
+          "files/misp_container/migrate.py attachment_key(), files/misp_container/s3.py", attachment_keys),
     Check("cakeresque", BOOTSTRAP, "Dockerfile stage composer-prep", cakeresque),
     Check("cakelog-streams", BOOTSTRAP, "files/misp_container/init.py LOG_BLOCK", cakelog_streams),
     Check("shell-streams", CONSOLE_SHELL, "files/misp_container/init.py LOG_BLOCK", shell_streams),
