@@ -42,6 +42,10 @@ run = "scripts/check-kustomize.sh"
 description = "Apply the Kustomize base to a kind cluster and run the smoke test (build the images first)"
 run = "tests/run-kind-test.sh ${@}"
 
+[tasks.agents-md]
+description = "Regenerate AGENTS.md from the tree"
+run = "python scripts/generate_agents_md.py"
+
 [tasks.test-all]
 description = "Run unit + integration + sync + migration tests"
 depends = ["test", "test-integration", "test-sync", "test-migration"]

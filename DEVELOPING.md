@@ -214,6 +214,10 @@ the database. Those settings must stay in `minimum_config`.
 
 ## Project Structure
 
+`AGENTS.md` holds the full map, generated from the docstrings, header comments, manifests,
+tasks and CI jobs by `scripts/generate_agents_md.py`. After a change to one of them, run
+`mise run agents-md`; a unit test fails while the file is stale.
+
 ```
 files/
   misp_container/           # Python entrypoint library
@@ -231,6 +235,7 @@ files/
     log.py                  # Logging setup: LOG_FORMAT json or text
     logrelay.py             # Relays the log files MISP writes directly to stdout, and caps them
     metrics.py              # Prometheus metrics collection
+    s3.py                   # Minimal S3 client of the migrate Job (Signature Version 4, urllib)
     sync.py                 # Declarative org/team/server sync engine
     task.py                 # Periodic task runner (cronjobs component)
   misp-config/
@@ -251,6 +256,7 @@ scripts/
   update_settings.py        # The catalogue tool (--check in the integration suite)
   check_scheduler_coverage.py  # Fails when MISP's scheduler offers work no task covers
   check_upstream.py         # Fails when MISP changed something the image patches or depends on
+  generate_agents_md.py     # Writes AGENTS.md from the tree (mise run agents-md)
   update-composer-lock.sh   # Resolves files/composer.lock through the composer-lock stage
 tests/
   test_*.py                 # Unit tests (see tests/README.md)

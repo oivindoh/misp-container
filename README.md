@@ -508,3 +508,4 @@ configure Job then upgrades the copy. See
 
 See [DEVELOPING.md](DEVELOPING.md) for the settings engine, the tests, new MISP releases and
 the release process.
+[AGENTS.md](AGENTS.md) maps the tree for agents; it is generated from the tree (`mise run agents-md`).
