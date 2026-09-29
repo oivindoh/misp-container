@@ -273,11 +273,12 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
               /usr/share/doc \
               /usr/share/man
 
-# Install pinned Python packages via uv (no pip in final image)
-COPY --from=uv /uv /tmp/uv
+# Install pinned Python packages via uv (no pip in final image). The bind
+# mount keeps the uv binary out of every layer.
 COPY files/requirements-final.txt /tmp/requirements.txt
-RUN /tmp/uv pip install --system --break-system-packages --no-cache -r /tmp/requirements.txt \
-    && rm /tmp/requirements.txt /tmp/uv
+RUN --mount=type=bind,from=uv,source=/uv,target=/tmp/uv \
+    /tmp/uv pip install --system --break-system-packages --no-cache -r /tmp/requirements.txt \
+    && rm /tmp/requirements.txt
 
 # Create non-root user
 RUN groupadd -g ${MISP_GID} misp && \
