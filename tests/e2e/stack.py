@@ -84,9 +84,12 @@ class Stack:
             self._ids.clear()
         return result
 
-    def run(self, service: str, *command: str, env: dict | None = None, volumes=(), timeout=900) -> tuple[int, str]:
+    def run(self, service: str, *command: str, env: dict | None = None, volumes=(), entrypoint: str = "",
+            timeout=900) -> tuple[int, str]:
         """compose run --rm --no-deps: the exit code and the combined output."""
         args = ["run", "--rm", "-T", "--no-deps"]
+        if entrypoint:
+            args += ["--entrypoint", entrypoint]
         for key, value in (env or {}).items():
             args += ["-e", f"{key}={value}"]
         for volume in volumes:

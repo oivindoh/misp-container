@@ -2,11 +2,12 @@
 
 ## TL;DR
 
-Unit tests on the Python library, and three stack suites in pytest (`tests/e2e/`): an integration suite on one Compose stack, a hub-spoke sync suite on three instances, and a migration suite that copies a seeded instance onto MariaDB and PostgreSQL. A smoke test checks any live MISP through its API. Two Kubernetes checks cover the Kustomize base: every render validated against the schemas, and the base applied to a kind cluster with the smoke test.
+Unit tests on the Python library, an upstream guard that checks the MISP in the image against what this repository patches or depends on, and three stack suites in pytest (`tests/e2e/`): an integration suite on one Compose stack, a hub-spoke sync suite on three instances, and a migration suite that copies a seeded instance onto MariaDB and PostgreSQL. A smoke test checks any live MISP through its API. Two Kubernetes checks cover the Kustomize base: every render validated against the schemas, and the base applied to a kind cluster with the smoke test.
 
 ```bash
 mise run test                # unit tests (~0.2s)
-mise run test-integration    # single-instance integration tests (~2min)
+mise run test-upstream       # the upstream guard in the image (~5s)
+mise run test-integration    # the upstream guard, then single-instance integration tests (~2min)
 mise run test-integration -- --db-engine postgres   # the same on PostgreSQL
 mise run test-sync           # hub-spoke sync test with 3 instances (~2min)
 mise run test-migration      # migrate Job: MariaDB to MariaDB, MariaDB to PostgreSQL (~3min)
@@ -20,7 +21,7 @@ The stack suites build the images with compose, start full MISP stacks, and tear
 
 ## Unit tests
 
-**350 tests** covering the Python entrypoint library (`files/misp_container/`), the scripts and the compose files.
+**377 tests** covering the Python entrypoint library (`files/misp_container/`), the scripts and the compose files.
 
 | File | What it tests |
 |------|---------------|
@@ -28,6 +29,7 @@ The stack suites build the images with compose, start full MISP stacks, and tear
 | `test_env.py` | Environment variable defaults, `apply_defaults()`, worker config derivation, derived variables |
 | `test_task.py` | Periodic task runner: API tasks, index tasks, the workflow task, console tasks, the backlog guard |
 | `test_scheduler_coverage.py` | The guard that fails when MISP's scheduler offers work no task covers |
+| `test_check_upstream.py` | The upstream guard: every check on a MISP tree in the 2.5.47 shape, then on that tree changed the way a release could. The PHP run needs `php` and skips without it |
 | `test_log.py`, `test_logrelay.py` | The JSON and text log formats; the relay of MISP's log files and their size cap |
 | `test_metrics.py` | Metrics exporter: database metrics, the job queues in Redis (RESP client), network probes |
 | `test_db.py` | Advisory lock holds one connection until release, statement splitter, the version gate |
@@ -41,9 +43,23 @@ The stack suites build the images with compose, start full MISP stacks, and tear
 
 Run with: `mise run test` or `PYTHONPATH=files python -m pytest tests/ -v`
 
+## Upstream guard
+
+`e2e/test_upstream.py` runs `scripts/check_upstream.py` in one container of the web image,
+with the repository mounted, and reports each check as one test. A check reads MISP's own
+files and fails when MISP changed something this repository patches or depends on: the job
+queues, the Redis keys of the jobs, the scheduler's tasks, the API routes the image calls,
+what `bootstrap.php` loads and logs to, and the files MISP writes under `app/tmp/logs`. The
+last check runs the logging block that `init.py` renders through PHP, in both formats. A
+failure names the change, the MISP file and the file of ours to revisit; DEVELOPING.md lists
+the checks. No stack starts, so the guard reports even when MISP no longer starts.
+
+Run with: `mise run test-upstream`. `mise run test-integration` and the CI job
+`integration` run it before the integration suite.
+
 ## Integration tests
 
-**131 tests** verifying the full MISP stack in Compose.
+**132 tests** verifying the full MISP stack in Compose.
 
 **Stack:** 1 MISP instance (configure + web x2 + caddy + worker + MariaDB or PostgreSQL + Redis + Garage S3 + dex)
 
@@ -56,7 +72,7 @@ Run with: `mise run test` or `PYTHONPATH=files python -m pytest tests/ -v`
 | Workers | 7 | The five queues run under supervisord, no scheduler program, web reaches supervisord over TCP |
 | Background jobs | 1 | Event publish triggers job, worker completes it (status=4) |
 | PHP-FPM | 1 | Listening on port 9002 |
-| Distribution files and app/Config | 11 | taxonomies in the image, bootstrap.php patch, database.php host, config.php content |
+| Distribution files and app/Config | 11 | taxonomies in the image, bootstrap.php is MISP's default plus the logging block, database.php host, config.php content |
 | GPG | 1 | Auto-generated key in .gnupg volume |
 | MISP API | 2 | Version endpoint, event create via API |
 | Warm restart | 2 | Settings cache reload, minimum_config unchanged |
@@ -68,9 +84,9 @@ Run with: `mise run test` or `PYTHONPATH=files python -m pytest tests/ -v`
 | Org sync | 18 | Org/user/tag/server creation, server authkey (DB verify), sync user authkey prefix, taxonomy enable, disabled user, custom warninglist create/update, warm run idempotency |
 | Metrics exporter | 22 | Endpoints, core metrics, no scrape errors, a waiting job in `misp_jobs_queued` and back to 0, `misp_scheduled_tasks_enabled` |
 | MISP modules | 6 | Enrichment through the modules service |
-| Logging | 7 | JSON lines from configure and none in text, MISP's own log in the web and worker output once, no CakeLog files on disk, the relay forwarding `server-sync.log` |
+| Logging | 9 | JSON lines from configure and none in text, MISP's own log in the web and worker output once, no CakeLog files on disk, the relay forwarding `server-sync.log`, every log file MISP wrote in web and worker relayed |
 | Multi-replica web | 6 | configure service ran once, two web replicas serve without configuring |
-| Settings and scheduler coverage | 3 | Every MISP setting curated or catalogued, every scheduler task covered by a task, no rejected `cake` setting |
+| Settings | 2 | Every MISP setting curated or catalogued, no rejected `cake` setting |
 
 **Files:**
 - `e2e/test_integration.py` -- the suite, in the order above; later sections use the state earlier ones leave
@@ -208,7 +224,7 @@ GitHub Actions on every push to master and every PR:
 |-----|------|
 | `build` | The three images into the layer cache |
 | `unit` | The unit tests |
-| `integration` | The integration suite on MariaDB, against the images from `build` (`MISP_IMAGE_TAG=ci`); uploads the JUnit report and, after a failure, the compose logs |
+| `integration` | The upstream guard, then the integration suite on MariaDB, against the images from `build` (`MISP_IMAGE_TAG=ci`); uploads the JUnit report and, after a failure, the compose logs |
 | `integration-postgres` | The same on PostgreSQL, in parallel |
 | `hub-spoke` | The sync suite, in parallel with `integration` |
 | `migration` | The migration suite (pytest), in parallel; uploads the JUnit report and, after a failure, the compose logs |

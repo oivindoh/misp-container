@@ -20,7 +20,12 @@ import urllib.request
 
 import pytest
 
+from misp_container import WORKER_QUEUES
+from misp_container.logrelay import FILES as RELAYED
 from stack import DEPLOY, REPO, TESTS, Stack, env_file, scratch_dir
+
+sys.path.insert(0, str(REPO / "scripts"))
+from check_upstream import NOT_RELAYED  # noqa: E402
 
 TEST_ENV = env_file(TESTS / "test-compose.env")
 ADMIN_EMAIL = TEST_ENV["ADMIN_EMAIL"]
@@ -31,7 +36,6 @@ MODULES = "http://localhost:16666"
 GARAGE = "http://localhost:3903"
 GARAGE_ADMIN = "s3cr3t-admin-t0ken"
 SYNC_ORG_UUID = "4f1ed2b2-1821-49da-bf2c-b7ab639d9b19"
-QUEUES = ("default", "prio", "email", "cache", "update")
 
 
 def garage(method, path, data=None):
@@ -182,7 +186,7 @@ def supervisor_status(stack):
                                 '-p "${SIMPLEBACKGROUNDJOBS_SUPERVISOR_PASSWORD:-supervisor}" status')
 
 
-@pytest.mark.parametrize("queue", QUEUES)
+@pytest.mark.parametrize("queue", WORKER_QUEUES)
 def test_worker_queue_running(supervisor_status, queue):
     assert re.search(rf"{queue}.*RUNNING", supervisor_status)
 
@@ -239,8 +243,17 @@ def test_tlp_taxonomy_ships_in_the_image(stack):
     assert "tlp" in stack.exec("web", "ls /var/www/MISP/app/files/taxonomies/").split()
 
 
-def test_bootstrap_has_the_auth_plugin_patch(stack):
-    assert "Detect what auth modules" in stack.exec("web", "cat /var/www/MISP/app/Config/bootstrap.php")
+def test_bootstrap_is_the_upstream_default_and_the_log_block(stack):
+    _, out = stack.python("""
+from pathlib import Path
+from misp_container import CONFIG_DEFAULTS
+from misp_container.init import LOG_BLOCK_START, LOG_BLOCK_END
+rendered = Path('/var/www/MISP/app/Config/bootstrap.php').read_text()
+start, end = rendered.index(LOG_BLOCK_START), rendered.index(LOG_BLOCK_END) + len(LOG_BLOCK_END)
+default = (Path(CONFIG_DEFAULTS) / 'bootstrap.default.php').read_text()
+print((rendered[:start] + rendered[end:]).strip() == default.strip())
+""")
+    assert out == "True", f"bootstrap.php differs from MISP's bootstrap.default.php beyond the logging block: {out}"
 
 
 def test_database_php_has_the_engine_host(stack):
@@ -840,14 +853,16 @@ def waiting_job(stack, metrics_text):
 
 
 def test_metrics_waiting_job_shows_in_the_queue(waiting_job):
-    assert waiting_job and int(waiting_job) >= 1
+    assert waiting_job and int(waiting_job) >= 1, (
+        f"a job queued with the worker stopped reads {waiting_job!r} in misp_jobs_queued: metrics.py reads "
+        "Redis keys MISP no longer writes (see the job-keys check in tests/e2e/test_upstream.py)")
 
 
 def test_metrics_queue_returns_to_0(waiting_job):
     deadline = time.monotonic() + 30
     while default_depth() != "0" and time.monotonic() < deadline:
         time.sleep(1)
-    assert default_depth() == "0"
+    assert default_depth() == "0", "the default queue did not drain: a worker runs no job, or metrics.py counts a key MISP keeps"
 
 
 def test_metrics_sync_log_after_org_sync(metrics_text, synced):
@@ -981,23 +996,29 @@ def missing_controller_line(stack):
     return ""
 
 
+LOG_BLOCK_HINT = ("MISP's log does not reach the output as JSON: check LOG_FORMAT, and the cakelog-streams and "
+                  "shell-streams checks in tests/e2e/test_upstream.py (the logging block in files/misp_container/init.py)")
+
+
 def test_misp_log_reaches_the_web_output(missing_controller_line):
-    assert '"context":"misp"' in missing_controller_line
+    assert '"context":"misp"' in missing_controller_line, f"{LOG_BLOCK_HINT}: {missing_controller_line!r}"
 
 
 def test_the_web_line_is_an_error(missing_controller_line):
-    assert '"level":"error"' in missing_controller_line
+    assert '"level":"error"' in missing_controller_line, f"{LOG_BLOCK_HINT}: {missing_controller_line!r}"
 
 
 def test_worker_job_lines_once_as_json(stack):
     # A console shell would add its own text copy of every line
     lines = [l for l in stack.logs("worker").splitlines() if "launching job" in l]
-    assert lines and all(l.startswith("{") and '"context":"misp"' in l for l in lines)
+    assert lines and all(l.startswith("{") and '"context":"misp"' in l for l in lines), f"{LOG_BLOCK_HINT}: {lines[:4]}"
 
 
 def test_no_cakelog_files_on_disk(stack):
     assert stack.exec("web", "find /var/www/MISP/app/tmp/logs -maxdepth 1 "
-                             "\\( -name debug.log -o -name error.log \\) -size +0 | wc -l") == "0"
+                             "\\( -name debug.log -o -name error.log \\) -size +0 | wc -l") == "0", (
+        "MISP wrote debug.log or error.log: the logging block no longer drops a FileLog stream MISP configures "
+        "(see the cakelog-streams check in tests/e2e/test_upstream.py)")
 
 
 def test_the_relay_forwards_server_sync_log(stack):
@@ -1010,6 +1031,15 @@ def test_the_relay_forwards_server_sync_log(stack):
     assert '"context":"misp:server-sync"' in line
 
 
+@pytest.mark.parametrize("service", ["web", "worker"])
+def test_every_log_file_misp_wrote_is_relayed(stack, service):
+    # Earlier sections exercise most of MISP; a file the relay does not follow grows unseen
+    found = stack.exec(service, "cd /var/www/MISP/app/tmp/logs && find . -maxdepth 1 -type f -size +0").split()
+    unrelayed = sorted({f.removeprefix("./") for f in found} - set(RELAYED) - set(NOT_RELAYED))
+    assert not unrelayed, (f"MISP wrote {unrelayed} in app/tmp/logs of {service}: add each to FILES in "
+                           "files/misp_container/logrelay.py, or to NOT_RELAYED in scripts/check_upstream.py")
+
+
 # -- settings and scheduler coverage -------------------------------------------------
 
 def test_every_misp_setting_curated_or_catalogued(stack):
@@ -1018,14 +1048,6 @@ def test_every_misp_setting_curated_or_catalogued(stack):
     result = subprocess.run([sys.executable, str(REPO / "scripts/update_settings.py"), "--check", "--json", str(dump)],
                             capture_output=True, text=True, env={**os.environ, "PYTHONPATH": str(REPO / "files")})
     assert result.returncode == 0, "new or stale settings (run scripts/update-settings.sh and review):\n" + result.stdout
-
-
-def test_every_scheduler_task_has_a_task_runner_task(stack):
-    shell = scratch_dir() / "SchedulerWorkerShell.php"
-    shell.write_text(stack.exec("web", "cat /var/www/MISP/app/Console/Command/SchedulerWorkerShell.php"))
-    result = subprocess.run([sys.executable, str(REPO / "scripts/check_scheduler_coverage.py"), str(shell)],
-                            capture_output=True, text=True)
-    assert result.returncode == 0, result.stdout
 
 
 def test_no_rejected_cake_settings(stack):

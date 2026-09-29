@@ -141,14 +141,15 @@ class TestPopulateGnupg:
 class TestPrepareConfig:
     """app/Config rendering from the image defaults, settings.yaml and env."""
 
-    def test_renders_all_files_and_patches_bootstrap(self, tmp_path, monkeypatch):
+    def test_renders_all_files_and_adds_the_log_block_to_bootstrap(self, tmp_path, monkeypatch):
         from misp_container import init as init_mod
         defaults = tmp_path / "defaults"
         defaults.mkdir()
         (defaults / "core.default.php").write_text("<?php // core")
         (defaults / "routes.php").write_text("<?php // routes")
-        (defaults / "bootstrap.default.php").write_text(
-            "<?php\nCakePlugin::load('CakeResque');\nCakePlugin::loadAll(array('CakeResque' => array()));\n")
+        upstream = ("<?php\nif (empty(Configure::read('SimpleBackgroundJobs.enabled'))) {\n"
+                    "\tCakePlugin::loadAll(array('CakeResque' => array('bootstrap' => true)));\n}\n")
+        (defaults / "bootstrap.default.php").write_text(upstream)
         settings = tmp_path / "settings.yaml"
         settings.write_text("settings:\n  minimum_config:\n    MISP.redis_host:\n      value: redis\n  db_enable:\n    MISP.system_setting_db:\n      value: true\n")
         config_dir = tmp_path / "Config"
@@ -163,8 +164,8 @@ class TestPrepareConfig:
         assert (config_dir / "core.php").read_text() == "<?php // core"
         assert (config_dir / "routes.php").exists()
         bootstrap = (config_dir / "bootstrap.php").read_text()
-        assert "CakeResque" not in bootstrap.split("Detect what auth modules")[0]
-        assert "Detect what auth modules" in bootstrap
+        # MISP's own bootstrap stays as it is; scripts/check_upstream.py checks what it loads
+        assert bootstrap.startswith(upstream)
         assert "'redis_host' => 'redis'" in (config_dir / "config.php").read_text()
         assert "'system_setting_db' => true" in (config_dir / "config.php").read_text()
         assert "'host' => 'db'" in (config_dir / "database.php").read_text()

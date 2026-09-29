@@ -16,6 +16,7 @@ import urllib.request
 
 from functools import lru_cache
 
+from . import WORKER_QUEUES
 from .env import env
 from .log import get as getlog
 
@@ -111,8 +112,8 @@ class _DictCursor:
 # Background job queues (Redis)
 # ---------------------------------------------------------------------------
 
-# MISP's SimpleBackgroundJobs queues. MISP never enqueues on "scheduler".
-QUEUES = ("default", "prio", "email", "update", "cache")
+# MISP's key for a job a worker runs: <namespace>:running:<queue>:<job id>
+RUNNING_PREFIX = "running"
 
 
 class RedisError(Exception):
@@ -198,8 +199,8 @@ def _collect_queue_metrics() -> str:
     client = _Redis(cfg.get("host") or "redis", cfg.get("port") or 6379,
                     cfg.get("password", ""), cfg.get("database") or 1)
     try:
-        counts = {q: int(client.call("LLEN", f"{ns}:{q}")) for q in QUEUES}
-        running_prefix = f"{ns}:running:"
+        counts = {q: int(client.call("LLEN", f"{ns}:{q}")) for q in WORKER_QUEUES}
+        running_prefix = f"{ns}:{RUNNING_PREFIX}:"
         for key in client.scan(f"{running_prefix}*"):
             queue = key[len(running_prefix):].split(":", 1)[0]
             counts[queue] = counts.get(queue, 0) + 1

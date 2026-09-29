@@ -7,7 +7,6 @@ are volumes.
 """
 
 import os
-import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -27,18 +26,6 @@ MISP_CERTS = f"{MISP_BASE}/app/files/certs"
 # shutil.copy2 copies extended attributes, including the SELinux label of the
 # source, which other containers cannot read. shutil.copy copies mode bits only.
 _copy = shutil.copy
-
-AUTH_PLUGIN_PATCH = """
-/**
- * Detect what auth modules need to be loaded based on the loaded config
- */
-if (Configure::read('AadAuth')) { CakePlugin::load('AadAuth'); }
-if (Configure::read('CertAuth')) { CakePlugin::load('CertAuth'); }
-if (Configure::read('LdapAuth')) { CakePlugin::load('LdapAuth'); }
-if (Configure::read('LinOTPAuth')) { CakePlugin::load('LinOTPAuth'); }
-if (Configure::read('OidcAuth')) { CakePlugin::load('OidcAuth'); }
-if (Configure::read('ShibbAuth')) { CakePlugin::load('ShibbAuth'); }
-"""
 
 # MISP's CakeLog writes app/tmp/logs/debug.log and error.log by default. In a
 # pod those files reach no log collector and grow until the volume fills.
@@ -133,15 +120,6 @@ def prepare_config():
         if src.exists():
             log.info("  bootstrap.php from defaults")
             _copy(src, bootstrap)
-
-    if bootstrap.exists() and "Detect what auth modules" not in bootstrap.read_text():
-        log.info("  patching bootstrap.php with auth plugin detection")
-        content = bootstrap.read_text()
-        for plugin in ("CakeResque", "AadAuth", "CertAuth", "LdapAuth", "LinOTPAuth", "OidcAuth", "ShibbAuth"):
-            content = content.replace(f"CakePlugin::load('{plugin}');", "")
-        content = re.sub(r"CakePlugin::loadAll\(array\(.*?CakeResque.*?\)\);", "", content, flags=re.DOTALL)
-        content += AUTH_PLUGIN_PATCH
-        bootstrap.write_text(content)
 
     if bootstrap.exists():
         from .log import log_format

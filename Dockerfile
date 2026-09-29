@@ -75,8 +75,13 @@ ENV COMPOSER_ALLOW_SUPERUSER=1
 
 WORKDIR /tmp
 RUN curl -o /tmp/composer.json https://raw.githubusercontent.com/MISP/MISP/${CORE_COMMIT:-${CORE_TAG}}/app/composer.json
-RUN sed -i '/cake-resque/d' /tmp/composer.json && \
-    sed -i 's/authentication",/authentication"/' /tmp/composer.json
+# SimpleBackgroundJobs replaces CakeResque; MISP loads the plugin only without
+# it (scripts/check_upstream.py, check cakeresque)
+RUN if ! jq -e '.require["iglocska/cake-resque"]' /tmp/composer.json >/dev/null; then \
+        echo "MISP's app/composer.json no longer requires iglocska/cake-resque: delete this RUN" >&2; exit 1; \
+    fi && \
+    jq 'del(.require["iglocska/cake-resque"], .suggest["iglocska/cake-resque"])' /tmp/composer.json > /tmp/composer.edited && \
+    mv /tmp/composer.edited /tmp/composer.json
 
 # composer:2.9.8
 COPY --from=composer:2@sha256:1364b5b9132ab4c42ea3be53e894572c32fe75a512cb3b1c3903fcc9bce53dcc /usr/bin/composer /usr/bin/composer
@@ -162,13 +167,16 @@ RUN if [ -n "${CORE_COMMIT}" ]; then \
 # for every column with a NULL default, so the sequence map points each
 # column of a table at the id sequence and an INSERT into a table keyed on
 # a varchar (system_settings) fails in setval(). Reset the match per column.
-# The grep fails the build when upstream changes the loop, so the patch is
-# revisited rather than silently dropped.
+# The build fails, naming the file, when upstream changes the loop.
 RUN CAKE_PG=/var/www/MISP/app/Lib/cakephp/lib/Cake/Model/Datasource/Database/Postgres.php && \
     T="$(printf '\t')" && \
-    grep -q "^${T}${T}${T}foreach (\$cols as \$c) {\$" "$CAKE_PG" && \
+    if ! grep -q "^${T}${T}${T}foreach (\$cols as \$c) {\$" "$CAKE_PG"; then \
+        echo "$CAKE_PG changed upstream: the describe() loop that the \$seq reset patches is gone. Check whether CakePHP fixed the bug, then delete or adapt this RUN" >&2; exit 1; \
+    fi && \
     sed -i "s|^\(${T}${T}${T}\)foreach (\$cols as \$c) {\$|\1foreach (\$cols as \$c) {\n\1${T}\$seq = null;|" "$CAKE_PG" && \
-    grep -q "^${T}${T}${T}${T}\$seq = null;\$" "$CAKE_PG"
+    if ! grep -q "^${T}${T}${T}${T}\$seq = null;\$" "$CAKE_PG"; then \
+        echo "$CAKE_PG: the \$seq reset did not apply" >&2; exit 1; \
+    fi
 
 # Clean and set permissions - all in one layer
 RUN find /var/www/MISP/INSTALL/* ! -name 'MYSQL.sql' ! -name 'POSTGRESQL.sql' -type f -exec rm {} + && \

@@ -8,9 +8,8 @@ The kind test (tests/run-kind-test.sh) runs it against the base on a cluster.
 
 import pytest
 
+from misp_container import WORKER_QUEUES
 from stack import Stack
-
-QUEUES = ("default", "prio", "email", "cache", "update")
 
 
 @pytest.fixture(scope="module")
@@ -73,7 +72,7 @@ def test_supervisord_reachable(workers):
     assert workers.get("supervisord_status") is True
 
 
-@pytest.mark.parametrize("queue", QUEUES)
+@pytest.mark.parametrize("queue", WORKER_QUEUES)
 def test_worker_queue(workers, queue):
     assert len(workers.get(queue, {}).get("workers") or []) > 0
 

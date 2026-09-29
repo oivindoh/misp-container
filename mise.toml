@@ -19,8 +19,12 @@ description = "Run unit tests"
 run = "python -m pytest tests/ -v --ignore=tests/e2e"
 
 [tasks.test-integration]
-description = "Run integration tests (requires podman)"
-run = "python -m pytest tests/e2e/test_integration.py -v"
+description = "Run the upstream guard and the integration tests (requires podman)"
+run = "python -m pytest tests/e2e/test_upstream.py tests/e2e/test_integration.py -v"
+
+[tasks.test-upstream]
+description = "Check the MISP in the image against what this repository patches or depends on"
+run = "python -m pytest tests/e2e/test_upstream.py -v"
 
 [tasks.test-sync]
 description = "Run hub-spoke sync test (3 MISP instances)"

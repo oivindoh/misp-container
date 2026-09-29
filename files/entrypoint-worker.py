@@ -10,7 +10,7 @@ import os
 import sys
 from pathlib import Path
 
-from misp_container import CAKE, MISP_BASE
+from misp_container import CAKE, MISP_BASE, WORKER_GROUP, WORKER_QUEUES
 from misp_container.env import apply_defaults, env
 from misp_container import db
 from misp_container.init import prepare, check_writable
@@ -86,22 +86,22 @@ password={sv_pass}
     stopwait = env("WORKER_STOP_GRACE", "300")
 
     sections = [header]
-    for name in ("default", "prio", "email", "update", "cache"):
+    for name in WORKER_QUEUES:
         numprocs = env(f"NUM_WORKERS_{name.upper()}", "0")
         if int(numprocs) > 0:
             sections.append(WORKER_TEMPLATE.format(
                 name=name, misp_base=MISP_BASE, cake=CAKE, numprocs=numprocs, stopwait=stopwait,
             ))
 
-    # Outside the misp-workers group: MISP must not list or manage it as a worker
+    # Outside the worker group: MISP must not list or manage it as a worker
     sections.append(LOGRELAY_TEMPLATE.format(python=sys.executable))
 
-    # MISP's BackgroundJobsTool filters processes by group name 'misp-workers'.
-    # Group all worker programs under this name so the diagnostic page sees them.
-    worker_programs = [name for name in ("default", "prio", "email", "update", "cache")
+    # MISP's BackgroundJobsTool finds its workers by this group name, for the
+    # diagnostic page and for restarts
+    worker_programs = [name for name in WORKER_QUEUES
                        if int(env(f"NUM_WORKERS_{name.upper()}", "0")) > 0]
     if worker_programs:
-        sections.append(f"\n[group:misp-workers]\nprograms={','.join(worker_programs)}\n")
+        sections.append(f"\n[group:{WORKER_GROUP}]\nprograms={','.join(worker_programs)}\n")
 
     Path(SUPERVISORD_CONF).write_text("".join(sections))
 

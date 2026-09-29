@@ -146,7 +146,7 @@ jobs:
         run: |
           pip install --quiet uv
           uv sync
-          .venv/bin/python -m pytest tests/e2e/test_integration.py --skip-build -v --durations=5 \
+          .venv/bin/python -m pytest tests/e2e/test_upstream.py tests/e2e/test_integration.py --skip-build -v --durations=5 \
             --junitxml="$RUNNER_TEMP/integration-junit.xml"
 
       - name: Upload the test report and the compose logs

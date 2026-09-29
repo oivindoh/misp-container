@@ -17,10 +17,11 @@
 ```bash
 cd misp-container      # mise creates .venv on enter
 mise run test          # unit tests (~0.3s)
-mise run test-integration  # full Compose stack with podman (~2min)
+mise run test-upstream     # the MISP in the image against what the image patches or depends on (~5s)
+mise run test-integration  # the upstream guard, then the full Compose stack with podman (~2min)
 mise run test-integration -- --db-engine postgres   # the same suite on PostgreSQL
 mise run test-sync     # hub-spoke 3-instance sync (~2min)
-mise run test-all      # unit + integration + sync
+mise run test-all      # unit, the upstream guard, integration, sync, migration
 mise run test-kustomize  # every Kustomize render validated against the schemas
 mise run test-kind       # the base on a kind cluster, then the smoke test
 ```
@@ -29,8 +30,9 @@ mise run test-kind       # the base on a kind cluster, then the smoke test
 
 | Suite | Tests | What it covers |
 |-------|-------|----------------|
-| Unit | 344 | Config engine, config.php rendering, advisory lock, database helpers, app/Config preparation, task runner, sync engine, metrics exporter |
-| Integration | 131 | Full Compose stack: HTTP, auth, settings, PHP-FPM, workers, S3, org sync, metrics, modules enrichment |
+| Unit | 377 | Config engine, config.php rendering, advisory lock, database helpers, app/Config preparation, task runner, sync engine, metrics exporter |
+| Upstream guard | 10 | The MISP in the image against what the image patches or depends on (see below) |
+| Integration | 132 | Full Compose stack: HTTP, auth, settings, PHP-FPM, workers, S3, org sync, metrics, modules enrichment, logging |
 | Hub-spoke sync | 20 | 3 isolated MISP instances: pull, push, tag-filtered sync |
 | Migration | 48 | The migrate Job: a seeded MariaDB copied onto a second MariaDB and onto PostgreSQL, refusals, the copy checked through the API |
 | Kustomize render | 12 renders | The base alone, with each component and with all of them, against the Kubernetes and CRD schemas |
@@ -43,22 +45,48 @@ The integration suite runs every container with `read_only: true` (except web, w
 `.github/workflows/track-misp-releases.yaml` checks upstream daily. For a new release it
 bumps `CORE_TAG`, resolves `files/composer.lock` for that release, builds the image, starts
 the Compose stack, regenerates the settings catalogue from that MISP, and opens a PR with
-all three changes. CI then builds, scans and runs
-every suite on the PR, with the strict settings check and the rejected-`cake` check as the
-early warning for changed settings and defaults, and the scheduler coverage check
-(`scripts/check_scheduler_coverage.py`) for new periodic work. When MISP's scheduler offers a
-task type, action or admin action that no task covers, that check fails: add the task to
-`files/misp_container/task.py` (`SCHEDULER_COVERAGE`) and a CronJob to the `cronjobs`
-component. The PR body lists the new settings by level. A
-setting that appears there with a value this image should enforce moves to `settings.yaml`;
-when a release changes a secure default we already curate, give it `since: <that tag>` so
-existing instances pick the new value up once.
+all three changes. CI then builds, scans and runs every suite on the PR. Three checks warn
+about a change in MISP:
 
-Upstream source is patched in two places. `init.py` patches `bootstrap.php` with the auth
-plugin detection when it renders `app/Config`. The `Dockerfile` patches CakePHP's
-`Postgres.php` (`describe()` resets its sequence match per column), guarded by a `grep` that
-fails the build when the patched line changes. On a failed guard, check whether the release
-carries the fix and drop the patch, or adapt it.
+| Check | Fails when |
+| --- | --- |
+| The upstream guard: `scripts/check_upstream.py`, run in the image by `tests/e2e/test_upstream.py` | MISP changed something the image patches or depends on (table below) |
+| The strict settings check: `scripts/update_settings.py --check` in the integration suite | MISP has a setting that neither `settings.yaml` nor the catalogue lists |
+| The rejected-`cake` check in the integration suite | MISP refuses a default this image applies |
+
+The PR body lists the new settings by level. A setting that appears there with a value this
+image should enforce moves to `settings.yaml`; when a release changes a secure default we
+already curate, give it `since: <that tag>` so existing instances pick the new value up once.
+
+### What the image depends on in MISP
+
+A failure of the upstream guard names the change, the MISP file and the file of ours to
+revisit.
+
+| Check | MISP file | Ours | Fails when MISP |
+| --- | --- | --- | --- |
+| `worker-queues` | `BackgroundJobsTool.php` | `WORKER_QUEUES` in `misp_container/__init__.py` | adds or drops a job queue |
+| `worker-group` | `BackgroundJobsTool.php` | `WORKER_GROUP` in `misp_container/__init__.py` | finds its workers in another supervisord group |
+| `job-keys` | `BackgroundJobsTool.php` | `misp_container/metrics.py` | keeps waiting or running jobs under other Redis keys |
+| `scheduler-tasks` | `SchedulerWorkerShell.php` | `SCHEDULER_COVERAGE` in `misp_container/task.py` | offers periodic work that no task covers |
+| `api-routes` | `app/Controller/` | the file and line that calls the route | drops a controller or an action the image calls |
+| `cakeresque` | `bootstrap.default.php` | the `composer-prep` stage of the `Dockerfile` | loads CakeResque while SimpleBackgroundJobs is on |
+| `cakelog-streams` | `bootstrap.default.php` | `LOG_BLOCK` in `misp_container/init.py` | configures a CakeLog file stream that the logging block does not drop |
+| `shell-streams` | CakePHP's `Shell.php` | `LOG_BLOCK` in `misp_container/init.py` | checks other stream names before it adds its console streams |
+| `relayed-files` | MISP's PHP code | `FILES` in `misp_container/logrelay.py` | writes a new file under `app/tmp/logs`, or stops writing one the relay follows |
+| `log-block-php` | PHP in the image | `LOG_BLOCK` in `misp_container/init.py` | cannot run the logging block, in either format |
+
+A new queue needs its name in `WORKER_QUEUES` and `NUM_WORKERS_<QUEUE>` in
+`deploy/base/base.env`. New periodic work needs a task in `misp_container/task.py`
+(`SCHEDULER_COVERAGE`) and a CronJob in the `cronjobs` component.
+
+The `Dockerfile` patches two upstream files. Each patch checks its anchor first and fails
+the build with the file and the reason when the anchor moved:
+
+- **`app/composer.json`:** the build drops `iglocska/cake-resque`, which SimpleBackgroundJobs
+  replaces.
+- **CakePHP's `Postgres.php`:** `describe()` resets its sequence match per column. On a
+  failure, check whether the release carries the fix and drop the patch, or adapt it.
 
 ## Releases
 
@@ -221,6 +249,7 @@ scripts/
   update-settings.sh        # Regenerates the catalogue from a live stack
   update_settings.py        # The catalogue tool (--check in the integration suite)
   check_scheduler_coverage.py  # Fails when MISP's scheduler offers work no task covers
+  check_upstream.py         # Fails when MISP changed something the image patches or depends on
   update-composer-lock.sh   # Resolves files/composer.lock through the composer-lock stage
 tests/
   test_*.py                 # Unit tests (see tests/README.md)
