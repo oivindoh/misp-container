@@ -71,7 +71,7 @@ jobs:
         run: |
           pip install --quiet uv
           uv sync
-          PYTHONPATH=files .venv/bin/python -m pytest tests/ -v
+          PYTHONPATH=files .venv/bin/python -m pytest tests/ -v --ignore=tests/e2e
 
   # Renders the Kustomize base alone, with each component and with all of them,
   # and validates every render against the Kubernetes and CRD schemas
@@ -141,9 +141,23 @@ jobs:
 
       - name: Integration tests
         timeout-minutes: 15
+        env:
+          TMPDIR: ${{ runner.temp }}
         run: |
-          pip install --quiet pyyaml
-          tests/run-integration-tests.sh --skip-build
+          pip install --quiet uv
+          uv sync
+          .venv/bin/python -m pytest tests/e2e/test_integration.py --skip-build -v --durations=5 \
+            --junitxml="$RUNNER_TEMP/integration-junit.xml"
+
+      - name: Upload the test report and the compose logs
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: integration-report
+          path: |
+            ${{ runner.temp }}/integration-junit.xml
+            ${{ runner.temp }}/integration-compose-logs.txt
+          if-no-files-found: ignore
 
   integration-postgres:
     needs: build
@@ -190,9 +204,23 @@ jobs:
 
       - name: Integration tests on PostgreSQL
         timeout-minutes: 15
+        env:
+          TMPDIR: ${{ runner.temp }}
         run: |
-          pip install --quiet pyyaml
-          tests/run-integration-tests.sh --skip-build --postgres
+          pip install --quiet uv
+          uv sync
+          .venv/bin/python -m pytest tests/e2e/test_integration.py --skip-build --db-engine postgres -v --durations=5 \
+            --junitxml="$RUNNER_TEMP/integration-postgres-junit.xml"
+
+      - name: Upload the test report and the compose logs
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: integration-postgres-report
+          path: |
+            ${{ runner.temp }}/integration-postgres-junit.xml
+            ${{ runner.temp }}/integration-compose-logs.txt
+          if-no-files-found: ignore
 
   hub-spoke:
     needs: build
@@ -239,7 +267,23 @@ jobs:
 
       - name: Hub-spoke sync tests
         timeout-minutes: 15
-        run: tests/run-sync-test.sh --skip-build
+        env:
+          TMPDIR: ${{ runner.temp }}
+        run: |
+          pip install --quiet uv
+          uv sync
+          .venv/bin/python -m pytest tests/e2e/test_sync.py --skip-build -v --durations=5 \
+            --junitxml="$RUNNER_TEMP/sync-junit.xml"
+
+      - name: Upload the test report and the compose logs
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sync-report
+          path: |
+            ${{ runner.temp }}/sync-junit.xml
+            ${{ runner.temp }}/sync-compose-logs.txt
+          if-no-files-found: ignore
 
   migration:
     needs: build
@@ -286,7 +330,23 @@ jobs:
 
       - name: Migration tests
         timeout-minutes: 20
-        run: tests/run-migration-tests.sh --skip-build
+        env:
+          TMPDIR: ${{ runner.temp }}
+        run: |
+          pip install --quiet uv
+          uv sync
+          .venv/bin/python -m pytest tests/e2e/test_migration.py --skip-build -v --durations=5 \
+            --junitxml="$RUNNER_TEMP/migration-junit.xml"
+
+      - name: Upload the test report and the compose logs
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: migration-report
+          path: |
+            ${{ runner.temp }}/migration-junit.xml
+            ${{ runner.temp }}/migration-compose-logs.txt
+          if-no-files-found: ignore
 
   # Applies the Kustomize base with the mariadb and redis components to a kind
   # cluster and runs the smoke test against it
@@ -345,6 +405,11 @@ jobs:
           echo "029a7f0f4e1932c52a0476cf02a0fd855c0bb85694b82c338fc648dcb53a819d  kustomize.tgz" | sha256sum -c
           tar -xzf kustomize.tgz -C bin kustomize
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+
+      - name: Python for the smoke test
+        run: |
+          pip install --quiet uv
+          uv sync
 
       - name: Kubernetes test on kind
         timeout-minutes: 25

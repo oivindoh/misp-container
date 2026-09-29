@@ -1,5 +1,5 @@
 # Test overlay -- overrides deploy/docker-compose.yml with test-specific values.
-# Used by tests/run-integration-tests.sh
+# Used by tests/e2e/test_integration.py
 
 x-test-env: &test-env
   env_file:
@@ -69,7 +69,7 @@ services:
     env_file:
       - ../tests/test-compose-secrets.env
 
-  # PostgreSQL for the second run of the suite (tests/run-integration-tests.sh --postgres)
+  # PostgreSQL for the second run of the suite (tests/e2e/test_integration.py --db-engine postgres)
   postgres:
     env_file:
       - base/secrets-db.env

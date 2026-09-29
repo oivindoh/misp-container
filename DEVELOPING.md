@@ -17,9 +17,9 @@
 ```bash
 cd misp-container      # mise creates .venv on enter
 mise run test          # unit tests (~0.3s)
-mise run test-integration  # full Compose stack with podman (~90s)
-mise run test-integration -- --postgres   # the same suite on PostgreSQL
-mise run test-sync     # hub-spoke 3-instance sync (~60s)
+mise run test-integration  # full Compose stack with podman (~2min)
+mise run test-integration -- --db-engine postgres   # the same suite on PostgreSQL
+mise run test-sync     # hub-spoke 3-instance sync (~2min)
 mise run test-all      # unit + integration + sync
 mise run test-kustomize  # every Kustomize render validated against the schemas
 mise run test-kind       # the base on a kind cluster, then the smoke test
@@ -36,7 +36,7 @@ mise run test-kind       # the base on a kind cluster, then the smoke test
 | Kustomize render | 12 renders | The base alone, with each component and with all of them, against the Kubernetes and CRD schemas |
 | Kubernetes (kind) | 17 | The base with `mariadb` and `redis` on a kind cluster, then the smoke test |
 
-The integration suite runs every container with `read_only: true` (except web, whose version-gate checks patch `settings.yaml` in place) to catch filesystem writes before Kubernetes does, and prints the wall time of each section. Set `COMPOSE_CMD` and `CONTAINER_CMD` for another runner; CI uses `docker compose` and `docker`.
+The integration suite runs every container with `read_only: true` (except web, whose version-gate checks patch `settings.yaml` in place) to catch filesystem writes before Kubernetes does. `--durations=5` lists the slowest steps. Set `COMPOSE_CMD` and `CONTAINER_CMD` for another runner; CI uses `docker compose` and `docker`.
 
 ## New MISP releases
 
@@ -224,10 +224,10 @@ scripts/
   update-composer-lock.sh   # Resolves files/composer.lock through the composer-lock stage
 tests/
   test_*.py                 # Unit tests (see tests/README.md)
-  run-integration-tests.sh  # Containerised integration test suite
-  run-sync-test.sh          # Hub-spoke 3-instance sync tests
+  e2e/                      # Stack suites and the smoke test in pytest (stack.py, conftest.py)
+  run-kind-test.sh          # The base on a kind cluster, then the smoke test
   docker-compose.test.yml   # Test overlay on deploy/docker-compose.yml
-  docker-compose.postgres.yml  # Second overlay for --postgres
+  docker-compose.postgres.yml  # Second overlay for --db-engine postgres
   docker-compose.sync-test.yml
 deploy/
   docker-compose.yml        # Local development stack (podman compose)

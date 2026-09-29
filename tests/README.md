@@ -2,20 +2,21 @@
 
 ## TL;DR
 
-Four suites: unit tests on the Python library, an integration suite on one Compose stack, a hub-spoke sync suite on three instances, and a migration suite that copies a seeded instance onto MariaDB and PostgreSQL. Two Kubernetes checks cover the Kustomize base: every render validated against the schemas, and the base applied to a kind cluster with the smoke test.
+Unit tests on the Python library, and three stack suites in pytest (`tests/e2e/`): an integration suite on one Compose stack, a hub-spoke sync suite on three instances, and a migration suite that copies a seeded instance onto MariaDB and PostgreSQL. A smoke test checks any live MISP through its API. Two Kubernetes checks cover the Kustomize base: every render validated against the schemas, and the base applied to a kind cluster with the smoke test.
 
 ```bash
 mise run test                # unit tests (~0.2s)
-mise run test-integration    # single-instance integration tests (~70s)
-mise run test-integration -- --postgres   # the same on PostgreSQL
-mise run test-sync           # hub-spoke sync test with 3 instances (~90s)
+mise run test-integration    # single-instance integration tests (~2min)
+mise run test-integration -- --db-engine postgres   # the same on PostgreSQL
+mise run test-sync           # hub-spoke sync test with 3 instances (~2min)
 mise run test-migration      # migrate Job: MariaDB to MariaDB, MariaDB to PostgreSQL (~3min)
+mise run smoketest https://misp.example.com   # a live MISP; asks for an API key
 mise run test-all            # every suite
 mise run test-kustomize      # render the base with each component, validate against the schemas (~10s)
 mise run test-kind           # the base on a kind cluster, then the smoke test (build the images first)
 ```
 
-All integration tests build the images with compose, start full MISP stacks, and tear them down automatically. Pass `--skip-build` to reuse existing images.
+The stack suites build the images with compose, start full MISP stacks, and tear them down. Pass `-- --skip-build` to reuse existing images and `-- --keep` to leave the stack up.
 
 ## Unit tests
 
@@ -71,9 +72,9 @@ Run with: `mise run test` or `PYTHONPATH=files python -m pytest tests/ -v`
 | Settings and scheduler coverage | 3 | Every MISP setting curated or catalogued, every scheduler task covered by a task, no rejected `cake` setting |
 
 **Files:**
-- `run-integration-tests.sh` -- test script
+- `e2e/test_integration.py` -- the suite, in the order above; later sections use the state earlier ones leave
 - `docker-compose.test.yml` -- overlay on `deploy/docker-compose.yml` (test ports, env, Garage S3, dex)
-- `docker-compose.postgres.yml`, `postgres.env` -- second overlay for `--postgres`: points every MISP container at the postgres service
+- `docker-compose.postgres.yml`, `postgres.env` -- second overlay for `--db-engine postgres`: points every MISP container at the postgres service
 - `dex.yaml` -- the OIDC provider's static client and user
 - `test-compose.env` -- test env overrides (BASE_URL, ADMIN_EMAIL, etc.)
 - `test-compose-secrets.env` -- test secrets (passwords, Redis key), layered over `deploy/base/secrets-*.env`
@@ -90,7 +91,7 @@ Kubernetes schemas and, for the Cilium policies, the CRD catalog. It needs `kust
 
 **kind test** (`tests/run-kind-test.sh`): creates a kind cluster, loads the three images
 under the tag `kind`, applies the overlay `tests/kind`, waits for the configure Job and the
-Deployments, and runs `tests/smoketest.sh` through a port-forward on 38080. On a failure it
+Deployments, and runs the smoke test (`e2e/test_smoke.py`) through a port-forward on 38080. On a failure it
 prints the pods, the events and the logs. `--keep` leaves the cluster running. CI job: `kind`.
 
 | Overlay setting | Why |
@@ -136,7 +137,7 @@ Pulls and pushes are POSTs; a refused call fails the suite. Before each check th
 until no job on the instance is unfinished.
 
 **Files:**
-- `run-sync-test.sh` -- test script
+- `e2e/test_sync.py` -- the suite; one module fixture per phase
 - `docker-compose.sync-test.yml` -- standalone 3-instance compose (not an overlay)
 - `sync-test-{a,b,c}.env` -- per-instance env (MySQL host, Redis host, BASE_URL)
 - `sync-test-secrets.env` -- shared secrets
@@ -145,22 +146,46 @@ Run with: `mise run test-sync`
 
 ## Migration suite
 
-`run-migration-tests.sh` starts the integration stack on MariaDB, seeds it (an org with a
+`e2e/test_migration.py` (pytest, 48 tests) starts the integration stack on MariaDB, seeds it (an org with a
 user, a sync user with a known authkey, a sync server, an event with an attachment) and
 records the row counts. It then runs the migrate Job into a second MariaDB and checks the
 refusals (a non-empty target, an identity mismatch, `MIGRATE_FORCE`), points the stack at the
 copy and checks it: row counts, both authkeys, the org, the server, the event, the attachment
 download, the fixture attachment copied from the mounted source files, `MISP.live` set by the
 configure step, and the run in the sync log. The same copy and checks then run onto
-PostgreSQL, plus the id sequences.
+PostgreSQL, plus the id sequences. One parametrized list of 17 checks runs against both copies.
 
 **Files:**
-- `run-migration-tests.sh` -- test script
+- `e2e/test_migration.py` -- the suite; module fixtures carry each step's state to the next
+- `e2e/stack.py`, `e2e/conftest.py` -- the stack helper and the options every pytest suite shares (see below)
 - `docker-compose.migrate.yml` -- overlay: the second MariaDB (`mysql-target`) and the migrate service with the fixture files mounted
 - `docker-compose.migrate-mysql.yml`, `migrate-target-mysql.env` -- point the stack at `mysql-target` after the copy
 - `migrate-orgs.yaml` -- seed content for the org sync
 
-Run with: `mise run test-migration`
+Run with: `mise run test-migration` (`-- --skip-build`, `-- --keep`)
+
+## Smoke test
+
+`e2e/test_smoke.py` (17 tests) checks a live MISP through its API: the login page, API auth,
+the version, `MISP.baseurl` and `MISP.live`, the org, event and user indexes, supervisord and
+the five worker queues, the enrichment URL, and an event created and deleted. `--url` names
+the MISP; without `--key` only the login page is checked; without `--url` the module skips.
+
+Run with: `mise run smoketest https://misp.example.com`
+
+## Stack suites in pytest
+
+The stack suites and the smoke test are pytest modules in `tests/e2e/`. The unit run leaves
+them out (`--ignore=tests/e2e`).
+
+| Piece | Does |
+|-------|------|
+| `stack.py` | The `Stack` class: compose calls, `exec` and logs through the engine (a third of a compose call), SQL through the image's db layer, HTTP to MISP, waits, the log dump after a failure |
+| `conftest.py` | `--skip-build`, `--keep` (leave the stack up), `--db-engine`, `--url` and `--key` for the smoke test, and a fixture that tells a module whether one of its tests failed |
+
+A suite is one module. Module fixtures run each step once and hand its result on; the tests
+run in file order. After a failure the teardown writes every service's log to
+`$TMPDIR/<suite>-compose-logs.txt`, which CI uploads with the JUnit report.
 
 ## CI
 
@@ -170,10 +195,12 @@ GitHub Actions on every push to master and every PR:
 |-----|------|
 | `build` | The three images into the layer cache |
 | `unit` | The unit tests |
-| `integration` | This suite on MariaDB, against the images from `build` (`MISP_IMAGE_TAG=ci`) |
-| `integration-postgres` | This suite on PostgreSQL, in parallel |
+| `integration` | The integration suite on MariaDB, against the images from `build` (`MISP_IMAGE_TAG=ci`); uploads the JUnit report and, after a failure, the compose logs |
+| `integration-postgres` | The same on PostgreSQL, in parallel |
 | `hub-spoke` | The sync suite, in parallel with `integration` |
-| `migration` | The migration suite, in parallel |
+| `migration` | The migration suite (pytest), in parallel; uploads the JUnit report and, after a failure, the compose logs |
+| `kustomize` | Every Kustomize render validated against the schemas |
+| `kind` | The base on a kind cluster, then the smoke test |
 | `scan` | Trivy on the three images |
 | `release` | On a tag: push the images and create the GitHub Release, after every other job |
 

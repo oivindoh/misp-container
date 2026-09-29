@@ -3,7 +3,7 @@ set -euo pipefail
 
 #
 # Applies the Kustomize base with the mariadb and redis components to a kind
-# cluster (overlay tests/kind) and runs tests/smoketest.sh against it.
+# cluster (overlay tests/kind) and runs the smoke test (tests/e2e/test_smoke.py) against it.
 #
 # Usage:
 #   tests/run-kind-test.sh           # create the cluster, test, delete it
@@ -121,7 +121,11 @@ for _ in $(seq 1 30); do
     curl -sf -o /dev/null "http://localhost:${PORT}/users/login" && break
     sleep 2
 done
-if ! "$SCRIPT_DIR/smoketest.sh" "http://localhost:${PORT}" "$ADMIN_KEY"; then
+# The repository's venv has pytest (uv sync)
+PYTHON="$SCRIPT_DIR/../.venv/bin/python"
+[ -x "$PYTHON" ] || PYTHON=python3
+if ! "$PYTHON" -m pytest "$SCRIPT_DIR/e2e/test_smoke.py" -v -p no:cacheprovider \
+        --url "http://localhost:${PORT}" --key "$ADMIN_KEY"; then
     diagnose; exit 1
 fi
 section "Logs"

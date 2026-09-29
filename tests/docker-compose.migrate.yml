@@ -1,4 +1,4 @@
-# Overlay for the migration suite (tests/run-migration-tests.sh): a second
+# Overlay for the migration suite (tests/e2e/test_migration.py): a second
 # MariaDB as the same-engine target, and the migrate service with the test
 # env and a fixture attachments directory mounted as the source's files.
 x-test-env: &test-env

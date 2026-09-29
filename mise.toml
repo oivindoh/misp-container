@@ -16,19 +16,19 @@ run = "test -d .venv || uv sync --python 3.13"
 
 [tasks.test]
 description = "Run unit tests"
-run = "python -m pytest tests/ -v"
+run = "python -m pytest tests/ -v --ignore=tests/e2e"
 
 [tasks.test-integration]
 description = "Run integration tests (requires podman)"
-run = "tests/run-integration-tests.sh"
+run = "python -m pytest tests/e2e/test_integration.py -v"
 
 [tasks.test-sync]
 description = "Run hub-spoke sync test (3 MISP instances)"
-run = "tests/run-sync-test.sh"
+run = "python -m pytest tests/e2e/test_sync.py -v"
 
 [tasks.test-migration]
 description = "Run the migration suite (MariaDB to MariaDB and to PostgreSQL)"
-run = "tests/run-migration-tests.sh"
+run = "python -m pytest tests/e2e/test_migration.py -v"
 
 [tasks.test-kustomize]
 description = "Render the Kustomize base with each component and validate against the schemas"
@@ -48,7 +48,7 @@ run = """
 #!/usr/bin/env bash
 URL="${1:?Usage: mise run smoketest <url>}"
 read -rsp "API key: " KEY; echo
-tests/smoketest.sh "$URL" "$KEY"
+python -m pytest tests/e2e/test_smoke.py -v --url "$URL" --key "$KEY"
 """
 
 [tasks.logs]
