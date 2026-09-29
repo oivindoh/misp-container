@@ -29,9 +29,13 @@ def results(options):
         stack.compose("build", "web", check=True, timeout=3600)
     rc, out = stack.run("web", "/repo/scripts/check_upstream.py", "/var/www/MISP", "--php", "--json",
                         entrypoint="python3", volumes=[f"{REPO}:/repo:ro"])
-    line = next((l for l in reversed(out.splitlines()) if l.startswith("{")), "")
-    assert line, f"check_upstream.py printed no result (exit {rc}):\n{out[-3000:]}"
-    return json.loads(line)
+    for line in reversed(out.splitlines()):
+        if line.startswith("{"):
+            try:
+                return json.loads(line)
+            except ValueError:
+                break
+    pytest.fail(f"check_upstream.py printed no JSON result (exit {rc}):\n{out[-3000:]}")
 
 
 @pytest.mark.parametrize("name", NAMES)

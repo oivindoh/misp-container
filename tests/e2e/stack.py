@@ -95,7 +95,8 @@ class Stack:
         for volume in volumes:
             args += ["-v", volume]
         result = self.compose(*args, service, *command, timeout=timeout)
-        return result.returncode, result.stdout + result.stderr
+        # compose() drops the last newline of stdout; stderr starts on a line of its own
+        return result.returncode, result.stdout + "\n" + result.stderr
 
     # -- containers ------------------------------------------------------------
 
