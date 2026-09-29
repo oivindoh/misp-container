@@ -29,9 +29,9 @@ mise run test-kind       # the base on a kind cluster, then the smoke test
 
 | Suite | Tests | What it covers |
 |-------|-------|----------------|
-| Unit | 271 | Config engine, config.php rendering, advisory lock, database helpers, app/Config preparation, task runner, sync engine, metrics exporter |
-| Integration | 111 | Full Compose stack: HTTP, auth, settings, PHP-FPM, workers, S3, org sync, metrics, modules enrichment |
-| Hub-spoke sync | 12 | 3 isolated MISP instances: pull, push, tag-filtered sync |
+| Unit | 344 | Config engine, config.php rendering, advisory lock, database helpers, app/Config preparation, task runner, sync engine, metrics exporter |
+| Integration | 131 | Full Compose stack: HTTP, auth, settings, PHP-FPM, workers, S3, org sync, metrics, modules enrichment |
+| Hub-spoke sync | 20 | 3 isolated MISP instances: pull, push, tag-filtered sync |
 | Migration | 48 | The migrate Job: a seeded MariaDB copied onto a second MariaDB and onto PostgreSQL, refusals, the copy checked through the API |
 | Kustomize render | 12 renders | The base alone, with each component and with all of them, against the Kubernetes and CRD schemas |
 | Kubernetes (kind) | 17 | The base with `mariadb` and `redis` on a kind cluster, then the smoke test |
@@ -199,7 +199,8 @@ files/
     env.py                  # Environment variable defaults
     init.py                 # Per-pod preparation: app/Config rendering, GPG key import
     configure.py            # One-shot configuration (configure Job)
-    log.py                  # Logging setup
+    log.py                  # Logging setup: LOG_FORMAT json or text
+    logrelay.py             # Relays the log files MISP writes directly to stdout, and caps them
     metrics.py              # Prometheus metrics collection
     sync.py                 # Declarative org/team/server sync engine
     task.py                 # Periodic task runner (cronjobs component)

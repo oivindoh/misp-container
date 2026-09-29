@@ -169,6 +169,43 @@ class TestPrepareConfig:
         assert "'system_setting_db' => true" in (config_dir / "config.php").read_text()
         assert "'host' => 'db'" in (config_dir / "database.php").read_text()
         assert "'host'          => 'smtp'" in (config_dir / "email.php").read_text()
+        # MISP's log goes to stderr, text unless LOG_FORMAT says json
+        assert "CakeLog::config('container', array('engine' => 'ContainerLog'));" in bootstrap
+        assert "' [misp] '" in bootstrap and "json_encode" not in bootstrap
+
+
+class TestRenderLogBlock:
+    """The CakeLog block in bootstrap.php follows LOG_FORMAT on every start."""
+
+    BASE = "<?php\nCakeLog::config('debug', array('engine' => 'FileLog'));\n"
+
+    def test_json_block_drops_the_file_engines(self):
+        from misp_container.init import render_log_block
+        out = render_log_block(self.BASE, "json")
+        assert "json_encode" in out and "'context' => 'misp'" in out
+        assert out.index("CakeLog::drop('debug');") > out.index("CakeLog::config('debug'")
+        assert "file_put_contents('php://stderr'" in out
+
+    def test_shells_find_their_stream_names_taken(self):
+        from misp_container.init import render_log_block
+        out = render_log_block(self.BASE, "json")
+        assert "CakeLog::config('stdout', array('engine' => 'ContainerLog', 'types' => array('none')));" in out
+        assert "CakeLog::config('stderr', array('engine' => 'ContainerLog', 'types' => array('none')));" in out
+
+    def test_format_change_replaces_the_block(self):
+        from misp_container.init import render_log_block, LOG_BLOCK_START, LOG_BLOCK_END
+        out = render_log_block(render_log_block(self.BASE, "json"), "text")
+        assert out.count(LOG_BLOCK_START) == 1 and out.count(LOG_BLOCK_END) == 1
+        assert "json_encode" not in out and "' [misp] '" in out
+
+    def test_second_render_changes_nothing(self):
+        from misp_container.init import render_log_block
+        once = render_log_block(self.BASE, "json")
+        assert render_log_block(once, "json") == once
+
+    def test_unknown_format_is_text(self):
+        from misp_container.init import render_log_block
+        assert "' [misp] '" in render_log_block(self.BASE, "yaml")
 
     def test_existing_core_php_is_kept(self, tmp_path, monkeypatch):
         from misp_container import init as init_mod

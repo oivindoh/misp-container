@@ -59,17 +59,9 @@ def configure_php():
     log.info("PHP-FPM configured")
 
 
-def redirect_logs():
-    """Tail MISP logs to stdout in the background."""
-    log_dir = Path(MISP_BASE) / "app/tmp/logs"
-    for name in ("error.log", "debug.log"):
-        log_file = log_dir / name
-        log_file.touch(exist_ok=True)
-        subprocess.Popen(
-            ["tail", "-F", str(log_file)],
-            stdout=sys.stdout,
-            stderr=subprocess.DEVNULL,
-        )
+def start_log_relay():
+    """Relay the log files MISP writes directly to stdout; it outlives the exec of PHP-FPM."""
+    subprocess.Popen([sys.executable, "-m", "misp_container.logrelay"], stdout=sys.stdout, stderr=sys.stderr)
 
 
 # -- Main --
@@ -87,7 +79,7 @@ if not env("PLUGIN_S3_BUCKET_NAME"):
 db.wait_for_db()
 db.wait_for_live()
 
-redirect_logs()
+start_log_relay()
 
 # Late custom hook -- runs on every web replica, just before PHP-FPM starts.
 run_custom_script(CUSTOM_PRE_START_SCRIPT, "pre-start")

@@ -124,5 +124,16 @@ done
 if ! "$SCRIPT_DIR/smoketest.sh" "http://localhost:${PORT}" "$ADMIN_KEY"; then
     diagnose; exit 1
 fi
+section "Logs"
+# The base sets LOG_FORMAT=json: every line of the configure Job is one JSON object
+json_lines=$(kc logs job/configure | python3 -c '
+import json, sys
+lines = [l for l in sys.stdin if l.strip()]
+print(sum(1 for l in lines if json.loads(l)))' 2>/dev/null || echo 0)
+if [ "$json_lines" -lt 10 ]; then
+    echo "configure Job logs are not JSON lines ($json_lines)"; diagnose; exit 1
+fi
+echo "configure Job: $json_lines JSON lines"
+
 echo ""
 echo "kind test passed in $(( $(date +%s) - START ))s"

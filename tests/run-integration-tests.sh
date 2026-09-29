@@ -1148,6 +1148,62 @@ extra_web=$(container_ids web | tail -n +2)
 [ -n "$extra_web" ] && ${ENGINE} rm -f $extra_web >/dev/null 2>&1 || true
 
 
+# --- Logging ----------------------------------------------------------------
+
+section "Logging"
+
+# The test stack takes LOG_FORMAT=json from base.env, as Kubernetes does
+configure_id=$(${ENGINE} ps -aq --filter "label=com.docker.compose.project=deploy" --filter "label=com.docker.compose.service=configure" | head -1)
+configure_raw=$(${ENGINE} logs "$configure_id" 2>&1 || true)
+json_lines=$(echo "$configure_raw" | python3 -c '
+import json, sys
+n = 0
+for line in sys.stdin:
+    line = line.strip()
+    if line.startswith("{"):
+        json.loads(line); n += 1
+print(n)' 2>/dev/null || echo "invalid")
+if [ "$json_lines" != "invalid" ] && [ "$json_lines" -ge 10 ]; then
+    pass "logging: configure writes JSON lines ($json_lines)"
+else
+    fail "logging: configure JSON lines ($json_lines)"
+fi
+text_lines=$(echo "$configure_raw" | grep -c -E '^[0-9-]{10} [0-9:]{8} (INFO|WARNING|ERROR) ' || true)
+assert_eq "logging: configure writes no text lines" "0" "$text_lines"
+
+# MISP's own log (CakeLog) reaches the web pod's output: a missing controller is logged
+curl -s -o /dev/null "http://localhost:${TEST_PORT}/nonexistentcontrollerzz" || true
+retries=10
+until web_logs_all | grep -q 'NonexistentcontrollerzzController' || [ $retries -le 0 ]; do
+    sleep 1; retries=$((retries - 1))
+done
+misp_line=$(web_logs_all | grep 'NonexistentcontrollerzzController' | head -1)
+assert_contains "logging: MISP's log reaches the web output" "$misp_line" '"context":"misp"'
+assert_contains "logging: the web line is an error" "$misp_line" '"level":"error"'
+
+# The workers' CakeLog lines reach the worker output once, as JSON: a console
+# shell would add its own text copy
+worker_raw=$(${ENGINE} logs "$(container_ids worker | head -1)" 2>&1 || true)
+job_json=$(echo "$worker_raw" | grep 'launching job' | grep -c '"context":"misp"' || true)
+job_text=$(echo "$worker_raw" | grep 'launching job' | grep -c -v '^{' || true)
+if [ "${job_json:-0}" -ge 1 ] && [ "${job_text:-0}" -eq 0 ]; then
+    pass "logging: worker job lines reach the worker output once, as JSON ($job_json)"
+else
+    fail "logging: worker job lines: $job_json JSON, $job_text text"
+fi
+
+# No pod writes CakeLog files any more
+cake_files=$(web_exec 'find /var/www/MISP/app/tmp/logs -maxdepth 1 \( -name debug.log -o -name error.log \) -size +0 | wc -l' | tr -d '[:space:]')
+assert_eq "logging: no debug.log or error.log on disk" "0" "$cake_files"
+
+# The relay forwards a file MISP appends to, with the file as context
+web_exec 'echo "relay probe line" >> /var/www/MISP/app/tmp/logs/server-sync.log'
+retries=10
+until web_logs_all | grep -q 'relay probe line' || [ $retries -le 0 ]; do
+    sleep 1; retries=$((retries - 1))
+done
+assert_contains "logging: the relay forwards server-sync.log" "$(web_logs_all | grep 'relay probe line' | head -1)" '"context":"misp:server-sync"'
+
 # --- Settings coverage ------------------------------------------------------
 
 section "Settings coverage"
@@ -1169,7 +1225,7 @@ else
 fi
 
 # Every default this image applies must be accepted by this MISP version
-cake_failures=$(${COMPOSE} logs configure 2>/dev/null | grep -c "WARNING \[cake\]" || true)
+cake_failures=$(${COMPOSE} logs configure 2>/dev/null | grep -c -E 'WARNING \[cake\]|"level":"warning","context":"cake"' || true)
 assert_eq "configure: no rejected cake settings" "0" "$cake_failures"
 
 # --- Results ----------------------------------------------------------------

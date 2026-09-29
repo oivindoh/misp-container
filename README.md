@@ -474,6 +474,21 @@ Two hook points for custom Python, mounted as files, skipped when absent:
 | `/custom/setup.py` | configure Job | After the database is ready, before configuration |
 | `/custom/pre-start.py` | every web replica | Before PHP-FPM starts |
 
+## Logging
+
+Every pod writes its log to stdout and stderr and keeps no log file. `LOG_FORMAT` selects the
+line format: `json` (the base default: one JSON object per line, for a log collector) or
+`text` (the Compose default, coloured on a terminal).
+
+| Source | Reaches the output as | Format |
+|--------|-----------------------|--------|
+| The entrypoints, the configure Job, org sync, tasks, metrics | `time`, `level`, `context`, `message` (and `exception`) | `LOG_FORMAT` |
+| MISP's own log (CakeLog: job starts and ends, exceptions, warnings) | the same fields, `context` `misp` | `LOG_FORMAT` |
+| Files MISP appends to directly (`server-sync.log`, `workflow-execution.log`, `exec-errors.log`, `kafka.error.log`) | one line per file line, `context` `misp:<file>`; a file is emptied past 10 MB | `LOG_FORMAT` |
+| PHP errors and warnings in web pods | PHP's own line, through PHP-FPM | text |
+| PHP-FPM itself | FPM's own line | text |
+| Caddy access log | Caddy's own JSON | JSON |
+
 ## Metrics
 
 The metrics Deployment exposes Prometheus metrics on port 9191: instance health, content

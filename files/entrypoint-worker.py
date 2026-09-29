@@ -35,6 +35,18 @@ stderr_logfile=/dev/stderr
 stderr_logfile_maxbytes=0
 """
 
+LOGRELAY_TEMPLATE = """
+[program:logrelay]
+command={python} -m misp_container.logrelay
+autostart=true
+autorestart=true
+stdout_logfile=/dev/stdout
+stdout_logfile_maxbytes=0
+stderr_logfile=/dev/stderr
+stderr_logfile_maxbytes=0
+"""
+
+
 def generate_supervisord_config():
     """Generate supervisord config for worker queues."""
     log.info("generating supervisord configuration")
@@ -80,6 +92,9 @@ password={sv_pass}
             sections.append(WORKER_TEMPLATE.format(
                 name=name, misp_base=MISP_BASE, cake=CAKE, numprocs=numprocs, stopwait=stopwait,
             ))
+
+    # Outside the misp-workers group: MISP must not list or manage it as a worker
+    sections.append(LOGRELAY_TEMPLATE.format(python=sys.executable))
 
     # MISP's BackgroundJobsTool filters processes by group name 'misp-workers'.
     # Group all worker programs under this name so the diagnostic page sees them.

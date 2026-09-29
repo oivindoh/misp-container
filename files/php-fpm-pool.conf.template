@@ -6,6 +6,8 @@
 pid = /tmp/php-fpm.pid
 error_log = /dev/stderr
 daemonize = no
+; Longer lines are split; a JSON log line with a stack trace needs room
+log_limit = 16384
 
 [www]
 ; No user/group directives -- FPM runs as UID 1000, not root.
@@ -25,7 +27,11 @@ pm.max_requests = ${PHP_FCGI_MAX_REQUESTS}
 ping.path = /fpm-ping
 ping.response = pong
 
-; Error logging -- log to stderr, never display in output (corrupts JSON API)
+; Error logging -- log to stderr, never display in output (corrupts JSON API).
+; Without catch_workers_output FPM sends a worker's stderr to /dev/null, and
+; PHP errors and MISP's log (CakeLog on php://stderr) never leave the pod.
+catch_workers_output = yes
+decorate_workers_output = no
 php_admin_value[error_log] = /dev/stderr
 php_admin_flag[log_errors] = on
 php_admin_flag[display_errors] = off

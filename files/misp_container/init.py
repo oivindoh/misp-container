@@ -40,6 +40,59 @@ if (Configure::read('OidcAuth')) { CakePlugin::load('OidcAuth'); }
 if (Configure::read('ShibbAuth')) { CakePlugin::load('ShibbAuth'); }
 """
 
+# MISP's CakeLog writes app/tmp/logs/debug.log and error.log by default. In a
+# pod those files reach no log collector and grow until the volume fills.
+# This engine writes each entry to stderr instead, as JSON or text after
+# LOG_FORMAT. PHP cannot open /dev/stderr when stderr is a pipe; php://stderr
+# writes to the descriptor directly.
+LOG_BLOCK_START = "// -- misp-container logging: rendered on every start by misp_container/init.py --"
+LOG_BLOCK_END = "// -- end misp-container logging --"
+LOG_WRITERS = {
+    "json": """$t = microtime(true);
+            $line = json_encode(array(
+                'time' => gmdate('Y-m-d\\TH:i:s', (int)$t) . sprintf('.%03dZ', ($t - floor($t)) * 1000),
+                'level' => (string)$type,
+                'context' => 'misp',
+                'message' => (string)$message,
+            ), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);""",
+    "text": """$line = date('Y-m-d H:i:s') . ' ' . str_pad(strtoupper((string)$type), 5) . ' [misp] ' . $message;""",
+}
+LOG_BLOCK = """
+{start}
+App::uses('BaseLog', 'Log/Engine');
+if (!class_exists('ContainerLog', false)) {{
+    class ContainerLog extends BaseLog
+    {{
+        public function write($type, $message)
+        {{
+            {writer}
+            return file_put_contents('php://stderr', $line . "\\n") !== false;
+        }}
+    }}
+}}
+CakeLog::drop('debug');
+CakeLog::drop('error');
+CakeLog::config('container', array('engine' => 'ContainerLog'));
+// A console shell adds its own stdout and stderr streams unless streams with
+// those names exist, and each entry would be written twice. These take a type
+// that never occurs.
+CakeLog::config('stdout', array('engine' => 'ContainerLog', 'types' => array('none')));
+CakeLog::config('stderr', array('engine' => 'ContainerLog', 'types' => array('none')));
+{end}
+"""
+
+
+def render_log_block(content: str, fmt: str) -> str:
+    """bootstrap.php with the logging block for fmt (json or text), replacing an earlier one."""
+    start = content.find(LOG_BLOCK_START)
+    if start != -1:
+        end = content.find(LOG_BLOCK_END, start)
+        if end != -1:
+            content = content[:start].rstrip("\n") + "\n" + content[end + len(LOG_BLOCK_END):].lstrip("\n")
+    block = LOG_BLOCK.format(start=LOG_BLOCK_START, end=LOG_BLOCK_END,
+                             writer=LOG_WRITERS.get(fmt, LOG_WRITERS["text"]))
+    return content.rstrip("\n") + "\n" + block
+
 
 def prepare():
     """Everything a pod needs on disk before MISP runs."""
@@ -89,6 +142,14 @@ def prepare_config():
         content = re.sub(r"CakePlugin::loadAll\(array\(.*?CakeResque.*?\)\);", "", content, flags=re.DOTALL)
         content += AUTH_PLUGIN_PATCH
         bootstrap.write_text(content)
+
+    if bootstrap.exists():
+        from .log import log_format
+        content = bootstrap.read_text()
+        rendered = render_log_block(content, log_format())
+        if rendered != content:
+            log.info("  bootstrap.php logging to stderr (%s)", log_format())
+            bootstrap.write_text(rendered)
 
     # Rendered on every start: env is the source of truth for these
     log.info("  config.php from settings.yaml")

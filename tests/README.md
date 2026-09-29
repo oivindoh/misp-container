@@ -19,13 +19,16 @@ All integration tests build the images with compose, start full MISP stacks, and
 
 ## Unit tests
 
-**271 tests** covering the Python entrypoint library (`files/misp_container/`).
+**344 tests** covering the Python entrypoint library (`files/misp_container/`) and the scripts.
 
 | File | What it tests |
 |------|---------------|
 | `test_config.py` | Settings diff engine, version comparison, YAML loading, env var expansion, settings cache |
 | `test_env.py` | Environment variable defaults, `apply_defaults()`, worker config derivation, derived variables |
-| `test_task.py` | Periodic task runner (cronjob entrypoint) |
+| `test_task.py` | Periodic task runner: API tasks, index tasks, the workflow task, console tasks, the backlog guard |
+| `test_scheduler_coverage.py` | The guard that fails when MISP's scheduler offers work no task covers |
+| `test_log.py`, `test_logrelay.py` | The JSON and text log formats; the relay of MISP's log files and their size cap |
+| `test_metrics.py` | Metrics exporter: database metrics, the job queues in Redis (RESP client), network probes |
 | `test_db.py` | Advisory lock holds one connection until release, statement splitter, the version gate |
 | `test_engine.py` | Engine selection, SQL fragments per engine, `MYSQL_*` aliases, housekeeping batches, cursor handling |
 | `test_configure.py` | Placeholder and identity checks of the configure step |
@@ -38,7 +41,7 @@ Run with: `mise run test` or `PYTHONPATH=files python -m pytest tests/ -v`
 
 ## Integration tests
 
-**111 tests** verifying the full MISP stack in Compose.
+**131 tests** verifying the full MISP stack in Compose.
 
 **Stack:** 1 MISP instance (configure + web x2 + caddy + worker + MariaDB or PostgreSQL + Redis + Garage S3 + dex)
 
@@ -59,6 +62,11 @@ Run with: `mise run test` or `PYTHONPATH=files python -m pytest tests/ -v`
 | S3 attachment storage | 4 | Garage S3 bootstrap, upload, download, bucket verification |
 | Custom auth | 2 | Header login (200), no-header redirect (302) |
 | OIDC login | 7 | Redirect to dex, its form, the callback, the user's email, role by name, default organisation, mixed auth |
+| Task runner | 13 | API tasks, the index tasks without items, the console tasks `periodic-summary` and `check-user-validity`, a missing `ADMIN_KEY` |
+| Org sync | 18 | Org/user/tag/server creation, server authkey (DB verify), sync user authkey prefix, taxonomy enable, disabled user, custom warninglist create/update, warm run idempotency |
+| Metrics exporter | 22 | Endpoints, core metrics, no scrape errors, a waiting job in `misp_jobs_queued` and back to 0, `misp_scheduled_tasks_enabled` |
+| MISP modules | 6 | Enrichment through the modules service |
+| Logging | 7 | JSON lines from configure and none in text, MISP's own log in the web and worker output once, no CakeLog files on disk, the relay forwarding `server-sync.log` |
 | Multi-replica web | 6 | configure service ran once, two web replicas serve without configuring |
 | Settings and scheduler coverage | 3 | Every MISP setting curated or catalogued, every scheduler task covered by a task, no rejected `cake` setting |
 
