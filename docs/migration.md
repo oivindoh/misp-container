@@ -38,7 +38,7 @@ flowchart LR
 | Step | Same engine (target `mysql`) | Cross engine (target `postgres`) |
 |------|------------------------------|----------------------------------|
 | Identity | `MISP.uuid` and the salt and key, where the source stores them, must equal this deployment's values (exit 4) | same |
-| Target | must be empty (exit 3), or `MIGRATE_FORCE=true` drops every table first | same |
+| Target | must be empty (exit 3), or `MIGRATE_FORCE=true` drops every table first; a copy the Job made needs `MIGRATE_REPLACE_COPY=true` as well | same |
 | Schema | each table created from the source's own `CREATE TABLE` (MySQL 8 collations mapped for MariaDB) | this image's PostgreSQL baseline; the source must be at the same `db_version` and ledger state (exit 5) |
 | Rows | every table, whole | every table the baseline has, by column name; flags become booleans, zero dates become NULL; the id sequences move past the copied ids |
 | After | `MISP.live=false` on the copy, so web and worker wait for the configure Job | same |
@@ -57,7 +57,7 @@ a configure run to upgrade it, then a cross-engine copy from that database onto 
 | 0 | Copied |
 | 1 | The copy failed part way, rows or attachments; the target holds a partial copy, run again with `MIGRATE_FORCE=true` |
 | 2 | Configuration: no `MIGRATE_SOURCE_HOST`, the source refuses the connection, both attachment sources set, a bucket without an access key, or a bucket the Job cannot list |
-| 3 | The target database is not empty |
+| 3 | The target database is not empty, or holds a copy the Job made and `MIGRATE_REPLACE_COPY` is not `true` |
 | 4 | An identity setting on the source differs from this deployment's |
 | 5 | The source schema is not this image's (cross engine only) |
 
@@ -92,6 +92,7 @@ AWS-compatible store path-style at its endpoint, as MISP does.
 | `MIGRATE_SOURCE_S3_ACCESS_KEY`, `MIGRATE_SOURCE_S3_SECRET_KEY` | A key that can list and read the source bucket |
 | `MIGRATE_SOURCE_S3_VALIDATE_CA`, `MIGRATE_SOURCE_S3_CA` | `false` skips the TLS check; a CA bundle for it |
 | `MIGRATE_FORCE` | `true` drops a non-empty target first |
+| `MIGRATE_REPLACE_COPY` | `true`, with `MIGRATE_FORCE`, drops a copy the Job made; its successful runs are in the target's `misp_container_sync_log` |
 
 The target is the deployment's own `DB_*` connection, and for attachments its own `PLUGIN_S3_*`
 settings (the key needs write access to the bucket) or its attachments volume.
@@ -124,9 +125,10 @@ settings (the key needs write access to the bucket) or its attachments volume.
    ```
 
 4. Remove the component after the first successful sync. Argo CD runs the Job again on every
-   sync while the component is in the overlay: with `MIGRATE_FORCE=true` the next sync drops
-   the migrated database and copies again, and with `false` the Job exits 3 and the sync
-   fails. The finished Job stays for a day (`ttlSecondsAfterFinished`) for its log.
+   sync while the component is in the overlay. The Job then finds its own copy and exits 3, so
+   the sync fails and the copy stays, `MIGRATE_FORCE=true` included; only
+   `MIGRATE_REPLACE_COPY=true` as well drops it and copies again. The finished Job stays for a
+   day (`ttlSecondsAfterFinished`) for its log.
 
 ### Onto a running deployment
 

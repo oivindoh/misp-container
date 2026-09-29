@@ -910,7 +910,7 @@ class TestSyncLogTable:
 
         calls = [str(c) for c in cursor.execute.call_args_list]
         assert any("CREATE TABLE" in c for c in calls)
-        assert any("DELETE" in c and "30 DAY" in c for c in calls)
+        assert any("DELETE" in c and "30 DAY" in c and "operation <> 'migrate'" in c for c in calls)
         conn.commit.assert_called_once()
         conn.close.assert_called_once()
 

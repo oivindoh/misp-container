@@ -56,6 +56,38 @@ class TestIdentity:
         assert migrate.check_identity({"MISP.uuid": "u"}, {"MISP_UUID": "u"}) == []
 
 
+class TestTargetRefusal:
+    def test_an_empty_target(self):
+        assert migrate.target_refusal(0, "", "", "") == ""
+
+    def test_a_fresh_install_needs_force(self):
+        assert "set MIGRATE_FORCE=true" in migrate.target_refusal(80, "", "", "")
+        assert migrate.target_refusal(80, "", "true", "") == ""
+
+    def test_a_copy_the_job_made_needs_a_second_yes(self):
+        refusal = migrate.target_refusal(80, "2026-09-29 12:00:00", "true", "")
+        assert "copy this Job made at 2026-09-29 12:00:00" in refusal and "MIGRATE_REPLACE_COPY" in refusal
+        assert migrate.target_refusal(80, "2026-09-29 12:00:00", "true", "true") == ""
+
+    def test_the_copy_date_comes_from_the_sync_log(self):
+        class Cursor:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def execute(self, sql):
+                self.sql = sql
+
+            def fetchone(self):
+                return ("2026-09-29 12:00:00",)
+
+        with patch.object(migrate.db, "_cursor", lambda conn: Cursor()):
+            assert migrate.last_copy(None, ["events", "misp_container_sync_log"]) == "2026-09-29 12:00:00"
+        assert migrate.last_copy(None, ["events"]) == ""
+
+
 class FakeBucket(migrate.Bucket):
     """A bucket held in a dict: key -> bytes."""
 

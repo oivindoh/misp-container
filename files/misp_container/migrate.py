@@ -20,7 +20,8 @@ gets this image's PostgreSQL baseline, the source must be at the same schema
 version, and the rows are copied into it column by column.
 
 Exit codes: 0 done; 1 copy failed; 2 configuration; 3 target not empty
-(MIGRATE_FORCE=true drops it first); 4 identity mismatch; 5 source schema
+(MIGRATE_FORCE=true drops it first, and a copy this Job made only with
+MIGRATE_REPLACE_COPY=true as well); 4 identity mismatch; 5 source schema
 differs from this image's (cross engine only).
 """
 
@@ -195,6 +196,35 @@ def target_schema_state(conn, target_engine: str) -> tuple[str, set[str]]:
         cur.execute("SELECT migration_id FROM schema_migrations WHERE status = 'applied'")
         applied = {row[0] for row in cur.fetchall()}
     return version, applied
+
+
+def last_copy(conn, tables: list[str]) -> str:
+    """When this Job last copied into the target, from the target's sync log; empty when it never did."""
+    if "misp_container_sync_log" not in tables:
+        return ""
+    with db._cursor(conn) as cur:
+        cur.execute("SELECT MAX(timestamp) FROM misp_container_sync_log "
+                    "WHERE operation = 'migrate' AND status = 'success'")
+        row = cur.fetchone()
+    return str(row[0]) if row and row[0] else ""
+
+
+def target_refusal(tables: int, copied: str, force: str, replace: str) -> str:
+    """Why the Job leaves a non-empty target alone; empty when it may drop it.
+
+    Argo CD runs the Job on every sync while the migrate component is in the
+    overlay. A MIGRATE_FORCE=true left behind would drop the copy on the next
+    sync, so a copy this Job made needs MIGRATE_REPLACE_COPY=true as well.
+    """
+    if not tables:
+        return ""
+    if force != "true":
+        return f"the target database has {tables} tables; set MIGRATE_FORCE=true to drop them"
+    if copied and replace != "true":
+        return (f"the target holds a copy this Job made at {copied}; MIGRATE_FORCE=true would drop it. "
+                "Remove the migrate component once a copy is done; to copy again, set MIGRATE_REPLACE_COPY=true "
+                "as well")
+    return ""
 
 
 def drop_all(conn, tables: list[str], target_engine: str) -> None:
@@ -502,11 +532,12 @@ def run() -> None:
     dst = db._connect()
     try:
         existing = target_tables(dst, target_engine)
+        refusal = target_refusal(len(existing), last_copy(dst, existing), env("MIGRATE_FORCE"),
+                                 env("MIGRATE_REPLACE_COPY"))
+        if refusal:
+            log.error("%s", refusal)
+            sys.exit(EXIT_NOT_EMPTY)
         if existing:
-            if env("MIGRATE_FORCE") != "true":
-                log.error("the target database has %d tables; set MIGRATE_FORCE=true to drop them",
-                          len(existing))
-                sys.exit(EXIT_NOT_EMPTY)
             drop_all(dst, existing, target_engine)
         try:
             if target_engine == db.POSTGRES:

@@ -170,7 +170,7 @@ user, a sync user with a known authkey, a sync server, an event with an attachme
 records the row counts. The mounted source files hold an attachment in each place MISP keeps
 one on disk: flat, under `bucket_<n>/` and under `shadow/`. The suite then runs the migrate Job
 into a second MariaDB and checks the refusals (a non-empty target, an identity mismatch,
-`MIGRATE_FORCE`), points the stack at the copy and checks it: row counts, both authkeys, the
+`MIGRATE_FORCE` alone on the Job's own copy, then with `MIGRATE_REPLACE_COPY`), points the stack at the copy and checks it: row counts, both authkeys, the
 org, the server, the event, the attachment download, the fixture attachments under MISP's
 keys, `MISP.live` set by the configure step, and the run in the sync log. The same copy and
 checks then run onto PostgreSQL with the attachments uploaded into an S3 bucket in garage,

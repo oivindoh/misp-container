@@ -715,8 +715,10 @@ def init_sync_log_table() -> None:
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
                 """
             cur.execute(ddl)
-            # Prune entries older than 30 days
-            cur.execute(f"DELETE FROM misp_container_sync_log WHERE timestamp < {dbmod.ago(30, 'DAY')}")
+            # Prune entries older than 30 days. The migrate Job's rows stay: it reads
+            # them to refuse dropping a copy it made (migrate.py)
+            cur.execute(f"DELETE FROM misp_container_sync_log WHERE timestamp < {dbmod.ago(30, 'DAY')} "
+                        "AND operation <> 'migrate'")
         conn.commit()
     finally:
         conn.close()

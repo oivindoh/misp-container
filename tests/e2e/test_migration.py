@@ -139,8 +139,14 @@ def identity_mismatch(first_copy, mysql_target):
 
 
 @pytest.fixture(scope="module")
-def forced_copy(identity_mismatch, mysql_target):
+def force_refused(identity_mismatch, mysql_target):
+    # The target holds the first copy: a MIGRATE_FORCE left behind must not drop it
     return migrate(mysql_target, DB_HOST="mysql-target", MIGRATE_FORCE="true")
+
+
+@pytest.fixture(scope="module")
+def forced_copy(force_refused, mysql_target):
+    return migrate(mysql_target, DB_HOST="mysql-target", MIGRATE_FORCE="true", MIGRATE_REPLACE_COPY="true")
 
 
 @pytest.fixture(scope="module")
@@ -175,7 +181,7 @@ def bucket_copy(stack, postgres_copy):
               "MIGRATE_SOURCE_S3_ACCESS_KEY": S3_TARGET["PLUGIN_S3_AWS_ACCESS_KEY"],
               "MIGRATE_SOURCE_S3_SECRET_KEY": S3_TARGET["PLUGIN_S3_AWS_SECRET_KEY"]}
     return migrate(stack, DB_ENGINE="postgres", DB_HOST="postgres", DB_PORT="5432", MIGRATE_FORCE="true",
-                   **source, **{**S3_TARGET, "PLUGIN_S3_BUCKET_NAME": COPY_BUCKET})
+                   MIGRATE_REPLACE_COPY="true", **source, **{**S3_TARGET, "PLUGIN_S3_BUCKET_NAME": COPY_BUCKET})
 
 
 # -- the checks every migrated copy must pass --------------------------------------
@@ -288,6 +294,11 @@ def test_mariadb_identity_mismatch_refused(identity_mismatch):
 
 def test_mariadb_identity_mismatch_names_the_setting(identity_mismatch):
     assert "MISP.uuid on the source differs from MISP_UUID" in identity_mismatch[1]
+
+
+def test_mariadb_force_alone_keeps_the_jobs_copy(force_refused):
+    rc, out = force_refused
+    assert rc == 3 and "holds a copy this Job made" in out, out[-3000:]
 
 
 def test_mariadb_force_replaces_the_target(forced_copy):
