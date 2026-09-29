@@ -306,8 +306,10 @@ on one replica only; use the `misp-certs` Secret.
 
 ### Network policies
 
-The `netpol-cilium` component allows only the paths in the diagram above plus DNS and, for
-modules and metrics, HTTPS to the outside. The ingress controller namespace
+The `netpol-cilium` component allows only the paths in the diagram above plus DNS, HTTPS to
+the outside for web, worker, modules, metrics and the console tasks, and SMTP (ports 25, 465
+and 587, in or outside the cluster) for web, worker and the console tasks. A mail relay on
+another port needs a patch. The ingress controller namespace
 (`haproxy-controller`) and the Prometheus namespace (`monitoring`) are its patch points. The
 file header of `deploy/components/netpol-cilium/networkpolicy.yaml` lists every flow.
 

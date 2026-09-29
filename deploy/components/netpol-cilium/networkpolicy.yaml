@@ -5,8 +5,8 @@
 #   task cronjobs         --> caddy :8080, metrics :9191
 #   console task cronjobs --> mariadb :3306, redis :6379, SMTP out, HTTPS out (IdP)
 #   caddy                 --> php-fpm :9002  (localhost in same pod)
-#   php-fpm               --> mariadb :3306, redis :6379, HTTPS out (IdP, partners)
-#   worker                --> mariadb :3306, redis :6379, HTTPS out (partners, feeds)
+#   php-fpm               --> mariadb :3306, redis :6379, HTTPS out (IdP, partners), SMTP out
+#   worker                --> mariadb :3306, redis :6379, HTTPS out (partners, feeds), SMTP out
 #   configure job         --> mariadb :3306, redis :6379
 #   org-sync job          --> caddy :8080, mariadb :3306
 #   housekeeping          --> mariadb :3306
@@ -82,6 +82,18 @@ spec:
       toPorts:
         - ports:
             - port: "9001"
+              protocol: TCP
+    # Mail relay (SMTP_FQDN, SMTP_PORT), in or outside the cluster
+    - toEntities:
+        - cluster
+        - world
+      toPorts:
+        - ports:
+            - port: "25"
+              protocol: TCP
+            - port: "465"
+              protocol: TCP
+            - port: "587"
               protocol: TCP
     # Outbound HTTPS: sync partners, feeds, the OIDC provider, external LDAP over TLS
     - toCIDRSet:
@@ -287,6 +299,18 @@ spec:
       toPorts:
         - ports:
             - port: "6379"
+              protocol: TCP
+    # Mail relay (SMTP_FQDN, SMTP_PORT), in or outside the cluster
+    - toEntities:
+        - cluster
+        - world
+      toPorts:
+        - ports:
+            - port: "25"
+              protocol: TCP
+            - port: "465"
+              protocol: TCP
+            - port: "587"
               protocol: TCP
     # Outbound HTTPS: sync partners, feeds, the OIDC provider, external LDAP over TLS
     - toCIDRSet:
