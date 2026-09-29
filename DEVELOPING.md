@@ -21,6 +21,8 @@ mise run test-integration  # full Compose stack with podman (~90s)
 mise run test-integration -- --postgres   # the same suite on PostgreSQL
 mise run test-sync     # hub-spoke 3-instance sync (~60s)
 mise run test-all      # unit + integration + sync
+mise run test-kustomize  # every Kustomize render validated against the schemas
+mise run test-kind       # the base on a kind cluster, then the smoke test
 ```
 
 ## Tests
@@ -31,6 +33,8 @@ mise run test-all      # unit + integration + sync
 | Integration | 111 | Full Compose stack: HTTP, auth, settings, PHP-FPM, workers, S3, org sync, metrics, modules enrichment |
 | Hub-spoke sync | 12 | 3 isolated MISP instances: pull, push, tag-filtered sync |
 | Migration | 48 | The migrate Job: a seeded MariaDB copied onto a second MariaDB and onto PostgreSQL, refusals, the copy checked through the API |
+| Kustomize render | 12 renders | The base alone, with each component and with all of them, against the Kubernetes and CRD schemas |
+| Kubernetes (kind) | 17 | The base with `mariadb` and `redis` on a kind cluster, then the smoke test |
 
 The integration suite runs every container with `read_only: true` (except web, whose version-gate checks patch `settings.yaml` in place) to catch filesystem writes before Kubernetes does, and prints the wall time of each section. Set `COMPOSE_CMD` and `CONTAINER_CMD` for another runner; CI uses `docker compose` and `docker`.
 

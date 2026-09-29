@@ -411,4 +411,6 @@ COPY --from=modules-build /usr/local/lib/python3.13/dist-packages /usr/local/lib
 EXPOSE 6666
 
 ENTRYPOINT ["python3", "-m", "misp_modules"]
-CMD ["-l", "0.0.0.0"]
+# An empty address listens on IPv4 and IPv6; "::" alone is IPv6 only (Tornado
+# sets IPV6_V6ONLY), "0.0.0.0" IPv4 only
+CMD ["-l", ""]

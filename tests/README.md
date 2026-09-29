@@ -2,7 +2,7 @@
 
 ## TL;DR
 
-Four suites: unit tests on the Python library, an integration suite on one Compose stack, a hub-spoke sync suite on three instances, and a migration suite that copies a seeded instance onto MariaDB and PostgreSQL.
+Four suites: unit tests on the Python library, an integration suite on one Compose stack, a hub-spoke sync suite on three instances, and a migration suite that copies a seeded instance onto MariaDB and PostgreSQL. Two Kubernetes checks cover the Kustomize base: every render validated against the schemas, and the base applied to a kind cluster with the smoke test.
 
 ```bash
 mise run test                # unit tests (~0.2s)
@@ -11,6 +11,8 @@ mise run test-integration -- --postgres   # the same on PostgreSQL
 mise run test-sync           # hub-spoke sync test with 3 instances (~90s)
 mise run test-migration      # migrate Job: MariaDB to MariaDB, MariaDB to PostgreSQL (~3min)
 mise run test-all            # every suite
+mise run test-kustomize      # render the base with each component, validate against the schemas (~10s)
+mise run test-kind           # the base on a kind cluster, then the smoke test (build the images first)
 ```
 
 All integration tests build the images with compose, start full MISP stacks, and tear them down automatically. Pass `--skip-build` to reuse existing images.
@@ -70,6 +72,30 @@ Run with: `mise run test` or `PYTHONPATH=files python -m pytest tests/ -v`
 - `garage.toml` -- Garage S3 config for attachment testing
 
 Run with: `mise run test-integration`
+
+## Kubernetes checks
+
+**Render check** (`scripts/check-kustomize.sh`): renders the base alone, with each component,
+and with every component, and validates each render with `kubeconform -strict` against the
+Kubernetes schemas and, for the Cilium policies, the CRD catalog. It needs `kustomize` and
+`kubeconform` (`mise install` in the repository). CI job: `kustomize`.
+
+**kind test** (`tests/run-kind-test.sh`): creates a kind cluster, loads the three images
+under the tag `kind`, applies the overlay `tests/kind`, waits for the configure Job and the
+Deployments, and runs `tests/smoketest.sh` through a port-forward on 38080. On a failure it
+prints the pods, the events and the logs. `--keep` leaves the cluster running. CI job: `kind`.
+
+| Overlay setting | Why |
+|-----------------|-----|
+| The `mariadb` and `redis` components, namespace `misp` | The smallest deployment that runs |
+| Test values for `misp-db`, `misp-app`, `misp-admin`, `MISP_UUID` | The configure Job refuses the base's placeholders |
+| A ReadWriteOnce attachments claim | kind's local-path storage offers no ReadWriteMany |
+
+The images must exist locally as `ghcr.io/oivindoh/misp-container{,-caddy,-modules}:${MISP_IMAGE_TAG:-2.5.37}`.
+With podman, kind runs on the machine's rootful connection (`KIND_PODMAN_CONNECTION`, default
+`podman-machine-default-root`), because a kind node needs privileges that rootless podman
+does not give it. kind copies `HTTP_PROXY` and `HTTPS_PROXY` into the node, so a proxy on
+localhost breaks the image pulls there.
 
 ## Hub-spoke sync test
 

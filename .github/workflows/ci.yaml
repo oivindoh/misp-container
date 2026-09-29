@@ -73,6 +73,29 @@ jobs:
           uv sync
           PYTHONPATH=files .venv/bin/python -m pytest tests/ -v
 
+  # Renders the Kustomize base alone, with each component and with all of them,
+  # and validates every render against the Kubernetes and CRD schemas
+  kustomize:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Install kustomize and kubeconform
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/bin"
+          cd "$RUNNER_TEMP"
+          curl -sfLo kustomize.tgz https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv5.8.1/kustomize_v5.8.1_linux_amd64.tar.gz
+          echo "029a7f0f4e1932c52a0476cf02a0fd855c0bb85694b82c338fc648dcb53a819d  kustomize.tgz" | sha256sum -c
+          curl -sfLo kubeconform.tgz https://github.com/yannh/kubeconform/releases/download/v0.8.0/kubeconform-linux-amd64.tar.gz
+          echo "9bc2bffbf71f261128533edaf912153948b7ff238f9a531ae6d34466ec287883  kubeconform.tgz" | sha256sum -c
+          tar -xzf kustomize.tgz -C bin kustomize
+          tar -xzf kubeconform.tgz -C bin kubeconform
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: Render and validate
+        run: scripts/check-kustomize.sh
+
   integration:
     needs: build
     runs-on: ubuntu-latest
@@ -265,6 +288,68 @@ jobs:
         timeout-minutes: 20
         run: tests/run-migration-tests.sh --skip-build
 
+  # Applies the Kustomize base with the mariadb and redis components to a kind
+  # cluster and runs the smoke test against it
+  kind:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      MISP_IMAGE_TAG: ci
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
+      - name: Build misp image
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
+        with:
+          context: .
+          target: final
+          load: true
+          tags: ${{ env.IMAGE_MISP }}:ci
+          cache-from: |
+            type=gha,scope=misp
+            type=gha,scope=misp
+
+      - name: Build caddy image
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
+        with:
+          context: .
+          target: caddy
+          load: true
+          tags: ${{ env.IMAGE_CADDY }}:ci
+          cache-from: |
+            type=gha,scope=misp
+            type=gha,scope=caddy
+
+      - name: Build modules image
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
+        with:
+          context: .
+          target: modules
+          load: true
+          tags: ${{ env.IMAGE_MODULES }}:ci
+          cache-from: |
+            type=gha,scope=misp
+            type=gha,scope=modules
+
+      - name: Install kind and kustomize
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/bin"
+          cd "$RUNNER_TEMP"
+          curl -sfLo bin/kind https://github.com/kubernetes-sigs/kind/releases/download/v0.33.0/kind-linux-amd64
+          echo "aee6151561422756b764a4ae28e7f44cda5af5a9eead3cc9985112b1de8d8e0d  bin/kind" | sha256sum -c
+          chmod +x bin/kind
+          curl -sfLo kustomize.tgz https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv5.8.1/kustomize_v5.8.1_linux_amd64.tar.gz
+          echo "029a7f0f4e1932c52a0476cf02a0fd855c0bb85694b82c338fc648dcb53a819d  kustomize.tgz" | sha256sum -c
+          tar -xzf kustomize.tgz -C bin kustomize
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+
+      - name: Kubernetes test on kind
+        timeout-minutes: 25
+        run: tests/run-kind-test.sh
+
   scan:
     needs: build
     runs-on: ubuntu-latest
@@ -315,7 +400,7 @@ jobs:
           category: ${{ matrix.target }}
 
   release:
-    needs: [unit, integration, integration-postgres, hub-spoke, migration, scan]
+    needs: [unit, kustomize, integration, integration-postgres, hub-spoke, migration, kind, scan]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:

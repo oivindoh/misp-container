@@ -1,6 +1,10 @@
 [tools]
 python = "3.13"
 uv = "latest"
+# Kubernetes checks; CI downloads the same versions (.github/workflows/ci.yaml)
+kustomize = "5.8.1"
+kubeconform = "0.8.0"
+kind = "0.33.0"
 
 [env]
 VIRTUAL_ENV = "{{config_root}}/.venv"
@@ -25,6 +29,14 @@ run = "tests/run-sync-test.sh"
 [tasks.test-migration]
 description = "Run the migration suite (MariaDB to MariaDB and to PostgreSQL)"
 run = "tests/run-migration-tests.sh"
+
+[tasks.test-kustomize]
+description = "Render the Kustomize base with each component and validate against the schemas"
+run = "scripts/check-kustomize.sh"
+
+[tasks.test-kind]
+description = "Apply the Kustomize base to a kind cluster and run the smoke test (build the images first)"
+run = "tests/run-kind-test.sh ${@}"
 
 [tasks.test-all]
 description = "Run unit + integration + sync + migration tests"
