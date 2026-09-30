@@ -56,18 +56,26 @@ class TestIdentity:
         assert migrate.check_identity({"MISP.uuid": "u"}, {"MISP_UUID": "u"}) == []
 
 
-class TestTargetRefusal:
+class TestTargetPlan:
+    COPIED = "2026-09-29 12:00:00"
+
     def test_an_empty_target(self):
-        assert migrate.target_refusal(0, "", "", "") == ""
+        assert migrate.target_plan(0, "", "", "") == ("copy", "")
 
     def test_a_fresh_install_needs_force(self):
-        assert "set MIGRATE_FORCE=true" in migrate.target_refusal(80, "", "", "")
-        assert migrate.target_refusal(80, "", "true", "") == ""
+        plan, why = migrate.target_plan(80, "", "", "")
+        assert plan == "refuse" and "set MIGRATE_FORCE=true" in why
+        assert migrate.target_plan(80, "", "true", "") == ("copy", "")
 
-    def test_a_copy_the_job_made_needs_a_second_yes(self):
-        refusal = migrate.target_refusal(80, "2026-09-29 12:00:00", "true", "")
-        assert "copy this Job made at 2026-09-29 12:00:00" in refusal and "MIGRATE_REPLACE_COPY" in refusal
-        assert migrate.target_refusal(80, "2026-09-29 12:00:00", "true", "true") == ""
+    def test_a_copy_the_job_made_stays(self):
+        # A rerun, a configure retry or a MIGRATE_FORCE=true left behind keeps the copy
+        for force in ("", "true"):
+            plan, why = migrate.target_plan(80, self.COPIED, force, "")
+            assert plan == "keep" and f"copy this Job made at {self.COPIED}" in why and "MIGRATE_REPLACE_COPY" in why
+
+    def test_a_copy_the_job_made_needs_both_to_go(self):
+        assert migrate.target_plan(80, self.COPIED, "true", "true") == ("copy", "")
+        assert migrate.target_plan(80, self.COPIED, "", "true")[0] == "keep"
 
     def test_the_copy_date_comes_from_the_sync_log(self):
         class Cursor:

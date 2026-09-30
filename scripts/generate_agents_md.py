@@ -4,8 +4,8 @@
 Usage: generate_agents_md.py [--check]
 
 Every line comes from the tree: module docstrings, the first comment block of
-a manifest, compose file or script, the resources in a manifest, the stage
-comments of the Dockerfile, the task runner's tasks, the upstream guard's
+a chart template, compose file or script, the objects the chart renders, the
+comments of the chart's values, the stage comments of the Dockerfile, the task runner's tasks, the upstream guard's
 checks, the mise tasks and the CI jobs. To change a line, change its source
 and run this again. --check exits 1 when AGENTS.md differs from the output;
 tests/test_agents_md.py runs it in the unit tests.
@@ -24,6 +24,8 @@ import yaml
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "files"))
 sys.path.insert(0, str(REPO / "scripts"))
+
+import chart  # noqa: E402
 
 OUT = REPO / "AGENTS.md"
 DOCS = ["README.md", "DEVELOPING.md", "tests/README.md", *sorted(str(p.relative_to(REPO)) for p in (REPO / "docs").glob("*.md"))]
@@ -66,15 +68,6 @@ def comment_block(path: Path) -> str:
     return one_line("\n".join(lines))
 
 
-def resources(path: Path) -> str:
-    """The kinds and names of the resources in a manifest."""
-    found = []
-    for doc in yaml.safe_load_all(path.read_text()):
-        if isinstance(doc, dict) and doc.get("kind") and doc.get("metadata", {}).get("name"):
-            found.append(f"{doc['kind']} `{doc['metadata']['name']}`")
-    return ", ".join(found)
-
-
 def table(header: tuple[str, ...], rows: list[tuple[str, ...]]) -> str:
     lines = ["| " + " | ".join(header) + " |", "|" + "|".join("---" for _ in header) + "|"]
     lines += ["| " + " | ".join(cell.replace("|", "\\|") for cell in row) + " |" for row in rows]
@@ -115,32 +108,35 @@ def periodic() -> str:
     rows += [(f"`{task.WORKFLOW_TASK}`", "runs one workflow by ID")]
     rows += [(f"`{name}`", f"`cake {' '.join(args)}` in the pod") for name, args in task.CAKE_TASKS.items()]
     jobs = []
-    for path in sorted((REPO / "deploy/components").glob("*/*.yaml")):
-        for doc in yaml.safe_load_all(path.read_text()):
-            if isinstance(doc, dict) and doc.get("kind") == "CronJob":
-                container = doc["spec"]["jobTemplate"]["spec"]["template"]["spec"]["containers"][0]
-                command = " ".join(container.get("command", [])[-3:] + container.get("args", []))
-                jobs.append((f"`{doc['metadata']['name']}`", f"`{doc['spec']['schedule']}`", f"`{command}`",
-                             f"`{rel(path.parent)}`"))
+    for template, doc in chart.render(every_component=True):
+        if doc["kind"] == "CronJob":
+            command = " ".join(chart.pod_spec(doc)["containers"][0]["command"][-3:])
+            jobs.append((f"`{doc['metadata']['name']}`", f"`{doc['spec']['schedule']}`", f"`{command}`",
+                         f"`{chart.template_component(template)}`"))
     return ("## Periodic work\n\nMISP's own scheduler never runs. The task runner "
             "(`python3 -m misp_container.task <task>`) does each piece of periodic work:\n\n"
             + table(("Task", "Does"), rows)
-            + "\n\nThe components run periodic work as CronJobs:\n\n"
+            + "\n\nThe chart's components run periodic work as CronJobs, with their default schedules:\n\n"
             + table(("CronJob", "Schedule", "Runs", "Component"), jobs))
 
 
 def kubernetes() -> str:
-    base = [(f"`{p.name}`", resources(p), comment_block(p)) for p in sorted((REPO / "deploy/base").glob("*.yaml"))
-            if p.name != "kustomization.yaml"]
-    components = []
-    for directory in sorted(p for p in (REPO / "deploy/components").iterdir() if p.is_dir()):
-        found = ", ".join(r for p in sorted(directory.glob("*.yaml")) if p.name != "kustomization.yaml"
-                          for r in [resources(p)] if r)
-        components.append((f"`{directory.name}`", comment_block(directory / "kustomization.yaml"), found))
-    return ("## Kubernetes: `deploy/`\n\n" + comment_block(REPO / "deploy/base/kustomization.yaml")
-            + "\n\n" + table(("Base file", "Resources", "Note"), base)
-            + "\n\nComponents add to the base in an overlay:\n\n"
-            + table(("Component", "Adds", "Resources"), components))
+    rendered: dict[str, list[str]] = {}
+    for template, doc in chart.render(every_component=True):
+        name = doc["metadata"]["name"]
+        if doc["kind"] == "Job":
+            name = re.sub(r"-\d+$", "-<revision>", name)
+        rendered.setdefault(template, []).append(f"{doc['kind']} `{name}`")
+    templates = [(f"`{p.name}`", ", ".join(rendered.get(f"templates/{p.name}", [])), comment_block(p))
+                 for p in sorted((chart.CHART / "templates").glob("*.yaml"))]
+    comments = chart.value_comments()
+    parts = chart.components()
+    values = [(f"`{key}`", comments.get(key, "")) for key in comments if key not in parts]
+    components = [(f"`{key}`", comments.get(key, "")) for key in parts]
+    return ("## Kubernetes: the Helm chart in `deploy/chart/`\n\n" + comment_block(chart.CHART / "values.yaml")
+            + "\n\n" + table(("Template", "Renders, every component on", "Note"), templates)
+            + "\n\nValues:\n\n" + table(("Value", "Is"), values)
+            + "\n\nComponents, each off by default:\n\n" + table(("Component", "Adds"), components))
 
 
 def compose() -> str:
@@ -211,6 +207,7 @@ def tests() -> str:
     unit = [(f"`{p.name}`", docstring(p)) for p in sorted((REPO / "tests").glob("test_*.py"))]
     other = [(f"`{rel(p)}`", comment_block(p)) for p in sorted((REPO / "tests").glob("*.sh"))]
     other += [(f"`{rel(p)}`", comment_block(p)) for p in sorted((REPO / "tests").glob("docker-compose*.yml"))]
+    other += [(f"`{rel(p)}`", comment_block(p)) for p in sorted((REPO / "tests/kind").glob("*.yaml"))]
     return ("## Tests: `tests/`\n\nThe stack suites and the smoke test, in pytest (`tests/e2e/`):\n\n"
             + table(("Module", "Does"), e2e)
             + "\n\nUnit tests (`tests/`, no containers):\n\n" + table(("Module", "Tests"), unit)

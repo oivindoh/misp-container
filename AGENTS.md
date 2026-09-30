@@ -88,62 +88,93 @@ MISP's own scheduler never runs. The task runner (`python3 -m misp_container.tas
 | `check-user-validity` | `cake Admin checkUserValidity` in the pod |
 | `block-invalid-users` | `cake Admin blockInvalidUsers` in the pod |
 
-The components run periodic work as CronJobs:
+The chart's components run periodic work as CronJobs, with their default schedules:
 
 | CronJob | Schedule | Runs | Component |
 |---|---|---|---|
-| `cache-feeds` | `20 2 * * *` | `-m misp_container.task cache-feeds` | `deploy/components/cronjobs` |
-| `fetch-feeds` | `30 2 * * *` | `-m misp_container.task fetch-feeds` | `deploy/components/cronjobs` |
-| `pull-servers` | `*/5 * * * *` | `-m misp_container.task pull-servers` | `deploy/components/cronjobs` |
-| `push-servers` | `*/15 * * * *` | `-m misp_container.task push-servers` | `deploy/components/cronjobs` |
-| `update-galaxies` | `0 3 * * *` | `-m misp_container.task update-galaxies` | `deploy/components/cronjobs` |
-| `update-taxonomies` | `10 3 * * *` | `-m misp_container.task update-taxonomies` | `deploy/components/cronjobs` |
-| `update-warninglists` | `20 3 * * *` | `-m misp_container.task update-warninglists` | `deploy/components/cronjobs` |
-| `update-noticelists` | `30 3 * * *` | `-m misp_container.task update-noticelists` | `deploy/components/cronjobs` |
-| `cache-servers` | `40 2 * * *` | `-m misp_container.task cache-servers` | `deploy/components/cronjobs` |
-| `update-object-templates` | `40 3 * * *` | `-m misp_container.task update-object-templates` | `deploy/components/cronjobs` |
-| `push-taxii` | `7 * * * *` | `-m misp_container.task push-taxii` | `deploy/components/cronjobs` |
-| `sharing-group-blueprints` | `37 * * * *` | `-m misp_container.task sharing-group-blueprints` | `deploy/components/cronjobs` |
-| `periodic-summary` | `0 6 * * *` | `-m misp_container.task periodic-summary` | `deploy/components/cronjobs` |
-| `housekeeping-jobs` | `0 2 * * *` | `-m misp_container.housekeeping jobs` | `deploy/components/housekeeping` |
-| `housekeeping-logs` | `0 3 * * *` | `-m misp_container.housekeeping logs` | `deploy/components/housekeeping` |
-| `housekeeping-audit-logs` | `10 3 * * *` | `-m misp_container.housekeeping audit_logs` | `deploy/components/housekeeping` |
-| `user-validity` | `30 5 * * *` | `-m misp_container.task check-user-validity` | `deploy/components/user-validity` |
+| `user-validity` | `30 5 * * *` | `-m misp_container.task check-user-validity` | `userValidity` |
+| `housekeeping-audit-logs` | `10 3 * * *` | `-m misp_container.housekeeping audit_logs` | `housekeeping` |
+| `housekeeping-jobs` | `0 2 * * *` | `-m misp_container.housekeeping jobs` | `housekeeping` |
+| `housekeeping-logs` | `0 3 * * *` | `-m misp_container.housekeeping logs` | `housekeeping` |
+| `cache-feeds` | `20 2 * * *` | `-m misp_container.task cache-feeds` | `cronjobs` |
+| `cache-servers` | `40 2 * * *` | `-m misp_container.task cache-servers` | `cronjobs` |
+| `fetch-feeds` | `30 2 * * *` | `-m misp_container.task fetch-feeds` | `cronjobs` |
+| `periodic-summary` | `0 6 * * *` | `-m misp_container.task periodic-summary` | `cronjobs` |
+| `pull-servers` | `*/5 * * * *` | `-m misp_container.task pull-servers` | `cronjobs` |
+| `push-servers` | `*/15 * * * *` | `-m misp_container.task push-servers` | `cronjobs` |
+| `push-taxii` | `7 * * * *` | `-m misp_container.task push-taxii` | `cronjobs` |
+| `sharing-group-blueprints` | `37 * * * *` | `-m misp_container.task sharing-group-blueprints` | `cronjobs` |
+| `update-galaxies` | `0 3 * * *` | `-m misp_container.task update-galaxies` | `cronjobs` |
+| `update-noticelists` | `30 3 * * *` | `-m misp_container.task update-noticelists` | `cronjobs` |
+| `update-object-templates` | `40 3 * * *` | `-m misp_container.task update-object-templates` | `cronjobs` |
+| `update-taxonomies` | `10 3 * * *` | `-m misp_container.task update-taxonomies` | `cronjobs` |
+| `update-warninglists` | `20 3 * * *` | `-m misp_container.task update-warninglists` | `cronjobs` |
 
-## Kubernetes: `deploy/`
+## Kubernetes: the Helm chart in `deploy/chart/`
 
-MISP itself: configure Job, web, worker, metrics, modules, org-sync Job, Services, config and the attachments claim. Database, cache, ingress, network policies, cronjobs and PDBs are components under deploy/components/ that an overlay opts into.
+Values of the misp chart. The comment above each top-level key describes it; docs/kubernetes.md and AGENTS.md take their tables from these comments. A key with enabled: false is a component: an optional part that a release switches on.
 
-| Base file | Resources | Note |
+| Template | Renders, every component on | Note |
 |---|---|---|
+| `ciliumnetworkpolicy.yaml` | CiliumNetworkPolicy `web`, CiliumNetworkPolicy `configure`, CiliumNetworkPolicy `org-sync`, CiliumNetworkPolicy `worker`, CiliumNetworkPolicy `cronjob`, CiliumNetworkPolicy `console-task`, CiliumNetworkPolicy `housekeeping`, CiliumNetworkPolicy `modules`, CiliumNetworkPolicy `metrics`, CiliumNetworkPolicy `mysql`, CiliumNetworkPolicy `postgres`, CiliumNetworkPolicy `cache` | The ciliumNetworkPolicy component: CiliumNetworkPolicies for every pod. |
+| `configmap-env.yaml` | ConfigMap `misp-env` | misp-env: files/base.env, then what the postgres component implies, then the env value. Every MISP pod reads it; its checksum rolls the Deployments. |
+| `configmap-orgs.yaml` | ConfigMap `misp-orgs` | Declarative org config for the org-sync Job (orgSync.orgs; format: deploy/orgs.yaml.example). |
+| `cronjob-user-validity.yaml` | CronJob `user-validity` | The userValidity component: checks every MISP account against the OIDC or LDAP provider through MISP's console. Needs the oidc or ldap group: MISP's check refuses to run without one. check-user-validity reports each user as valid or invalid and changes nothing; block-invalid-users disables the users the provider no longer backs. |
+| `cronjobs-housekeeping.yaml` | CronJob `housekeeping-audit-logs`, CronJob `housekeeping-jobs`, CronJob `housekeeping-logs` | The housekeeping component: nightly batched deletes of old rows in jobs, logs and audit_logs (python3 -m misp_container.housekeeping), on MariaDB or PostgreSQL. No OPTIMIZE TABLE: on InnoDB it rebuilds the table under a metadata lock. Retention is a policy choice: HOUSEKEEPING_<TABLE>_DAYS in env. |
+| `cronjobs.yaml` | CronJob `cache-feeds`, CronJob `cache-servers`, CronJob `fetch-feeds`, CronJob `periodic-summary`, CronJob `pull-servers`, CronJob `push-servers`, CronJob `push-taxii`, CronJob `sharing-group-blueprints`, CronJob `update-galaxies`, CronJob `update-noticelists`, CronJob `update-object-templates`, CronJob `update-taxonomies`, CronJob `update-warninglists` | The cronjobs component: the periodic tasks, run by the task runner in the main image (python3 -m misp_container.task <task>), one CronJob per entry of cronjobs.tasks and one per workflow ID in cronjobs.workflows. API tasks need ADMIN_KEY in misp-admin; the runner exits 1 with a clear message when it is empty. A run dispatches nothing while the queue holds cronjobs.maxQueued jobs or more (read from the metrics exporter). |
 | `deployment-metrics.yaml` | Deployment `metrics` | Prometheus exporter on port 9191: MISP's database, the job queues in Redis and the sync partners (docs/metrics.md). It reads MISP's data and never changes it. |
 | `deployment-modules.yaml` | Deployment `modules` | misp-modules: the enrichment, import, export and action modules MISP calls over HTTP on port 6666. A distroless image without a shell, as UID 65532. |
 | `deployment-web.yaml` | Deployment `web` | MISP's web tier: PHP-FPM (port 9002) and a caddy sidecar that serves the static files and passes the rest to PHP-FPM over FastCGI (port 8080). Replicas scale freely: each pod renders its own app/Config and waits for the configure Job. |
 | `deployment-worker.yaml` | Deployment `worker` | Scalable job workers -- safe to run multiple replicas. MISP's own scheduler never runs: periodic tasks are Kubernetes CronJobs (the cronjobs component). |
-| `job-configure.yaml` | Job `configure` | One-shot configuration: schema, settings, admin user, GPG, auth. Web and worker pods wait until this Job has set MISP.live=true and recorded their image version, so the order of the rollout does not depend on the tool that applies the manifests. The Job removes itself ten minutes after it finishes (ttlSecondsAfterFinished), so the next apply or reconcile creates it again; a run on a configured instance takes seconds. |
-| `job-org-sync.yaml` | Job `org-sync` | Declarative org sync: applies the misp-orgs ConfigMap (orgs.yaml) through the MISP API once the web Deployment serves (sync wave 3). Exits 0 at once when ADMIN_KEY is empty or orgs.yaml has nothing to apply. |
-| `orgs.yaml` |  | Declarative org config applied by the org-sync Job. Empty by default; replace this ConfigMap in your overlay. Format: deploy/orgs.yaml.example |
-| `pvc-attachments.yaml` | PersistentVolumeClaim `attachments` | Attachments and malware samples. Web and worker pods on different nodes write here, so the storage class must support ReadWriteMany. Set PLUGIN_S3_BUCKET_NAME to store attachments in S3 instead, and remove this claim in the overlay. |
+| `httproute.yaml` | HTTPRoute `misp` | The httpRoute component: an HTTPRoute for a Gateway API implementation, in place of the ingress. caddy takes the client address from X-Forwarded-For, right to left, past TRUSTED_PROXY_CIDR: set that in env to the Gateway's proxy pods. |
+| `ingress.yaml` | Ingress `misp` | The ingress component: an Ingress to the web Service. The default annotation makes the haproxy ingress replace X-Forwarded-For with the address it sees, so only that address reaches caddy (docs/kubernetes.md, Client addresses). Behind another load balancer, that is the balancer's address unless it speaks the PROXY protocol to HAProxy. |
+| `job-configure.yaml` | Job `configure-<revision>` | One-shot configuration: schema, settings, admin user, GPG, auth. Web and worker pods wait until this Job has set MISP.live=true and recorded their image version, so the order of the rollout does not depend on the tool that applies the chart. Each release revision has its own Job, because a Job's pod template cannot change; a run on a configured instance takes seconds. With the migrate component, the copy runs first, in an init container. |
+| `job-org-sync.yaml` | Job `org-sync-<revision>` | Declarative org sync: applies the misp-orgs ConfigMap (orgs.yaml) through the MISP API once the web Deployment serves. Exits 0 at once when ADMIN_KEY is empty or orgs.yaml has nothing to apply. Each release revision has its own Job; Argo CD: a Sync hook in wave 3, recreated on every sync. |
+| `mariadb.yaml` | Service `mysql`, StatefulSet `mysql` | The mariadb component: single-node MariaDB on a ReadWriteOnce claim, the database misp owned by DB_USER. The official image runs mysqld as its mysql user (999) when started as that user; fsGroup makes the claim writable for it. |
+| `pdb.yaml` | PodDisruptionBudget `web`, PodDisruptionBudget `worker` | The pdb component: one voluntary disruption at a time for web and worker. maxUnavailable, not minAvailable, so a single replica never blocks a node drain. |
+| `postgres.yaml` | Service `postgres`, StatefulSet `postgres` | The postgres component: single-node PostgreSQL on a ReadWriteOnce claim, the database misp owned by DB_USER, UTF8. It sets DB_ENGINE, DB_HOST and DB_PORT in misp-env (configmap-env.yaml). |
+| `pvc-attachments.yaml` | PersistentVolumeClaim `attachments` | Attachments and malware samples, org logos and custom images. Web and worker pods on different nodes write here, so the storage class must support ReadWriteMany. With attachments.claim: false (attachments in S3) the chart renders no claim. |
+| `redis.yaml` | Service `redis`, Deployment `redis` | The redis component: a single Redis without persistence, so sessions and queued jobs do not survive a restart. The password is MISP_REDIS_PASSWORD. |
+| `secrets.yaml` | Secret `misp-db`, Secret `misp-app`, Secret `misp-admin`, Secret `misp-migrate` | The Secrets follow their consumers: web and worker pods get misp-db and misp-app, never misp-admin; metrics gets two keys of misp-db and one of misp-app. Each is its file in files/ with the secrets value on top; with secrets.create: false the release supplies them. |
 | `service-metrics.yaml` | Service `metrics` | The exporter on port 9191, for Prometheus to scrape. |
 | `service-modules.yaml` | Service `modules` | misp-modules on port 6666, for MISP's enrichment, import, export and action calls. |
-| `service-web.yaml` | Service `web` | MISP over HTTP: caddy in the web pods, port 8080. The ingress routes here. |
+| `service-web.yaml` | Service `web` | MISP over HTTP: caddy in the web pods, port 8080. The ingress or HTTPRoute routes here. |
 | `service-worker.yaml` | Service `worker` | supervisord in the worker pods, port 9001: the web pods list, start and stop the background workers here (SimpleBackgroundJobs.supervisor_host). |
 
-Components add to the base in an overlay:
+Values:
 
-| Component | Adds | Resources |
-|---|---|---|
-| `cronjobs` | Periodic MISP tasks: feed caching and fetching, server caching, pull and push, TAXII push, sharing group blueprints, galaxy, taxonomy, warninglist, noticelist and object template updates through the API, and the periodic summaries through MISP's console. ADMIN_KEY must be set in misp-admin. | CronJob `cache-feeds`, CronJob `fetch-feeds`, CronJob `pull-servers`, CronJob `push-servers`, CronJob `update-galaxies`, CronJob `update-taxonomies`, CronJob `update-warninglists`, CronJob `update-noticelists`, CronJob `cache-servers`, CronJob `update-object-templates`, CronJob `push-taxii`, CronJob `sharing-group-blueprints`, CronJob `periodic-summary` |
-| `gateway-api` | HTTPRoute for a Gateway API implementation, in place of the ingress-haproxy component. Patch the parent Gateway, its namespace and the hostname in the overlay; the Gateway must allow routes from this namespace. caddy takes the client address from X-Forwarded-For, right to left, past TRUSTED_PROXY_CIDR: set that in misp-env to the Gateway's proxy pods. | HTTPRoute `misp` |
-| `housekeeping` | Nightly deletes of old rows in jobs, logs and audit_logs, on MariaDB or PostgreSQL. Retention: HOUSEKEEPING_JOBS_DAYS, HOUSEKEEPING_LOGS_DAYS, HOUSEKEEPING_AUDIT_LOGS_DAYS in misp-env (defaults 2, 30, 90). | CronJob `housekeeping-jobs`, CronJob `housekeeping-logs`, CronJob `housekeeping-audit-logs` |
-| `ingress-haproxy` | Ingress for the haproxy ingress class. Patch the host and TLS secret in the overlay, or leave the component out and bring your own route. | Ingress `misp` |
-| `mariadb` | Single-node MariaDB on a PVC. Leave this component out to use an external database, and set MYSQL_HOST in the overlay. | StatefulSet `mysql`, Service `mysql` |
-| `migrate` | One-off migration of an existing MySQL or MariaDB MISP database into this deployment (the mariadb or the postgres component). Add the component for the first sync, remove it once the Job has succeeded. The source connection is the misp-migrate Secret (secrets-migrate.env); see docs/migration.md. | Job `migrate` |
-| `netpol-cilium` | CiliumNetworkPolicies for every pod in the base. The ingress controller namespace (haproxy-controller) and the Prometheus namespace (monitoring) are patch points for other clusters. | CiliumNetworkPolicy `web`, CiliumNetworkPolicy `configure`, CiliumNetworkPolicy `org-sync`, CiliumNetworkPolicy `migrate`, CiliumNetworkPolicy `worker`, CiliumNetworkPolicy `cronjob`, CiliumNetworkPolicy `console-task`, CiliumNetworkPolicy `housekeeping`, CiliumNetworkPolicy `modules`, CiliumNetworkPolicy `metrics`, CiliumNetworkPolicy `mysql`, CiliumNetworkPolicy `postgres`, CiliumNetworkPolicy `cache` |
-| `pdb` | PodDisruptionBudgets for web and worker (maxUnavailable: 1). Useful once an overlay runs more than one replica. | PodDisruptionBudget `web`, PodDisruptionBudget `worker` |
-| `postgres` | Single-node PostgreSQL on a PVC, as the alternative to the mariadb component. The overlay also sets DB_ENGINE=postgres, DB_HOST=postgres and DB_PORT=5432 in misp-env. Leave this component out to use an external PostgreSQL (StackGres and the like). | StatefulSet `postgres`, Service `postgres` |
-| `redis` | Single Redis without persistence: sessions and queued jobs do not survive a restart. Leave this component out to use an external Redis, and set MISP_REDIS_HOST in the overlay. | Deployment `redis`, Service `redis` |
-| `user-validity` | Daily check of every MISP account against the OIDC or LDAP identity provider, through MISP's console. Needs the oidc or ldap group enabled. | CronJob `user-validity` |
+| Value | Is |
+|---|---|
+| `image` | The three images, all with one tag. An empty tag is the chart's appVersion. |
+| `imagePullSecrets` | Secrets with the registry credentials for the images, by name. |
+| `nodeSelector` | Node selection for every pod of the release. |
+| `tolerations` | Tolerations for every pod of the release. |
+| `affinity` | Affinity for every pod of the release. |
+| `env` | The misp-env ConfigMap: these entries on top of files/base.env. Every MISP pod reads it. |
+| `secrets` | The misp-db, misp-app and misp-admin Secrets: these entries on top of files/secrets-*.env, whose placeholders the configure Job refuses. With create: false the chart renders none of them: supply Secrets with the same names and keys (SOPS, External Secrets, Sealed Secrets). |
+| `configure` | The configure Job: schema, settings, admin user, GPG and auth, on every install and upgrade. |
+| `web` | MISP's web tier: PHP-FPM and the caddy sidecar in each pod. Replicas scale freely. |
+| `worker` | The background workers. Replicas scale freely; the web pods reach supervisord on TCP 9001. |
+| `metrics` | The Prometheus exporter (docs/metrics.md). |
+| `modules` | misp-modules: the enrichment, import, export and action modules. |
+| `orgSync` | The org-sync Job applies orgs, the content of orgs.yaml (deploy/orgs.yaml.example), through the API after each install and upgrade. It exits at once when ADMIN_KEY is empty. |
+| `attachments` | Attachments, org logos and custom images on the claim attachments. Web and worker pods on different nodes write there, so the storage class must offer ReadWriteMany. For attachments in S3, set PLUGIN_S3_BUCKET_NAME in env and claim: false; org logos and custom images then stay in each pod. |
+
+Components, each off by default:
+
+| Component | Adds |
+|---|---|
+| `mariadb` | Single-node MariaDB on a ReadWriteOnce claim. Leave it off for an external database (DB_HOST in env). |
+| `postgres` | Single-node PostgreSQL on a ReadWriteOnce claim, as the alternative to mariadb. It sets DB_ENGINE, DB_HOST and DB_PORT in misp-env. Leave it off for an external PostgreSQL (StackGres and the like). |
+| `redis` | Single Redis without persistence: sessions and queued jobs do not survive a restart. Leave it off for an external Redis (MISP_REDIS_HOST in env). |
+| `ingress` | An Ingress to the web Service. The default annotation makes the haproxy ingress replace X-Forwarded-For with the address it sees (docs/kubernetes.md, Client addresses). |
+| `httpRoute` | An HTTPRoute for a Gateway API implementation, in place of the ingress. The Gateway must allow routes from this namespace; set TRUSTED_PROXY_CIDR in env to its proxy pods. |
+| `ciliumNetworkPolicy` | CiliumNetworkPolicies for every pod: the paths MISP needs, DNS, HTTPS out and SMTP out. ingressNamespace holds the ingress or Gateway proxies, monitoringNamespace Prometheus. |
+| `pdb` | PodDisruptionBudgets for web and worker (maxUnavailable: 1). |
+| `cronjobs` | The periodic tasks as CronJobs: tasks maps a task to its schedule, workflows a workflow ID to its schedule. API tasks need ADMIN_KEY in secrets.admin and dispatch nothing while maxQueued jobs or more wait. |
+| `userValidity` | A daily check of every account against the OIDC or LDAP provider, through MISP's console. Needs the oidc or ldap group. check-user-validity reports; block-invalid-users disables the accounts the provider no longer backs. |
+| `housekeeping` | Nightly deletes of old rows in jobs, logs and audit_logs (HOUSEKEEPING_<TABLE>_DAYS in env, defaults 2, 30 and 90). |
+| `migrate` | A copy of an existing MySQL or MariaDB MISP into the database, before the configure Job runs (docs/migration.md). secret: entries on top of files/secrets-migrate.env for the misp-migrate Secret. volumes and volumeMounts: the source's attachments directory. |
 
 ## Compose: `deploy/docker-compose.yml`
 
@@ -158,7 +189,7 @@ Compose stack for running MISP with podman.
 | `sync` | Org sync (runs once after MISP is ready, then exits) |
 | `modules` | MISP modules (enrichment, import, export, actions) |
 | `metrics` | Prometheus metrics exporter |
-| `migrate` | Migration of an existing MySQL/MariaDB MISP into this stack (one-off): podman compose --profile migrate run --rm migrate Source connection: components/migrate/secrets-migrate.env. To copy the attachments, mount the source's attachments directory at /mnt/source and set MIGRATE_SOURCE_FILES=/mnt/source, or set MIGRATE_SOURCE_S3_* for the source's bucket. See docs/migration.md. |
+| `migrate` | Migration of an existing MySQL/MariaDB MISP into this stack (one-off): podman compose --profile migrate run --rm migrate Source connection: chart/files/secrets-migrate.env. To copy the attachments, mount the source's attachments directory at /mnt/source and set MIGRATE_SOURCE_FILES=/mnt/source, or set MIGRATE_SOURCE_S3_* for the source's bucket. See docs/migration.md. |
 | `composer-lock` | Tools (podman compose --profile tools run --rm composer-lock) |
 | `mysql` | MariaDB |
 | `postgres` | PostgreSQL (podman compose --profile postgres; set DB_ENGINE=postgres, DB_HOST=postgres, DB_PORT=5432 in compose.env) |
@@ -206,12 +237,13 @@ Fail when MISP no longer matches what this image patches or depends on. A failur
 
 | Script | Does |
 |---|---|
-| `check-kustomize.sh` | Renders the Kustomize base alone, with each component, and with every component together, and validates each render against the Kubernetes and CRD schemas. |
+| `chart.py` | Render the Helm chart in deploy/chart for the doc generators and the tests. |
+| `check-chart.sh` | Lints the Helm chart, renders it with the default values, with each component on, with every component on and with the values a release changes most, and validates each render against the Kubernetes and CRD schemas. |
 | `check_scheduler_coverage.py` | Fail when MISP's scheduler offers work that no task runner task covers. |
 | `check_upstream.py` | Fail when MISP no longer matches what this image patches or depends on. |
 | `generate_agents_md.py` | Write AGENTS.md: a map of the repository, read from the tree itself. |
 | `generate_docs.py` | Fill the generated regions of the docs from the code. |
-| `release.sh` | Prepare a release: bump MISP version (optional), update image tags, create git tag. |
+| `release.sh` | Prepare a release: bump MISP version (optional), update the image tags and the chart version, create git tag. |
 | `update-composer-lock.sh` | Resolve MISP's composer dependencies for the current CORE_TAG plus this image's extra packages, and write the result to files/composer.lock. The image build installs exactly that lock and fails when it is out of date with upstream's composer.json (a new MISP release), so run this on every bump. |
 | `update-settings.sh` | Regenerate files/misp-config/settings-upstream.yaml from a live MISP. |
 | `update_settings.py` | Keep files/misp-config in step with the settings a live MISP knows. |
@@ -237,6 +269,7 @@ Unit tests (`tests/`, no containers):
 |---|---|
 | `test_admin.py` | Unit tests for admin helpers. |
 | `test_agents_md.py` | AGENTS.md is what scripts/generate_agents_md.py makes of the tree. |
+| `test_chart.py` | The Helm chart renders what the code and the release expect (helm template, no cluster). |
 | `test_check_upstream.py` | Unit tests for the upstream guard (scripts/check_upstream.py). |
 | `test_compose_files.py` | The test overlays start a service with the same settings under podman-compose and docker compose. |
 | `test_config.py` | Unit tests for the config diff engine. |
@@ -261,13 +294,14 @@ Stack files and runners:
 
 | File | Is |
 |---|---|
-| `tests/run-kind-test.sh` | Applies the Kustomize base with the mariadb and redis components to a kind cluster (overlay tests/kind) and runs the smoke test (tests/e2e/test_smoke.py) against it. |
+| `tests/run-kind-test.sh` | Installs the Helm chart with the mariadb and redis components on a kind cluster (values tests/kind/values.yaml) and runs the smoke test (tests/e2e/test_smoke.py) against it. Then upgrades the release with a changed value and runs the smoke test again: the upgrade runs a new configure Job and rolls the pods. |
 | `tests/docker-compose.migrate-mysql.yml` | Points every MISP container at the same-engine migration target (tests/migrate-target-mysql.env), after the copy. |
 | `tests/docker-compose.migrate-s3.yml` | Points every MISP container at the cross-engine migration target: the postgres service (tests/postgres.env) with attachments in S3 (tests/migrate-target-s3.env), after the copy. |
 | `tests/docker-compose.migrate.yml` | Overlay for the migration suite (tests/e2e/test_migration.py): a second MariaDB as the same-engine target, and the migrate service with the test env and a fixture attachments directory mounted as the source's files. |
 | `tests/docker-compose.postgres.yml` | Second overlay for the PostgreSQL run of the suite: switches every MISP container to the postgres service (tests/postgres.env). The mysql service still starts; MISP does not use it. |
 | `tests/docker-compose.sync-test.yml` | Hub-spoke sync integration test: 3 isolated MISP instances (A, B, C). |
 | `tests/docker-compose.test.yml` | Test overlay -- overrides deploy/docker-compose.yml with test-specific values. Used by tests/e2e/test_integration.py |
+| `tests/kind/values.yaml` | Values for tests/run-kind-test.sh: the mariadb and redis components, test secrets, the images under the tag kind, and a ReadWriteOnce attachments claim, because kind's local-path storage offers no ReadWriteMany. |
 
 ## Commands
 
@@ -278,8 +312,8 @@ Stack files and runners:
 | `mise run test-upstream` | Check the MISP in the image against what this repository patches or depends on |
 | `mise run test-sync` | Run hub-spoke sync test (3 MISP instances) |
 | `mise run test-migration` | Run the migration suite (MariaDB to MariaDB and to PostgreSQL) |
-| `mise run test-kustomize` | Render the Kustomize base with each component and validate against the schemas |
-| `mise run test-kind` | Apply the Kustomize base to a kind cluster and run the smoke test (build the images first) |
+| `mise run test-chart` | Lint the Helm chart, render it with each component and validate against the schemas |
+| `mise run test-kind` | Install and upgrade the Helm chart on a kind cluster and run the smoke test (build the images first) |
 | `mise run agents-md` | Regenerate AGENTS.md from the tree |
 | `mise run docs` | Regenerate the generated regions of the docs and AGENTS.md from the code |
 | `mise run test-all` | Run unit + integration + sync + migration tests |
@@ -295,12 +329,12 @@ Stack files and runners:
 | Job | Needs | Steps |
 |---|---|---|
 | `build` |  | Build ${{ matrix.name }} image |
-| `unit` |  | Unit tests |
-| `kustomize` |  | Install kustomize and kubeconform; Render and validate |
+| `unit` |  | Install helm; Unit tests |
+| `chart` |  | Install helm and kubeconform; Lint, render and validate |
 | `integration` | `build` | Build misp image; Build caddy image; Build modules image; Integration tests; Upload the test report and the compose logs |
 | `integration-postgres` | `build` | Build misp image; Build caddy image; Build modules image; Integration tests on PostgreSQL; Upload the test report and the compose logs |
 | `hub-spoke` | `build` | Build misp image; Build caddy image; Build modules image; Hub-spoke sync tests; Upload the test report and the compose logs |
 | `migration` | `build` | Build misp image; Build caddy image; Build modules image; Migration tests; Upload the test report and the compose logs |
-| `kind` | `build` | Build misp image; Build caddy image; Build modules image; Install kind and kustomize; Python for the smoke test; Kubernetes test on kind |
+| `kind` | `build` | Build misp image; Build caddy image; Build modules image; Install kind and helm; Python for the smoke test; Kubernetes test on kind |
 | `scan` | `build` | Build ${{ matrix.target }} image (from cache); Trivy vulnerability scan (${{ matrix.target }}); Upload scan results |
-| `release` | `unit`, `kustomize`, `integration`, `integration-postgres`, `hub-spoke`, `migration`, `kind`, `scan` | Extract version info; Check tag immutability; Log in to GHCR; Docker tags; Build and push misp (from cache); Build and push caddy (from cache); Build and push modules (from cache); Create GitHub Release |
+| `release` | `unit`, `chart`, `integration`, `integration-postgres`, `hub-spoke`, `migration`, `kind`, `scan` | Extract version info; Check the chart version; Check tag immutability; Log in to GHCR; Docker tags; Build and push misp (from cache); Build and push caddy (from cache); Build and push modules (from cache); Install helm; Push the chart; Create GitHub Release |

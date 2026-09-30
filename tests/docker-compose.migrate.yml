@@ -3,12 +3,12 @@
 # env and a fixture attachments directory mounted as the source's files.
 x-test-env: &test-env
   env_file:
-    - base/base.env
-    - base/secrets-db.env
-    - base/secrets-app.env
+    - chart/files/base.env
+    - chart/files/secrets-db.env
+    - chart/files/secrets-app.env
     - compose.env
     - compose-secrets.env
-    - components/migrate/secrets-migrate.env
+    - chart/files/secrets-migrate.env
     - ../tests/test-compose.env
     - ../tests/test-compose-secrets.env
 
@@ -29,7 +29,7 @@ services:
       - --collation-server=utf8mb4_unicode_ci
       - --max-allowed-packet=1G
     env_file:
-      - base/secrets-db.env
+      - chart/files/secrets-db.env
       - ../tests/test-compose-secrets.env
     environment:
       MARIADB_DATABASE: misp

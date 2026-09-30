@@ -1,0 +1,36 @@
+# The ingress component: an Ingress to the web Service. The default annotation
+# makes the haproxy ingress replace X-Forwarded-For with the address it sees, so
+# only that address reaches caddy (docs/kubernetes.md, Client addresses).
+# Behind another load balancer, that is the balancer's address unless it speaks
+# the PROXY protocol to HAProxy.
+{{- if .Values.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: misp
+  labels:
+    {{- include "misp.labels" (dict "root" . "name" "web") | nindent 4 }}
+  {{- with .Values.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- with .Values.ingress.tlsSecret }}
+  tls:
+    - hosts:
+        - {{ $.Values.ingress.host }}
+      secretName: {{ . }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.ingress.host }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: web
+                port:
+                  name: http
+{{- end }}

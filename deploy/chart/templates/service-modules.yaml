@@ -1,0 +1,18 @@
+# misp-modules on port 6666, for MISP's enrichment, import, export and action
+# calls.
+apiVersion: v1
+kind: Service
+metadata:
+  name: modules
+  labels:
+    {{- include "misp.labels" (dict "root" . "name" "modules") | nindent 4 }}
+spec:
+  type: ClusterIP
+  ipFamilyPolicy: PreferDualStack
+  selector:
+    app.kubernetes.io/name: modules
+  ports:
+    - name: http
+      port: 6666
+      targetPort: 6666
+      protocol: TCP

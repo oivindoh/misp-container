@@ -1,0 +1,14 @@
+apiVersion: v2
+name: misp
+description: MISP threat intelligence platform - web, workers, configure Job, periodic tasks and optional database, cache, routes and network policies
+type: application
+# The release tag without its v; scripts/release.sh sets both
+version: 2.5.37
+appVersion: "2.5.37"
+home: https://github.com/oivindoh/misp-container
+sources:
+  - https://github.com/oivindoh/misp-container
+  - https://github.com/MISP/MISP
+keywords:
+  - misp
+  - threat-intelligence

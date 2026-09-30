@@ -101,7 +101,7 @@ def worker_queues(root: Path) -> list[str]:
     valid = {constants.get(name, name) for name in re.findall(r"self::(\w+)", listed.group(1))}
     upstream = valid - {constants.get("SCHEDULER_QUEUE")}
     problems = [f"MISP has queue {q!r}, which no worker runs: its jobs wait for ever. Add it to WORKER_QUEUES "
-                f"and NUM_WORKERS_{q.upper()} to deploy/base/base.env" for q in sorted(upstream - set(WORKER_QUEUES))]
+                f"and NUM_WORKERS_{q.upper()} to deploy/chart/files/base.env" for q in sorted(upstream - set(WORKER_QUEUES))]
     problems += [f"WORKER_QUEUES has {q!r}, which MISP no longer offers" for q in sorted(set(WORKER_QUEUES) - upstream)]
     return problems
 

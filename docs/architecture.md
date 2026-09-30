@@ -5,7 +5,7 @@
 - The `configure` Job is the only place that touches the schema and the settings; web and
   worker pods wait for it and then start in seconds, in any number.
 - A pod of a new image version serves only once the Job has configured that version, whatever
-  tool applies the manifests.
+  tool applies the chart.
 - Web and worker scale freely: sessions live in Redis, attachments on a shared claim or S3.
 
 ## Roles
@@ -35,12 +35,12 @@ then does its own job:
 
 | Role | Entrypoint | Runs as | Does |
 |------|------------|---------|------|
-| configure | `entrypoint-configure.py` | Job, once per rollout | Schema import or migration, settings, admin user, GPG, auth plugins. Sets `MISP.live=true` last |
+| configure | `entrypoint-configure.py` | Job, once per release revision | Schema import or migration, settings, admin user, GPG, auth plugins. Sets `MISP.live=true` last |
 | web | `entrypoint-web.py` | Deployment, scalable | Waits for `MISP.live=true`, then runs PHP-FPM on 9002 behind caddy on 8080 |
 | worker | `entrypoint-worker.py` | Deployment, scalable | Waits for `MISP.live=true`, then runs the `default`, `prio`, `email`, `update` and `cache` queues under supervisord |
-| org-sync | `entrypoint-sync.py` | Job, after each rollout | Applies `orgs.yaml` through the API |
+| org-sync | `entrypoint-sync.py` | Job, once per release revision, after web serves | Applies `orgs.yaml` through the API |
 | metrics | `entrypoint-metrics.py` | Deployment | Prometheus exporter on 9191 |
-| task | `python3 -m misp_container.task` | CronJobs (components `cronjobs`, `user-validity`) | All periodic work, see [Periodic tasks](kubernetes.md#periodic-tasks). MISP's own scheduler never runs |
+| task | `python3 -m misp_container.task` | CronJobs (components `cronjobs`, `userValidity`) | All periodic work, see [Periodic tasks](kubernetes.md#periodic-tasks). MISP's own scheduler never runs |
 
 ## The configure Job
 
@@ -84,30 +84,31 @@ Idle memory per container, after the first start:
 | MariaDB | 140 MB | Default buffer pool |
 | Redis | 7 MB | `maxmemory` 128 MB |
 
-The base manifests request 256 MiB for PHP-FPM in a web pod, 512 MiB for a worker pod and
+The chart's pods request 256 MiB for PHP-FPM in a web pod, 512 MiB for a worker pod and
 256 MiB for modules, with limits of 4 GiB, 2 GiB and 1 GiB: the requests cover the idle use above, the
 limits one large event import or enrichment.
 
 ## Rollout order
 
-Ordering does not depend on the tool that applies the manifests. The Job records the image
+Ordering does not depend on the tool that applies the chart. The Job records the image
 version it configured next to `MISP.live`, and a web or worker pod waits until both match its
-own image, so a pod of a new version never serves before its migrations ran. A finished Job
-removes itself after ten minutes, so the next apply or reconcile creates it again.
+own image, so a pod of a new version never serves before its migrations ran. Each release
+revision has its own Job, `configure-<revision>`, because the pod template of a Job cannot
+change; the upgrade removes the Job of the previous revision.
 
 | Event | What happens |
 |-------|--------------|
 | First install | The Job imports the schema and configures MISP. Web and worker pods wait (up to 6 minutes, then restart and wait again). |
 | Later rollouts | Pods of the old version keep serving. Pods of the new version wait for the new Job to record their version, then serve. |
-| The Job fails | New pods keep waiting and restarting; old pods keep serving. Read the Job's log, fix the cause, apply again. |
+| The Job fails | New pods keep waiting and restarting; old pods keep serving. Read the Job's log, fix the cause, upgrade again. |
 | Nothing changed | The Job runs, finds nothing to do, and exits 0 in seconds. |
-| Rollback | Apply the previous revision: its Job records its version and the pods of that version serve. A `kubectl rollout undo` alone leaves the pods waiting. |
+| Rollback | `helm rollback` runs the Job of the previous revision again: it records its version and the pods of that version serve. A `kubectl rollout undo` alone leaves the pods waiting. |
 
 | Tool | Notes |
 |------|-------|
-| Argo CD | The Jobs are Sync hooks (`configure` in wave 1, the Deployments in wave 2, `org-sync` in wave 3), recreated on every sync. The Deployments do not even roll before the Job succeeded. |
-| Flux | Nothing to add. Every reconcile recreates the Job once it has removed itself; the idempotent run costs a few seconds. |
-| `kubectl apply -k` | Nothing to add. A changed Job spec within ten minutes of the last run needs `kubectl delete job configure org-sync` first. |
+| Helm | Each `helm install` or `helm upgrade` creates the Jobs of its revision and removes those of the previous one. |
+| Argo CD | The Jobs are Sync hooks (`configure` in wave 1, the Deployments in wave 2, `org-sync` in wave 3), recreated on every sync. Argo CD renders the chart as revision 1 every time, so the hook, not the name, makes the new Job. The Deployments do not even roll before the Job succeeded. |
+| Flux | A HelmRelease upgrades the release as `helm upgrade` does. |
 | Compose | The `configure` service is a one-shot; `web` and `worker` depend on its completion. |
 
 ## Scaling

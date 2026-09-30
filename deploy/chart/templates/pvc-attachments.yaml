@@ -1,0 +1,24 @@
+# Attachments and malware samples, org logos and custom images. Web and worker
+# pods on different nodes write here, so the storage class must support
+# ReadWriteMany. With attachments.claim: false (attachments in S3) the chart
+# renders no claim.
+{{- if .Values.attachments.claim }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: attachments
+  labels:
+    {{- include "misp.labels" (dict "root" . "name" "web") | nindent 4 }}
+  annotations:
+    # helm uninstall leaves the claim and its data
+    helm.sh/resource-policy: keep
+spec:
+  accessModes:
+    - {{ .Values.attachments.accessMode }}
+  {{- with .Values.attachments.storageClass }}
+  storageClassName: {{ . }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.attachments.size }}
+{{- end }}

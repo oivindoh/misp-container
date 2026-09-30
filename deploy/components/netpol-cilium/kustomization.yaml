@@ -1,8 +1,0 @@
-apiVersion: kustomize.config.k8s.io/v1alpha1
-kind: Component
-
-# CiliumNetworkPolicies for every pod in the base. The ingress controller
-# namespace (haproxy-controller) and the Prometheus namespace (monitoring) are
-# patch points for other clusters.
-resources:
-  - networkpolicy.yaml

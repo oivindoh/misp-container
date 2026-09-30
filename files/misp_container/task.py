@@ -2,7 +2,7 @@
 
 Usage: python3 -m misp_container.task <task> [workflow id]
 
-Runs as a Kubernetes CronJob (deploy/components/cronjobs) or on demand from
+Runs as a Kubernetes CronJob (the chart's cronjobs component) or on demand from
 Compose. API tasks make one or a few API calls, and MISP queues the real work
 as background jobs for the workers. Console tasks have no API: the pod renders
 app/Config and runs MISP's console, as the configure Job does.

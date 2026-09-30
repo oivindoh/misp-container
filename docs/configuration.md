@@ -32,7 +32,7 @@ the database (Redis, supervisor, salt, encryption key, paths). Those come from t
 `minimum_config` group and the same env vars.
 
 Container-level defaults (database and Redis hosts, PHP limits, worker counts) are in
-`deploy/base/base.env`.
+`deploy/chart/files/base.env`, which the chart and Compose both read.
 
 ## Database
 
@@ -121,8 +121,8 @@ Two hook points for custom Python, mounted as files, skipped when absent:
 ## Logging
 
 Every pod writes its log to stdout and stderr and keeps no log file. `LOG_FORMAT` selects the
-line format: `json` (the base default: one JSON object per line, for a log collector) or
-`text` (the Compose default, coloured on a terminal).
+line format: `json` (the `base.env` default, for the chart: one JSON object per line, for a
+log collector) or `text` (the Compose default, coloured on a terminal).
 
 | Source | Reaches the output as | Format |
 |--------|-----------------------|--------|

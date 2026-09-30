@@ -1,0 +1,17 @@
+# The exporter on port 9191, for Prometheus to scrape.
+apiVersion: v1
+kind: Service
+metadata:
+  name: metrics
+  labels:
+    {{- include "misp.labels" (dict "root" . "name" "metrics") | nindent 4 }}
+spec:
+  type: ClusterIP
+  ipFamilyPolicy: PreferDualStack
+  selector:
+    app.kubernetes.io/name: metrics
+  ports:
+    - name: metrics
+      port: 9191
+      targetPort: 9191
+      protocol: TCP

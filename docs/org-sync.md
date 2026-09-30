@@ -35,7 +35,7 @@ taxonomies:
 
 | Where | How the file gets in |
 |-------|----------------------|
-| Kubernetes | Replace the `misp-orgs` ConfigMap in your overlay: `configMapGenerator: - name: misp-orgs, behavior: replace, files: [orgs.yaml=orgs.yaml]` |
+| Kubernetes | The `orgSync.orgs` value: the content of `orgs.yaml`, which the chart puts in the `misp-orgs` ConfigMap |
 | Compose | Mount it at `/etc/misp-docker/orgs.yaml` on the `sync` service |
 
 | Variable | Description |

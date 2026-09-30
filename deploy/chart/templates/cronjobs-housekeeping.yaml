@@ -1,0 +1,47 @@
+# The housekeeping component: nightly batched deletes of old rows in jobs, logs
+# and audit_logs (python3 -m misp_container.housekeeping), on MariaDB or
+# PostgreSQL. No OPTIMIZE TABLE: on InnoDB it rebuilds the table under a
+# metadata lock. Retention is a policy choice: HOUSEKEEPING_<TABLE>_DAYS in env.
+{{- if .Values.housekeeping.enabled }}
+{{- range $table, $schedule := .Values.housekeeping.schedules }}
+{{- $name := printf "housekeeping-%s" ($table | replace "_" "-") }}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "misp.labels" (dict "root" $ "name" $name) | nindent 4 }}
+    app.kubernetes.io/component: misp-housekeeping
+spec:
+  schedule: {{ $schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 3600
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: {{ $name }}
+            app.kubernetes.io/component: misp-housekeeping
+        spec:
+          restartPolicy: OnFailure
+          {{- include "misp.podSecurityContext" $ | nindent 10 }}
+          {{- include "misp.podScheduling" $ | nindent 10 }}
+          containers:
+            - name: housekeeping
+              {{- include "misp.image" $ | nindent 14 }}
+              command: ["/usr/bin/tini", "--", "python3", "-m", "misp_container.housekeeping", {{ $table | quote }}]
+              envFrom:
+                - configMapRef:
+                    name: misp-env
+                - secretRef:
+                    name: misp-db
+              resources:
+                {{- toYaml $.Values.housekeeping.resources | nindent 16 }}
+              {{- include "misp.containerSecurityContext" $ | nindent 14 }}
+{{- end }}
+{{- end }}
