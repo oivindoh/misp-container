@@ -86,8 +86,9 @@ the build with the file and the reason when the anchor moved:
 
 - **`app/composer.json`:** the build drops `iglocska/cake-resque`, which SimpleBackgroundJobs
   replaces.
-- **CakePHP's `Postgres.php`:** `describe()` resets its sequence match per column. On a
-  failure, check whether the release carries the fix and drop the patch, or adapt it.
+- **CakePHP's `Postgres.php`:** `describe()` resets its sequence match per column
+  ([MISP#11172](https://github.com/MISP/MISP/issues/11172)). On a failure, check whether
+  the release carries the fix and drop the patch, or adapt it.
 
 ## Releases
 

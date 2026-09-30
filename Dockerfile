@@ -168,6 +168,7 @@ RUN if [ -n "${CORE_COMMIT}" ]; then \
 # column of a table at the id sequence and an INSERT into a table keyed on
 # a varchar (system_settings) fails in setval(). Reset the match per column.
 # The build fails, naming the file, when upstream changes the loop.
+# Reported upstream: https://github.com/MISP/MISP/issues/11172
 RUN CAKE_PG=/var/www/MISP/app/Lib/cakephp/lib/Cake/Model/Datasource/Database/Postgres.php && \
     T="$(printf '\t')" && \
     if ! grep -q "^${T}${T}${T}foreach (\$cols as \$c) {\$" "$CAKE_PG"; then \
