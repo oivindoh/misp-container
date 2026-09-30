@@ -178,7 +178,8 @@ The old instance stays read-only while the Job runs, so time a trial run against
 the source first. The Job logs each table and, cross engine, each index it builds. On
 PostgreSQL most of the time for a large instance goes to one index: MISP's hash index on
 `attributes.value2`, which is empty for most attributes. A hash index keeps equal values in
-one bucket, so its build time grows faster than the table. In one test with two million
+one bucket, so its build time grows faster than the table
+([MISP#11173](https://github.com/MISP/MISP/issues/11173)). In one test with two million
 attributes, the cross-engine copy took 14 minutes, 11 of them for that index; the
 same-engine copy took under 3 minutes.
 
