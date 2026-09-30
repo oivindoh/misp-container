@@ -40,7 +40,7 @@ flowchart LR
 | Identity | `MISP.uuid` and the salt and key, where the source stores them, must equal this deployment's values (exit 4) | same |
 | Target | must be empty (exit 3), or `MIGRATE_FORCE=true` drops every table first; a copy the Job made needs `MIGRATE_REPLACE_COPY=true` as well | same |
 | Schema | each table created from the source's own `CREATE TABLE` (MySQL 8 collations mapped for MariaDB) | this image's PostgreSQL baseline; the source must be at the same `db_version` and ledger state (exit 5) |
-| Rows | every table, whole | every table the baseline has, by column name; flags become booleans, zero dates become NULL; the id sequences move past the copied ids |
+| Rows | every table, whole | every table the baseline has, by column name, in multi-row inserts with the table's secondary indexes dropped, then built once; flags become booleans, zero dates become NULL; the id sequences move past the copied ids |
 | After | `MISP.live=false` on the copy, so web and worker wait for the configure Job | same |
 | Files | the attachments of `MIGRATE_SOURCE_FILES` or `MIGRATE_SOURCE_S3_BUCKET` into the deployment's bucket or attachments volume (see [Attachments](#attachments)) | same |
 
@@ -173,6 +173,14 @@ attachments go to that bucket.
 Sessions, the Redis cache, the CakePHP cache and log files are not copied.
 
 ## Cut-over
+
+The old instance stays read-only while the Job runs, so time a trial run against a copy of
+the source first. The Job logs each table and, cross engine, each index it builds. On
+PostgreSQL most of the time for a large instance goes to one index: MISP's hash index on
+`attributes.value2`, which is empty for most attributes. A hash index keeps equal values in
+one bucket, so its build time grows faster than the table. In one test with two million
+attributes, the cross-engine copy took 14 minutes, 11 of them for that index; the
+same-engine copy took under 3 minutes.
 
 1. Set `MISP.live=false` on the old instance so no event changes during the copy.
 2. Run the Job and the first sync. Check the copy: log in, open an event with an attachment,

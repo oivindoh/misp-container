@@ -51,6 +51,8 @@ EXIT_IDENTITY = 4
 EXIT_SCHEMA = 5
 
 BATCH = 2000
+# pg8000 sends at most this many parameters in one statement
+PG_MAX_PARAMS = 32767
 
 # Settings whose value on the source must be the value this deployment
 # carries in its env: with another salt no password verifies, with another
@@ -283,6 +285,24 @@ def insert_sql(table: str, columns: list[str], target_engine: str) -> str:
     return f"INSERT INTO {quote(table, target_engine)} ({cols}) VALUES ({marks})"
 
 
+def insert_rows(cur, table: str, columns: list[str], target_engine: str, rows: list[tuple]) -> None:
+    """Insert rows in as few statements as the engine takes.
+
+    PyMySQL's executemany already sends one multi-row INSERT; pg8000's sends
+    one statement per row, so PostgreSQL gets multi-row VALUES lists instead.
+    """
+    if target_engine != db.POSTGRES:
+        cur.executemany(insert_sql(table, columns, target_engine), rows)
+        return
+    head = insert_sql(table, columns, target_engine)
+    row_marks = head[head.index(" VALUES ") + len(" VALUES "):]
+    head = head[:head.index(" VALUES ") + len(" VALUES ")]
+    per_statement = max(1, PG_MAX_PARAMS // len(columns))
+    for start in range(0, len(rows), per_statement):
+        chunk = rows[start:start + per_statement]
+        cur.execute(head + ", ".join([row_marks] * len(chunk)), [value for row in chunk for value in row])
+
+
 def copy_table(src, dst, table: str, columns: list[str], target_engine: str,
                types: dict[str, str] | None = None) -> int:
     """Stream every row of a table from the source into the target."""
@@ -291,7 +311,6 @@ def copy_table(src, dst, table: str, columns: list[str], target_engine: str,
         coercers = [coercer(types.get(c, "")) for c in columns]
         if not any(coercers):
             coercers = None
-    sql = insert_sql(table, columns, target_engine)
     select = "SELECT " + ", ".join(f"`{c}`" for c in columns) + f" FROM `{table}`"
     import pymysql.cursors
     total = 0
@@ -303,11 +322,43 @@ def copy_table(src, dst, table: str, columns: list[str], target_engine: str,
                 rows = read.fetchmany(BATCH)
                 if not rows:
                     break
-                write.executemany(sql, [coerce_row(r, coercers) for r in rows])
+                insert_rows(write, table, columns, target_engine, [coerce_row(r, coercers) for r in rows])
                 total += len(rows)
     finally:
         read.close()
     return total
+
+
+def secondary_indexes(conn, table: str) -> list[tuple[str, str]]:
+    """(name, CREATE INDEX statement) of each PostgreSQL index on a table that backs no constraint."""
+    with db._cursor(conn) as cur:
+        cur.execute("SELECT i.relname, pg_get_indexdef(x.indexrelid) FROM pg_index x "
+                    "JOIN pg_class i ON i.oid = x.indexrelid JOIN pg_class t ON t.oid = x.indrelid "
+                    "WHERE t.relname = %s AND t.relnamespace = current_schema()::regnamespace "
+                    "AND NOT EXISTS (SELECT 1 FROM pg_constraint c WHERE c.conindid = x.indexrelid) "
+                    "ORDER BY i.relname", (table,))
+        return [(name, ddl) for name, ddl in cur.fetchall()]
+
+
+def copy_without_indexes(src, dst, table: str, columns: list[str], types: dict[str, str]) -> int:
+    """Copy a table into PostgreSQL with its secondary indexes dropped, then build them once.
+
+    PostgreSQL updates every index on each insert; on a table of millions of
+    rows that costs more than the copy. A copy that fails leaves the indexes
+    out; the rerun with MIGRATE_FORCE=true starts from the baseline again.
+    """
+    indexes = secondary_indexes(dst, table)
+    with db._cursor(dst) as cur:
+        for name, _ in indexes:
+            cur.execute(f'DROP INDEX "{name}"')
+    n = copy_table(src, dst, table, columns, db.POSTGRES, types)
+    with db._cursor(dst) as cur:
+        for name, ddl in indexes:
+            started = time.monotonic()
+            cur.execute(ddl)
+            if n:
+                log.info("%s: index %s rebuilt in %ds", table, name, time.monotonic() - started)
+    return n
 
 
 def reset_sequences(conn, tables: list[str]) -> None:
@@ -480,7 +531,7 @@ def migrate_cross_engine(src, dst) -> int:
             log.warning("%s: columns %s are not in this image's schema, skipped", table, ", ".join(missing))
         with db._cursor(dst) as cur:
             cur.execute(f'TRUNCATE TABLE "{table}"')
-        n = copy_table(src, dst, table, columns, db.POSTGRES, types)
+        n = copy_without_indexes(src, dst, table, columns, types)
         log.info("%s: %d rows", table, n)
         rows += n
         copied.append(table)

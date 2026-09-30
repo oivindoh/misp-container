@@ -226,9 +226,13 @@ class _ReadCursor:
 class _WriteCursor:
     def __init__(self):
         self.calls = []
+        self.statements = []
 
     def executemany(self, sql, rows):
         self.calls.append((sql, list(rows)))
+
+    def execute(self, sql, params):
+        self.statements.append((sql, list(params)))
 
     def close(self):
         pass
@@ -251,15 +255,46 @@ class TestCopyTable:
                                {"id": "integer", "flag": "boolean", "name": "text"})
         assert n == 3
         assert read.sql == "SELECT `id`, `flag`, `name` FROM `t`"
-        assert [len(rows) for _, rows in write.calls] == [2, 1]
-        assert write.calls[0][1] == [(1, True, "x"), (2, False, "y")]
-        assert write.calls[1][1] == [(3, None, "z")]
+        assert write.statements == [
+            ('INSERT INTO "t" ("id", "flag", "name") VALUES (%s, %s, %s), (%s, %s, %s)', [1, True, "x", 2, False, "y"]),
+            ('INSERT INTO "t" ("id", "flag", "name") VALUES (%s, %s, %s)', [3, None, "z"]),
+        ]
+
+    def test_postgres_statements_stay_under_the_parameter_limit(self, monkeypatch):
+        monkeypatch.setattr(migrate, "PG_MAX_PARAMS", 5)
+        write = _WriteCursor()
+        migrate.insert_rows(write, "t", ["a", "b"], db.POSTGRES, [(1, 2), (3, 4), (5, 6)])
+        assert [len(params) for _, params in write.statements] == [4, 2]
 
     def test_same_engine_rows_untouched(self):
         read = _ReadCursor([(1, 1)])
         write = _WriteCursor()
         migrate.copy_table(_Conn(read), _Conn(write), "t", ["id", "flag"], db.MYSQL)
         assert write.calls[0][1] == [(1, 1)]
+
+
+class TestIndexes:
+    def test_drops_the_secondary_indexes_copies_and_rebuilds_them(self, monkeypatch):
+        steps = []
+
+        class Cursor:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def execute(self, sql, params=None):
+                steps.append(sql.split("(")[0].strip() if sql.startswith("CREATE") else sql[:40])
+
+            def fetchall(self):
+                return [("attributes_value1", "CREATE INDEX attributes_value1 ON public.attributes USING btree (value1)")]
+
+        monkeypatch.setattr(migrate.db, "_cursor", lambda conn: Cursor())
+        monkeypatch.setattr(migrate, "copy_table", lambda *args, **kwargs: steps.append("copy") or 7)
+        assert migrate.copy_without_indexes(None, None, "attributes", ["id"], {}) == 7
+        assert steps[1:] == ['DROP INDEX "attributes_value1"', "copy",
+                             "CREATE INDEX attributes_value1 ON public.attributes USING btree"]
 
 
 class TestCrossEngineGate:
