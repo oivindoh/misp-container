@@ -303,7 +303,13 @@ RUN tar -xzf /pecl_libs.tar.gz && rm /pecl_libs.tar.gz && \
             echo "extension=${mod}.so" > "${dir}mods-available/${mod}.ini"; \
         done; \
         phpenmod "${mod}"; \
-    done && phpenmod redis
+    done && phpenmod redis && \
+    # The console (workers, the configure Job, console tasks) starts a session in
+    # some commands; the root is read-only, /tmp is a volume in every such pod.
+    # PHP-FPM keeps its sessions in Redis (php.ini.template).
+    for dir in /etc/php/*/cli/conf.d; do \
+        printf 'session.save_path = "/tmp"\n' > "${dir}/99-misp-cli-sessions.ini"; \
+    done
 
 # Copy MISP source (permissions already set in misp-source stage)
 COPY --from=misp-source --chown=${MISP_UID}:${MISP_GID} /var/www/MISP /var/www/MISP
