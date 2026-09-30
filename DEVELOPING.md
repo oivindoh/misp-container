@@ -92,60 +92,45 @@ the build with the file and the reason when the anchor moved:
 
 ## Releases
 
-Image tags match the MISP version. Tags are immutable -- CI refuses to overwrite an existing tag.
+Each release has a kind, which sets the chart version. The git tag and the images carry the
+MISP version of the `Dockerfile`: `v2.5.48` for the first release of that version, then
+`v2.5.48-r1` and on. The chart has its own SemVer version, with the image tag as its
+`appVersion`.
 
-### Using `mise run release`
+| Kind | Command | Chart version | For |
+|------|---------|---------------|-----|
+| `normal` | `mise run release normal` | minor up: `1.4.2` to `1.5.0` | A new MISP version, new features |
+| `hotfix` | `mise run release hotfix` | patch up: `1.4.2` to `1.4.3` | A base image update, a fix, a security patch |
+| `breaking` | `mise run release breaking` | major up: `1.4.2` to `2.0.0` | A change that breaks existing values or the upgrade path |
 
-The release task automates version bumping, image tag updates, and git tagging:
+A new MISP version comes in through its bump pull request (see New MISP releases), which
+also resolves `files/composer.lock` and the settings catalogue. After the merge, release it
+as `normal`.
 
-```bash
-# Hotfix (same MISP version, increments -rN suffix)
-mise run release
-# v2.5.37-r3 exists -> creates v2.5.37-r4
+`scripts/release.py`:
+1. Refuses to run off master, with changes to tracked files, or out of step with origin.
+2. Computes the next tag from the MISP version and the tags that exist.
+3. Reads the chart version that the previous release published, from the `Chart.yaml` of its
+   tag, and raises the part the kind names. The first release with a chart publishes the
+   version `Chart.yaml` has.
+4. Sets `version` and `appVersion` in `deploy/chart/Chart.yaml` and the `MISP_IMAGE_TAG`
+   default of the Compose files.
+5. Shows the plan and the diff. On a yes it commits and tags; on a no it restores the files.
 
-# New upstream MISP version
-mise run release v2.5.38
-# Updates Dockerfile ARG CORE_TAG, creates v2.5.38 tag
+Publish the release:
 
-# After a merged bump pull request, with the Dockerfile at v2.5.38 already
-mise run release
-# No tag for v2.5.38 yet -> creates v2.5.38
-```
-
-The task:
-1. Reads the current `CORE_TAG` from the Dockerfile
-2. Optionally updates it if a new upstream tag is provided
-3. Checks origin for existing release tags
-4. Computes the next tag (`v2.5.38` or `v2.5.37-rN+1`)
-5. Sets `appVersion` in `deploy/chart/Chart.yaml` and the `MISP_IMAGE_TAG` default of the Compose files to the image tag, and raises the chart `version` (see Tag format)
-6. Shows the diff and asks for confirmation
-7. Commits and creates the git tag
-
-After confirming:
 ```bash
 git push origin master <tag>
 ```
 
-CI runs tests, scans, pushes the images and the chart, and creates a GitHub Release with:
-- `ghcr.io/oivindoh/misp-container:<version>`
-- `ghcr.io/oivindoh/misp-container-caddy:<version>`
-- `ghcr.io/oivindoh/misp-container-modules:<version>`
-- `oci://ghcr.io/oivindoh/charts/misp`, with the chart version of `Chart.yaml`
+CI runs the tests and the scans, then pushes the images and the chart, and creates a GitHub
+Release. The release job refuses a tag whose image tag differs from `appVersion`, an image tag
+that GHCR already holds, and a chart version that GHCR already holds.
 
-### Tag format
-
-| Tag | Meaning | Chart version |
-|-----|---------|---------------|
-| `v2.5.38` | First release tracking MISP v2.5.38 | minor up: `1.1.0` |
-| `v2.5.38-r1` | Hotfix rebuild (base image update, config fix, security patch) | patch up: `1.1.1` |
-| `v2.5.38-r2` | Second hotfix | patch up: `1.1.2` |
-
-The git tag and the images carry the MISP version; the chart has its own SemVer version,
-with the image tag as its `appVersion`. The Chart.yaml of the previous release tag holds the
-version it published, and `release.sh` raises it from there. A change that breaks existing
-values raises the major by hand in `deploy/chart/Chart.yaml`, as `2.0.0`, in the same change;
-`release.sh` keeps a raised major. The release job refuses a tag whose image tag differs from
-`appVersion`, and a chart version that GHCR already holds.
+| Artefact | Version |
+|----------|---------|
+| `ghcr.io/oivindoh/misp-container`, `-caddy`, `-modules` | the image tag: the git tag without the `v` |
+| `oci://ghcr.io/oivindoh/charts/misp` | the chart version of `Chart.yaml` |
 
 ## Settings Engine
 
@@ -279,7 +264,7 @@ files/
   requirements-*.txt        # Pinned Python dependencies (final, modules)
   composer.lock             # Resolved PHP dependencies for the current CORE_TAG (generated)
 scripts/
-  release.sh                # mise run release
+  release.py                # mise run release <hotfix|normal|breaking>
   update-settings.sh        # Regenerates the catalogue from a live stack
   update_settings.py        # The catalogue tool (--check in the integration suite)
   check_scheduler_coverage.py  # Fails when MISP's scheduler offers work no task covers
