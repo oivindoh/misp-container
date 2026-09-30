@@ -12,8 +12,8 @@ set -euo pipefail
 #   tests/run-kind-test.sh --keep    # leave the cluster running
 #
 # The images must exist locally as
-#   ghcr.io/oivindoh/misp-container{,-caddy,-modules}:${MISP_IMAGE_TAG:-2.5.37}
-# (build them with compose first). CONTAINER_CMD selects the engine, podman by
+#   ghcr.io/oivindoh/misp-container{,-caddy,-modules}:${MISP_IMAGE_TAG}
+# (build them with compose first); MISP_IMAGE_TAG defaults to the chart's appVersion. CONTAINER_CMD selects the engine, podman by
 # default; kind uses the same one. With podman, kind runs on the machine's
 # rootful connection (KIND_PODMAN_CONNECTION, default podman-machine-default-root):
 # a kind node needs privileges that rootless podman does not give it.
@@ -22,7 +22,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 CHART="$SCRIPT_DIR/../deploy/chart"
 ENGINE="${CONTAINER_CMD:-podman}"
-TAG="${MISP_IMAGE_TAG:-2.5.37}"
+TAG="${MISP_IMAGE_TAG:-$(sed -n 's/^appVersion: *"*\([^"]*\)"*$/\1/p' "$CHART/Chart.yaml")}"
 CLUSTER="${KIND_CLUSTER:-misp-kind}"
 NAMESPACE=misp
 PORT=38080

@@ -243,7 +243,7 @@ Fail when MISP no longer matches what this image patches or depends on. A failur
 | `check_upstream.py` | Fail when MISP no longer matches what this image patches or depends on. |
 | `generate_agents_md.py` | Write AGENTS.md: a map of the repository, read from the tree itself. |
 | `generate_docs.py` | Fill the generated regions of the docs from the code. |
-| `release.sh` | Prepare a release: bump MISP version (optional), update the image tags and the chart version, create git tag. The git tag and the images carry the MISP version (-rN for a hotfix); the chart has its own SemVer version, with the image tag as its appVersion. |
+| `release.py` | Prepare a release of one kind: hotfix, normal or breaking. |
 | `update-composer-lock.sh` | Resolve MISP's composer dependencies for the current CORE_TAG plus this image's extra packages, and write the result to files/composer.lock. The image build installs exactly that lock and fails when it is out of date with upstream's composer.json (a new MISP release), so run this on every bump. |
 | `update-settings.sh` | Regenerate files/misp-config/settings-upstream.yaml from a live MISP. |
 | `update_settings.py` | Keep files/misp-config in step with the settings a live MISP knows. |
@@ -284,6 +284,7 @@ Unit tests (`tests/`, no containers):
 | `test_logrelay.py` | Unit tests for the log relay (misp_container.logrelay). |
 | `test_metrics.py` | Unit tests for the Prometheus metrics exporter. |
 | `test_migrate.py` | Unit tests for the migration Job (misp_container.migrate). |
+| `test_release.py` | Unit tests for the release tool (scripts/release.py): the next tag and chart version. |
 | `test_s3.py` | Unit tests for the minimal S3 client (misp_container.s3). |
 | `test_scheduler_coverage.py` | Unit tests for the scheduler coverage guard (scripts/check_scheduler_coverage.py). |
 | `test_sync.py` | Unit tests for the org sync engine. |
@@ -322,7 +323,7 @@ Stack files and runners:
 | `mise run logs-sync` | Follow sync test compose logs |
 | `mise run settings-update` | Regenerate files/misp-config/settings-upstream.yaml from a live MISP (builds and runs the test stack) |
 | `mise run composer-lock` | Resolve MISP's PHP dependencies for the current CORE_TAG into files/composer.lock |
-| `mise run release` | Prepare a release: bump MISP version (optional), update image tags, create git tag |
+| `mise run release` | Prepare a release of one kind (hotfix, normal or breaking): tag, image tags, chart version |
 
 ## CI: `.github/workflows/ci.yaml`
 

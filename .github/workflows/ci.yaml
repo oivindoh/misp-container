@@ -520,12 +520,12 @@ jobs:
           APP=$(awk '$1 == "appVersion:" {gsub(/"/, "", $2); print $2}' deploy/chart/Chart.yaml)
           CHART=$(awk '$1 == "version:" {print $2}' deploy/chart/Chart.yaml)
           if [ "$APP" != "$VER" ]; then
-            echo "ERROR: deploy/chart/Chart.yaml has appVersion ${APP}, the tag is ${VER}: scripts/release.sh sets it."
+            echo "ERROR: deploy/chart/Chart.yaml has appVersion ${APP}, the tag is ${VER}: mise run release sets it."
             exit 1
           fi
           echo "$REGISTRY_TOKEN" | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
           if helm show chart "oci://ghcr.io/${{ github.repository_owner }}/charts/misp" --version "$CHART" >/dev/null 2>&1; then
-            echo "ERROR: chart version ${CHART} exists in GHCR. Chart versions are immutable: scripts/release.sh raises it."
+            echo "ERROR: chart version ${CHART} exists in GHCR. Chart versions are immutable: mise run release raises it."
             exit 1
           fi
           echo "version=${CHART}" >> "$GITHUB_OUTPUT"

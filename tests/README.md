@@ -126,7 +126,7 @@ cluster running. CI job: `kind`.
 | Test values for `misp-db`, `misp-app`, `misp-admin`, `MISP_UUID` | The configure Job refuses the chart's placeholders |
 | A ReadWriteOnce attachments claim | kind's local-path storage offers no ReadWriteMany |
 
-The images must exist locally as `ghcr.io/oivindoh/misp-container{,-caddy,-modules}:${MISP_IMAGE_TAG:-2.5.37}`.
+The images must exist locally as `ghcr.io/oivindoh/misp-container{,-caddy,-modules}:${MISP_IMAGE_TAG}`; the tag defaults to the chart's `appVersion`, as the Compose files do.
 With podman, kind runs on the machine's rootful connection (`KIND_PODMAN_CONNECTION`, default
 `podman-machine-default-root`), because a kind node needs privileges that rootless podman
 does not give it. kind copies `HTTP_PROXY` and `HTTPS_PROXY` into the node, so a proxy on

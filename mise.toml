@@ -80,5 +80,5 @@ description = "Resolve MISP's PHP dependencies for the current CORE_TAG into fil
 run = "scripts/update-composer-lock.sh"
 
 [tasks.release]
-description = "Prepare a release: bump MISP version (optional), update image tags, create git tag"
-run = "scripts/release.sh ${@}"
+description = "Prepare a release of one kind (hotfix, normal or breaking): tag, image tags, chart version"
+run = "python scripts/release.py ${@}"

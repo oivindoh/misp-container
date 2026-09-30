@@ -25,9 +25,9 @@ MISP version, with `-rN` for a hotfix. `helm list` shows it as the app version.
 
 | Release | Chart version | `appVersion` |
 |---------|---------------|--------------|
-| A new MISP version | the minor goes up: `1.1.0` | `2.5.49` |
+| A normal release, such as a new MISP version | the minor goes up: `1.1.0` | `2.5.49` |
 | A hotfix | the patch goes up: `1.1.1` | `2.5.49-r1` |
-| A change that breaks existing values | the major goes up: `2.0.0` | the release's image tag |
+| A change that breaks existing values or the upgrade path | the major goes up: `2.0.0` | the release's image tag |
 
 So a version range such as `1.*` in an Argo CD `targetRevision` or a Flux HelmRelease
 follows every MISP release and hotfix, and stops before a change to the values. From a
