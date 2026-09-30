@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 #
 # Prepare a release: bump MISP version (optional), update the image tags and the chart version, create git tag.
+# The git tag and the images carry the MISP version (-rN for a hotfix); the chart
+# has its own SemVer version, with the image tag as its appVersion.
 #
 # Usage:
 #   scripts/release.sh              # hotfix: v2.5.37-r3 -> v2.5.37-r4
@@ -61,9 +63,30 @@ echo "Next release tag: ${NEXT_TAG}"
 echo "Image tag:        ${IMAGE_TAG}"
 echo ""
 
-# --- The chart: its version and appVersion are the image tag ---
-echo "Updating deploy/chart/Chart.yaml..."
-sed -i '' -e "s/^version: .*/version: ${IMAGE_TAG}/" -e "s/^appVersion: .*/appVersion: \"${IMAGE_TAG}\"/" deploy/chart/Chart.yaml
+# --- The chart: its own SemVer, and the image tag as appVersion ---
+# A new MISP version raises the minor, a hotfix the patch. A major raised by hand
+# in Chart.yaml, with a change that breaks existing values, stands. The Chart.yaml
+# of the previous release holds the version it published.
+git fetch --quiet --tags origin
+PREV_RELEASE=$(git tag -l 'v*' | sort -V | tail -1)
+PREV_CHART=$(git show "${PREV_RELEASE}:deploy/chart/Chart.yaml" 2>/dev/null | sed -n 's/^version: *//p' || true)
+CUR_CHART=$(sed -n 's/^version: *//p' deploy/chart/Chart.yaml)
+if [ -z "$PREV_CHART" ]; then
+    NEXT_CHART="$CUR_CHART"
+else
+    IFS=. read -r MAJOR MINOR PATCH <<< "$PREV_CHART"
+    PREV_BASE="${PREV_RELEASE#v}"
+    PREV_BASE="${PREV_BASE%%-r*}"
+    if [ "${CUR_CHART%%.*}" -gt "$MAJOR" ]; then
+        NEXT_CHART="$CUR_CHART"
+    elif [ "$PREV_BASE" != "$BASE_VERSION" ]; then
+        NEXT_CHART="${MAJOR}.$((MINOR + 1)).0"
+    else
+        NEXT_CHART="${MAJOR}.${MINOR}.$((PATCH + 1))"
+    fi
+fi
+echo "Chart version:    ${NEXT_CHART} (previous release ${PREV_RELEASE:-none}: ${PREV_CHART:-no chart})"
+sed -i '' -e "s/^version: .*/version: ${NEXT_CHART}/" -e "s/^appVersion: .*/appVersion: \"${IMAGE_TAG}\"/" deploy/chart/Chart.yaml
 
 # --- Update docker-compose.yml image tags ---
 echo "Updating deploy/docker-compose.yml..."

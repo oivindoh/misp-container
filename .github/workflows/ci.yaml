@@ -500,14 +500,37 @@ jobs:
           echo "misp_version=${MISP_VERSION}" >> "$GITHUB_OUTPUT"
           echo "Git tag: ${TAG}, MISP version: ${MISP_VERSION}"
 
-      - name: Check the chart version
+      - name: Install helm
         run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/bin"
+          cd "$RUNNER_TEMP"
+          curl -sfLo helm.tgz https://get.helm.sh/helm-v4.3.0-linux-amd64.tar.gz
+          echo "86584a54def73570558f66f5111cc53dfed56689637ae32c1201205d494f54fb  helm.tgz" | sha256sum -c
+          tar -xzf helm.tgz -C bin --strip-components=1 linux-amd64/helm
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+
+      # appVersion is the image tag; the chart version is its own SemVer and, like an
+      # image tag, is never pushed twice
+      - name: Check the chart
+        id: chart
+        run: |
+          set -euo pipefail
           VER="${GITHUB_REF#refs/tags/v}"
+          APP=$(awk '$1 == "appVersion:" {gsub(/"/, "", $2); print $2}' deploy/chart/Chart.yaml)
           CHART=$(awk '$1 == "version:" {print $2}' deploy/chart/Chart.yaml)
-          if [ "$CHART" != "$VER" ]; then
-            echo "ERROR: deploy/chart/Chart.yaml has version ${CHART}, the tag is ${VER}: scripts/release.sh sets both."
+          if [ "$APP" != "$VER" ]; then
+            echo "ERROR: deploy/chart/Chart.yaml has appVersion ${APP}, the tag is ${VER}: scripts/release.sh sets it."
             exit 1
           fi
+          echo "$REGISTRY_TOKEN" | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
+          if helm show chart "oci://ghcr.io/${{ github.repository_owner }}/charts/misp" --version "$CHART" >/dev/null 2>&1; then
+            echo "ERROR: chart version ${CHART} exists in GHCR. Chart versions are immutable: scripts/release.sh raises it."
+            exit 1
+          fi
+          echo "version=${CHART}" >> "$GITHUB_OUTPUT"
+        env:
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Check tag immutability
         run: |
@@ -569,25 +592,11 @@ jobs:
           sbom: true
           cache-from: type=gha,scope=modules
 
-      - name: Install helm
-        run: |
-          set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/bin"
-          cd "$RUNNER_TEMP"
-          curl -sfLo helm.tgz https://get.helm.sh/helm-v4.3.0-linux-amd64.tar.gz
-          echo "86584a54def73570558f66f5111cc53dfed56689637ae32c1201205d494f54fb  helm.tgz" | sha256sum -c
-          tar -xzf helm.tgz -C bin --strip-components=1 linux-amd64/helm
-          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
-
       - name: Push the chart
         run: |
           set -euo pipefail
-          VER="${{ steps.tags.outputs.version }}"
-          echo "$REGISTRY_TOKEN" | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
           helm package deploy/chart --destination "$RUNNER_TEMP"
-          helm push "$RUNNER_TEMP/misp-${VER}.tgz" "oci://ghcr.io/${{ github.repository_owner }}/charts"
-        env:
-          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          helm push "$RUNNER_TEMP/misp-${{ steps.chart.outputs.version }}.tgz" "oci://ghcr.io/${{ github.repository_owner }}/charts"
 
       - name: Create GitHub Release
         run: |
@@ -603,6 +612,6 @@ jobs:
           - \`${{ env.IMAGE_CADDY }}:${VER}\`
           - \`${{ env.IMAGE_MODULES }}:${VER}\`
 
-          Helm chart: \`oci://ghcr.io/${{ github.repository_owner }}/charts/misp\`, version \`${VER}\`"
+          Helm chart: \`oci://ghcr.io/${{ github.repository_owner }}/charts/misp\`, version \`${{ steps.chart.outputs.version }}\`"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

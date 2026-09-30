@@ -61,10 +61,15 @@ def test_a_workflow_cronjob_passes_its_id():
     assert chart.pod_spec(cronjob)["containers"][0]["command"][-2:] == ["workflow", "7"]
 
 
-def test_the_chart_version_is_the_release_the_compose_files_default_to():
+def test_the_app_version_is_the_image_tag_the_compose_files_default_to():
     meta = yaml.safe_load((chart.CHART / "Chart.yaml").read_text())
     compose_tag = re.search(r"misp-container:\$\{MISP_IMAGE_TAG:-([^}]+)\}", (REPO / "deploy/docker-compose.yml").read_text()).group(1)
-    assert meta["version"] == meta["appVersion"] == compose_tag
+    assert meta["appVersion"] == compose_tag
+
+
+def test_the_chart_version_is_a_release_semver():
+    # A pre-release suffix would hide the version from helm upgrade and from semver ranges
+    assert re.fullmatch(r"\d+\.\d+\.\d+", yaml.safe_load((chart.CHART / "Chart.yaml").read_text())["version"])
 
 
 def test_every_image_of_ours_carries_the_app_version():

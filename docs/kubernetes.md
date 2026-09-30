@@ -13,16 +13,25 @@
 
 ## Install
 
-Each release publishes the chart to GHCR. Its version is the release tag without the `v`:
+Each release publishes the chart to GHCR:
 
 ```bash
-helm install misp oci://ghcr.io/oivindoh/charts/misp --version <release> \
+helm install misp oci://ghcr.io/oivindoh/charts/misp --version 1.0.0 \
     --namespace misp --create-namespace -f values.yaml
 ```
 
-A hotfix release carries `-rN`, as `2.5.37-r1`, which SemVer sorts as a pre-release: Helm
-skips it unless `--version` names it. Always pass `--version`, and give Argo CD or Flux the
-exact version. From a checkout, install `deploy/chart` instead.
+The chart has its own SemVer version. Its `appVersion` is the image tag of the release: the
+MISP version, with `-rN` for a hotfix. `helm list` shows it as the app version.
+
+| Release | Chart version | `appVersion` |
+|---------|---------------|--------------|
+| A new MISP version | the minor goes up: `1.1.0` | `2.5.49` |
+| A hotfix | the patch goes up: `1.1.1` | `2.5.49-r1` |
+| A change that breaks existing values | the major goes up: `2.0.0` | the release's image tag |
+
+So a version range such as `1.*` in an Argo CD `targetRevision` or a Flux HelmRelease
+follows every MISP release and hotfix, and stops before a change to the values. From a
+checkout, install `deploy/chart` instead.
 
 ```yaml
 # values.yaml

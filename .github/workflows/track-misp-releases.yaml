@@ -95,10 +95,11 @@ jobs:
           BODY="MISP released ${NEW} (was ${OLD}). files/composer.lock and the settings catalogue were regenerated from ${NEW}: review the diffs of files/composer.lock and files/misp-config/settings-upstream.yaml."
           BODY="${BODY}
 
-          CI builds and tests automatically. After merging, tag and push to release:
+          CI builds and tests automatically. After merging, release from master: it sets the
+          image tags, the chart version and appVersion, then commits and tags.
 
-              git tag ${NEW}
-              git push origin ${NEW}
+              mise run release
+              git push origin master ${NEW}
 
           $(cat "$RUNNER_TEMP/settings-summary.md" 2>/dev/null || echo "(no settings summary)")"
 

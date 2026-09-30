@@ -2,8 +2,12 @@ apiVersion: v2
 name: misp
 description: MISP threat intelligence platform - web, workers, configure Job, periodic tasks and optional database, cache, routes and network policies
 type: application
-# The release tag without its v; scripts/release.sh sets both
-version: 2.5.37
+# The chart's own SemVer. scripts/release.sh raises the minor for a new MISP
+# version and the patch for a hotfix. Raise the major here, as X.0.0, with a
+# change that breaks existing values.
+version: 1.0.0
+# The image tag of the release: the MISP version, with -rN for a hotfix. The
+# images default to it.
 appVersion: "2.5.37"
 home: https://github.com/oivindoh/misp-container
 sources:
