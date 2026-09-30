@@ -204,9 +204,12 @@ Container-level defaults (database and Redis hosts, PHP limits, worker counts) a
 | `DB_TLS` | `true` for a TLS connection |
 
 The `MYSQL_*` names stay as aliases of `DB_*`. On PostgreSQL the database must exist with
-UTF8 encoding and be owned by the user; the configure Job loads MISP's baseline into it.
-MISP's PostgreSQL support is a fresh-install path (no MySQL to PostgreSQL migration), the
-On Demand correlation engine is MySQL-only, and the integration suite runs on both engines.
+UTF8 encoding and be owned by the user; the configure Job loads MISP's baseline into it. An
+external PostgreSQL such as StackGres needs only the `DB_*` values. Keep a connection pooler
+in front of it in session mode, as StackGres's is by default: the configure Job holds an
+advisory lock for its whole run. The migrate Job copies a MySQL or MariaDB MISP onto
+PostgreSQL ([docs/migration.md](docs/migration.md)). The On Demand correlation engine is
+MySQL-only, and the integration suite runs on both engines.
 The image patches one line of CakePHP's PostgreSQL datasource (the `Dockerfile` names it) so
 that settings inserts work. `MISP_REDIS_*` also fills the background-job and ZeroMQ Redis
 settings, and `MISP_BASEURL` fills the external and REST client base URLs, unless those are
