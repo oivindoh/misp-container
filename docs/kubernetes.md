@@ -25,6 +25,7 @@ deploy/
 | `postgres` | PostgreSQL 17 StatefulSet with a 20Gi PVC | You use `mariadb` or an external database |
 | `redis` | Deployment without persistence | You run an external Redis (`MISP_REDIS_HOST`) |
 | `ingress-haproxy` | Ingress for the haproxy class | Another ingress or a Gateway routes to the `web` Service |
+| `gateway-api` | HTTPRoute for a Gateway API implementation; patch its parent Gateway and hostname | The `ingress-haproxy` component or your own route reaches the `web` Service |
 | `netpol-cilium` | CiliumNetworkPolicies for every pod | The cluster does not run Cilium |
 | `cronjobs` | The periodic task CronJobs, see [Periodic tasks](#periodic-tasks) | You want no periodic work |
 | `user-validity` | A daily check of every account against the OIDC or LDAP identity provider | Neither the `oidc` nor the `ldap` group is enabled |
@@ -52,12 +53,21 @@ configMapGenerator:
 
 ## Client addresses
 
-MISP logs the first address in `X-Forwarded-For` as the client of each request. The
-`ingress-haproxy` component replaces that header with the address HAProxy sees, so a client
-cannot write its own address into the audit log. Another ingress or Gateway must do the same.
-The caddy sidecar keeps the header only from a trusted proxy, `TRUSTED_PROXY_CIDR`: every
-private range in Kubernetes, where the ingress pods live, and none in Compose, where clients
-reach caddy directly. With `netpol-cilium`, only the ingress reaches the web pods.
+MISP logs the first address in `X-Forwarded-For` as the client of each request. The caddy
+sidecar sends it one address: the rightmost `X-Forwarded-For` address outside the trusted
+proxies, `TRUSTED_PROXY_CIDR`, or the address of the peer when the peer is no trusted proxy.
+When every address in the header is trusted, it is the peer's. So an address a client wrote
+into the header never reaches the audit log, whether the proxy in front replaces the header
+(the `ingress-haproxy` component does) or appends to it (as a Gateway does).
+
+| Setup | `TRUSTED_PROXY_CIDR` | MISP logs |
+|-------|----------------------|-----------|
+| Kubernetes, unset | every private range | a client with a public address; for a client with a private address, the ingress or Gateway pod |
+| Kubernetes, set in `misp-env` to the ingress or Gateway proxy pods | those pods | every client |
+| Compose | `127.0.0.1/32` on the caddy service: clients reach caddy directly | every client |
+
+With `netpol-cilium`, only the ingress reaches the web pods. For a Gateway, replace the
+policy's ingress namespace (`haproxy-controller`) with the namespace of the Gateway's proxies.
 
 ## Secrets
 

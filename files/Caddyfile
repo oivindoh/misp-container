@@ -1,9 +1,11 @@
 {
 	admin off
 	servers {
-		# Only a trusted proxy's X-Forwarded-For reaches MISP, which logs its first
-		# address as the client; from anyone else caddy puts the peer's address there
+		# The client is the rightmost X-Forwarded-For address outside the trusted
+		# proxies, or the peer when the peer is not one. A proxy that appends to a
+		# header the client sent cannot pass the client's own entry off as the client.
 		trusted_proxies static {$TRUSTED_PROXY_CIDR:private_ranges}
+		trusted_proxies_strict
 	}
 }
 
@@ -24,8 +26,11 @@
 		}
 	}
 
-	# PHP via FastCGI
-	php_fastcgi {$PHP_FPM_HOST:127.0.0.1}:9002
+	# PHP via FastCGI. MISP logs the first X-Forwarded-For address as the client
+	# (MISP.log_client_ip_header), so it gets that one address only.
+	php_fastcgi {$PHP_FPM_HOST:127.0.0.1}:9002 {
+		header_up X-Forwarded-For {client_ip}
+	}
 
 	file_server
 

@@ -40,6 +40,15 @@ spec:
         # caddy sidecar - lightweight scratch image with static webroot files
         - name: caddy
           image: ghcr.io/oivindoh/misp-container-caddy
+          env:
+            # The ingress or Gateway proxies whose X-Forwarded-For caddy follows; unset,
+            # every private range
+            - name: TRUSTED_PROXY_CIDR
+              valueFrom:
+                configMapKeyRef:
+                  name: misp-env
+                  key: TRUSTED_PROXY_CIDR
+                  optional: true
           command: ["caddy", "run", "--config", "/etc/caddy/Caddyfile"]
           ports:
             - name: http

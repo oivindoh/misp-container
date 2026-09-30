@@ -1,0 +1,10 @@
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+
+# HTTPRoute for a Gateway API implementation, in place of the ingress-haproxy
+# component. Patch the parent Gateway, its namespace and the hostname in the
+# overlay; the Gateway must allow routes from this namespace. caddy takes the
+# client address from X-Forwarded-For, right to left, past TRUSTED_PROXY_CIDR:
+# set that in misp-env to the Gateway's proxy pods.
+resources:
+  - httproute.yaml
