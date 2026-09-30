@@ -117,11 +117,14 @@ as `normal`.
    default of the Compose files.
 5. Shows the plan and the diff. On a yes it commits and tags; on a no it restores the files.
 
-Publish the release:
+Publish the release. `--atomic` lands the branch and the tag together:
 
 ```bash
-git push origin master <tag>
+git push --atomic origin master <tag>
 ```
+
+The push starts two runs of the release commit. The `gate` job stops the master run, and the
+tag run tests the commit and releases it.
 
 CI runs the tests and the scans, then pushes the images and the chart, and creates a GitHub
 Release. The release job refuses a tag whose image tag differs from `appVersion`, an image tag

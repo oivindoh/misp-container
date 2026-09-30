@@ -130,7 +130,7 @@ def main(argv: list[str]) -> int:
     git("add", str(CHART_YAML), *map(str, COMPOSE_FILES))
     git("commit", "--quiet", "-m", f"release {tag}, chart {chart_version}")
     git("tag", tag)
-    print(f"\nDone. To publish:\n  git push origin master {tag}")
+    print(f"\nDone. To publish:\n  git push --atomic origin master {tag}")
     return 0
 
 

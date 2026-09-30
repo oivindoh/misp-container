@@ -100,7 +100,7 @@ jobs:
           version, and commits and tags.
 
               mise run release normal
-              git push origin master ${NEW}
+              git push --atomic origin master ${NEW}
 
           $(cat "$RUNNER_TEMP/settings-summary.md" 2>/dev/null || echo "(no settings summary)")"
 
