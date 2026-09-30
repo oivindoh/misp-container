@@ -84,8 +84,8 @@ Idle memory per container, after the first start:
 | MariaDB | 140 MB | Default buffer pool |
 | Redis | 7 MB | `maxmemory` 128 MB |
 
-The base manifests request 256 MiB for a web pod, 512 MiB for a worker pod and 256 MiB for
-modules, with limits of 4 GiB, 2 GiB and 1 GiB: the requests cover the idle use above, the
+The base manifests request 256 MiB for PHP-FPM in a web pod, 512 MiB for a worker pod and
+256 MiB for modules, with limits of 4 GiB, 2 GiB and 1 GiB: the requests cover the idle use above, the
 limits one large event import or enrichment.
 
 ## Rollout order

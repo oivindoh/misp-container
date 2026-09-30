@@ -209,6 +209,7 @@ Fail when MISP no longer matches what this image patches or depends on. A failur
 | `check_scheduler_coverage.py` | Fail when MISP's scheduler offers work that no task runner task covers. |
 | `check_upstream.py` | Fail when MISP no longer matches what this image patches or depends on. |
 | `generate_agents_md.py` | Write AGENTS.md: a map of the repository, read from the tree itself. |
+| `generate_docs.py` | Fill the generated regions of the docs from the code. |
 | `release.sh` | Prepare a release: bump MISP version (optional), update image tags, create git tag. |
 | `update-composer-lock.sh` | Resolve MISP's composer dependencies for the current CORE_TAG plus this image's extra packages, and write the result to files/composer.lock. The image build installs exactly that lock and fails when it is out of date with upstream's composer.json (a new MISP release), so run this on every bump. |
 | `update-settings.sh` | Regenerate files/misp-config/settings-upstream.yaml from a live MISP. |
@@ -241,6 +242,7 @@ Unit tests (`tests/`, no containers):
 | `test_config_php.py` | Unit tests for config.php rendering from settings.yaml. |
 | `test_configure.py` | Unit tests for the configure step's identity and secret checks. |
 | `test_db.py` | Unit tests for the advisory lock (no MySQL needed). |
+| `test_docs.py` | The docs name only what the code has. |
 | `test_engine.py` | Unit tests for the engine-neutral database helpers and housekeeping. |
 | `test_env.py` | Unit tests for environment variable handling. |
 | `test_init.py` | Unit tests for init container logic (file operations, no containers needed). |
@@ -278,6 +280,7 @@ Stack files and runners:
 | `mise run test-kustomize` | Render the Kustomize base with each component and validate against the schemas |
 | `mise run test-kind` | Apply the Kustomize base to a kind cluster and run the smoke test (build the images first) |
 | `mise run agents-md` | Regenerate AGENTS.md from the tree |
+| `mise run docs` | Regenerate the generated regions of the docs and AGENTS.md from the code |
 | `mise run test-all` | Run unit + integration + sync + migration tests |
 | `mise run smoketest` | Run smoke test against a live MISP instance |
 | `mise run logs` | Follow integration test compose logs |

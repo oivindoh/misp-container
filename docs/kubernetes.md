@@ -61,22 +61,28 @@ reach caddy directly. With `netpol-cilium`, only the ingress reaches the web pod
 
 ## Secrets
 
-Three Secrets follow their consumers; the base generates them from `.env` files that Compose
-reads too:
+The base generates its Secrets from `.env` files that Compose reads too, and the `migrate`
+component adds `misp-migrate`. A workload gets a whole Secret, or only the keys the table
+names:
 
-| Secret | File | Keys | Who gets it |
-|--------|------|------|-------------|
-| `misp-db` | `secrets-db.env` | `DB_USER`, `DB_PASSWORD`, `MYSQL_ROOT_PASSWORD` (mariadb only) | configure, web, worker, org-sync, housekeeping, console task CronJobs, the mariadb or postgres component; metrics gets user and password only |
-| `misp-app` | `secrets-app.env` | `MISP_REDIS_PASSWORD`, `GNUPG_PASSWORD`, `SECURITY_ENCRYPTION_KEY`, `SECURITY_SALT` | configure, web, worker, redis, console task CronJobs; metrics gets `MISP_REDIS_PASSWORD` only |
-| `misp-admin` | `secrets-admin.env` | `ADMIN_PASSWORD`, `ADMIN_KEY` | configure, org-sync, cronjobs. With `ADMIN_KEY` empty MISP generates a key, org-sync exits without changes, and the cronjobs fail with a clear message |
-| `misp-migrate` | `components/migrate/secrets-migrate.env` | `MIGRATE_SOURCE_*`, `MIGRATE_FORCE`, `MIGRATE_REPLACE_COPY` | The migrate Job only |
+<!-- generated: secrets -->
+| Secret | File | Keys | Read by |
+|---|---|---|---|
+| `misp-db` | `deploy/base/secrets-db.env` | `DB_USER`, `DB_PASSWORD`, `MYSQL_ROOT_PASSWORD` | configure, cronjobs, housekeeping, mariadb (`DB_PASSWORD`, `DB_USER`, `MYSQL_ROOT_PASSWORD`), metrics (`DB_PASSWORD`, `DB_USER`), migrate, org-sync, postgres (`DB_PASSWORD`, `DB_USER`), user-validity, web, worker |
+| `misp-app` | `deploy/base/secrets-app.env` | `MISP_REDIS_PASSWORD`, `GNUPG_PASSWORD`, `SECURITY_ENCRYPTION_KEY`, `SECURITY_SALT` | configure, cronjobs, metrics (`MISP_REDIS_PASSWORD`), migrate, redis (`MISP_REDIS_PASSWORD`), user-validity, web, worker |
+| `misp-admin` | `deploy/base/secrets-admin.env` | `ADMIN_PASSWORD`, `ADMIN_KEY` | configure, cronjobs (`ADMIN_KEY`), org-sync |
+| `misp-migrate` | `deploy/components/migrate/secrets-migrate.env` | `MIGRATE_SOURCE_HOST`, `MIGRATE_SOURCE_USER`, `MIGRATE_SOURCE_PASSWORD`, `MIGRATE_FORCE`, `MIGRATE_REPLACE_COPY`, `MIGRATE_SOURCE_FILES`, `MIGRATE_SOURCE_S3_BUCKET`, `MIGRATE_SOURCE_S3_ENDPOINT`, `MIGRATE_SOURCE_S3_REGION`, `MIGRATE_SOURCE_S3_ACCESS_KEY`, `MIGRATE_SOURCE_S3_SECRET_KEY` | migrate |
+<!-- end generated -->
+
+With `ADMIN_KEY` empty, MISP generates a key, org-sync exits without changes, and the API
+task CronJobs fail with a clear message.
 
 The base files hold placeholders that the configure Job refuses. Supply the real Secrets
 from your overlay through KSOPS, as `deploy/overlays/prod` does: an encrypted
-`secrets.sops.yaml` with the three Secrets and `kustomize.config.k8s.io/behavior: replace`.
+`secrets.sops.yaml` with the base's Secrets and `kustomize.config.k8s.io/behavior: replace`.
 Kustomize's `secretGenerator` cannot decrypt, so do not encrypt the `.env` files in place.
 
-Two more Secrets are optional and copied into every pod at start:
+These Secrets are optional and copied into every pod at start:
 
 | Secret | Content | Command |
 |--------|---------|---------|
@@ -118,20 +124,26 @@ nowhere; `misp_scheduled_tasks_enabled` counts them (see [metrics.md](metrics.md
 Manual actions in the UI and the API, such as a pull, a push or fetching one event from a
 remote server, do not use a scheduler: the workers run them.
 
-| Task | Does | Kind | CronJob schedule |
-|------|------|------|------------------|
-| `pull-servers` | Pull from every server with pull enabled | API | every 5 minutes |
-| `push-servers` | Push to every server with push enabled | API | every 15 minutes |
-| `cache-servers` | Cache the events of every server | API | 02:40 |
-| `fetch-feeds` | Fetch every enabled feed | API | 02:30 |
-| `cache-feeds` | Cache every feed | API | 02:20 |
-| `push-taxii` | Push to every enabled TAXII server | API | hourly |
-| `sharing-group-blueprints` | Apply the sharing group blueprints | API | hourly |
-| `update-galaxies`, `update-taxonomies`, `update-warninglists`, `update-noticelists`, `update-object-templates` | Update MISP's bundled definitions | API | 03:00 to 03:40 |
-| `periodic-summary` | Send the daily, weekly (Mondays) and monthly (the first) summaries users subscribed to | console | 06:00, no retry |
-| `check-user-validity` | Report every account as valid or invalid at the OIDC or LDAP provider | console | 05:30 (`user-validity` component) |
-| `block-invalid-users` | Disable the accounts the provider no longer backs | console | patch `user-validity` to it |
-| `workflow <id>` | Run one ad-hoc workflow | API | an overlay adds the CronJob |
+<!-- generated: periodic-tasks -->
+| Task | Does | Kind | CronJob schedule (component) |
+|---|---|---|---|
+| `cache-feeds` | Cache every feed | API | `20 2 * * *` (`cronjobs`) |
+| `fetch-feeds` | Fetch every enabled feed | API | `30 2 * * *` (`cronjobs`) |
+| `cache-servers` | Cache the events of every server | API | `40 2 * * *` (`cronjobs`) |
+| `update-galaxies` | Update MISP's bundled galaxies | API | `0 3 * * *` (`cronjobs`) |
+| `update-taxonomies` | Update MISP's bundled taxonomies | API | `10 3 * * *` (`cronjobs`) |
+| `update-warninglists` | Update MISP's bundled warninglists | API | `20 3 * * *` (`cronjobs`) |
+| `update-noticelists` | Update MISP's bundled noticelists | API | `30 3 * * *` (`cronjobs`) |
+| `update-object-templates` | Update MISP's bundled object templates | API | `40 3 * * *` (`cronjobs`) |
+| `pull-servers` | Pull from every server with pull enabled | API | `*/5 * * * *` (`cronjobs`) |
+| `push-servers` | Push to every server with push enabled | API | `*/15 * * * *` (`cronjobs`) |
+| `push-taxii` | Push to every enabled TAXII server | API | `7 * * * *` (`cronjobs`) |
+| `sharing-group-blueprints` | Apply the sharing group blueprints | API | `37 * * * *` (`cronjobs`) |
+| `workflow` | Run one ad-hoc workflow, by its ID | API | none |
+| `periodic-summary` | Send the daily, weekly (Mondays) and monthly (the first) summaries users subscribed to | console | `0 6 * * *` (`cronjobs`) |
+| `check-user-validity` | Report every account as valid or invalid at the OIDC or LDAP provider | console | `30 5 * * *` (`user-validity`) |
+| `block-invalid-users` | Disable the accounts the OIDC or LDAP provider no longer backs | console | none |
+<!-- end generated -->
 
 API tasks call the MISP API with `ADMIN_KEY`, which must be set. Before dispatching, a run
 reads the queue depth (`misp_jobs_queued`, which the metrics exporter reads from MISP's job

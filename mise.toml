@@ -46,6 +46,10 @@ run = "tests/run-kind-test.sh ${@}"
 description = "Regenerate AGENTS.md from the tree"
 run = "python scripts/generate_agents_md.py"
 
+[tasks.docs]
+description = "Regenerate the generated regions of the docs and AGENTS.md from the code"
+run = ["python scripts/generate_docs.py", "python scripts/generate_agents_md.py"]
+
 [tasks.test-all]
 description = "Run unit + integration + sync + migration tests"
 depends = ["test", "test-integration", "test-sync", "test-migration"]

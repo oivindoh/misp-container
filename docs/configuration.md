@@ -93,6 +93,8 @@ short names below are aliases of the derived ones (`OidcAuth.provider_url` is
 | `OIDC_MIXEDAUTH` | `OidcAuth.mixedAuth` | `false`: every login goes to the IdP. `true` keeps the password form and adds a button |
 | `OIDC_LOGOUT_URL` | `Plugin.CustomAuth_custom_logout` | the IdP's logout URL |
 | `OIDC_AUTH_METHOD`, `OIDC_CODE_CHALLENGE_METHOD` | `authentication_method`, `code_challenge_method` | `client_secret_post`, `S256` |
+| `OIDC_DISABLE_REQUEST_OBJECT` | `OidcAuth.disable_request_object` | `false`: `true` for an IdP that refuses signed request objects |
+| `OIDC_SKIP_PROXY` | `OidcAuth.skipProxy` | `true`: the IdP is reached directly, not through `Proxy.*` |
 
 The redirect URI is `MISP_BASEURL/users/login`; register it at the IdP. Every other
 `OidcAuth.*` key in `settings.yaml` (offline access, user validity checks, email linking)

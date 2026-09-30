@@ -1,0 +1,136 @@
+#!/usr/bin/env python3
+"""Fill the generated regions of the docs from the code.
+
+Usage: generate_docs.py [--check]
+
+A region sits between `<!-- generated: <name> -->` and `<!-- end generated -->`
+in README.md, DEVELOPING.md, tests/README.md or docs/*.md; GENERATORS names what
+fills it. --check exits 1 when a region differs from what the code gives;
+tests/test_docs.py runs it in the unit tests. Edit the code, not the region.
+"""
+
+from __future__ import annotations
+
+import re
+import sys
+from pathlib import Path
+
+import yaml
+
+SCRIPTS = Path(__file__).resolve().parent
+REPO = SCRIPTS.parent
+sys.path.insert(0, str(REPO / "files"))
+sys.path.insert(0, str(SCRIPTS))
+
+from generate_agents_md import table  # noqa: E402
+
+DOCS = [REPO / "README.md", REPO / "DEVELOPING.md", REPO / "tests" / "README.md", *sorted((REPO / "docs").glob("*.md"))]
+REGION = re.compile(r"(<!-- generated: (?P<name>[\w-]+) -->\n)(?P<body>.*?)(<!-- end generated -->)", re.S)
+
+
+def task_cronjobs() -> dict[str, list[tuple[str, str]]]:
+    """{task: [(schedule, component)]} of the CronJobs in deploy/components that run the task runner."""
+    found: dict[str, list[tuple[str, str]]] = {}
+    for path in sorted((REPO / "deploy/components").glob("*/*.yaml")):
+        for doc in yaml.safe_load_all(path.read_text()):
+            if not isinstance(doc, dict) or doc.get("kind") != "CronJob":
+                continue
+            container = doc["spec"]["jobTemplate"]["spec"]["template"]["spec"]["containers"][0]
+            command = [*container.get("command", []), *container.get("args", [])]
+            if "misp_container.task" in command:
+                name = command[command.index("misp_container.task") + 1]
+                found.setdefault(name, []).append((doc["spec"]["schedule"], path.parent.name))
+    return found
+
+
+def periodic_tasks() -> str:
+    from misp_container import task
+    cronjobs = task_cronjobs()
+    rows = []
+    for name in task.TASKS:
+        kind = "console" if name in task.CAKE_TASKS else "API"
+        runs = ", ".join(f"`{schedule}` (`{component}`)" for schedule, component in cronjobs.get(name, [])) or "none"
+        rows.append((f"`{name}`", task.DESCRIPTIONS[name], kind, runs))
+    return table(("Task", "Does", "Kind", "CronJob schedule (component)"), rows)
+
+
+def pod_spec(doc: dict) -> dict | None:
+    spec = doc.get("spec", {})
+    if doc.get("kind") == "CronJob":
+        spec = spec.get("jobTemplate", {}).get("spec", {})
+    return spec.get("template", {}).get("spec") if doc.get("kind") in ("Deployment", "StatefulSet", "Job", "CronJob") else None
+
+
+def secret_users() -> dict[str, dict[str, set[str]]]:
+    """{Secret: {user: keys}}: which workloads read a Secret, all of it (empty set) or some keys.
+
+    A base workload is named for itself, a component's workloads for the component.
+    """
+    users: dict[str, dict[str, set[str]]] = {}
+    paths = [*sorted((REPO / "deploy/base").glob("*.yaml")), *sorted((REPO / "deploy/components").glob("*/*.yaml"))]
+    for path in paths:
+        if path.name == "kustomization.yaml":
+            continue
+        for doc in yaml.safe_load_all(path.read_text()):
+            spec = pod_spec(doc) if isinstance(doc, dict) else None
+            if not spec:
+                continue
+            user = doc["metadata"]["name"] if path.parent.name == "base" else path.parent.name
+            for c in [*spec.get("initContainers", []), *spec.get("containers", [])]:
+                for source in c.get("envFrom", []):
+                    if "secretRef" in source:
+                        users.setdefault(source["secretRef"]["name"], {})[user] = set()
+                for var in c.get("env", []):
+                    ref = var.get("valueFrom", {}).get("secretKeyRef")
+                    if ref:
+                        keys = users.setdefault(ref["name"], {}).setdefault(user, {ref["key"]})
+                        if keys:
+                            keys.add(ref["key"])
+    return users
+
+
+def secrets() -> str:
+    users = secret_users()
+    rows = []
+    for kustomization in [REPO / "deploy/base/kustomization.yaml", *sorted((REPO / "deploy/components").glob("*/kustomization.yaml"))]:
+        for generator in yaml.safe_load(kustomization.read_text()).get("secretGenerator", []):
+            for env_file in generator.get("envs", []):
+                path = kustomization.parent / env_file
+                keys = [line.split("=", 1)[0] for line in path.read_text().splitlines()
+                        if "=" in line and not line.lstrip().startswith("#")]
+                readers = []
+                for user, subset in sorted(users.get(generator["name"], {}).items()):
+                    readers.append(f"{user} ({', '.join(f'`{k}`' for k in sorted(subset))})" if subset else user)
+                rows.append((f"`{generator['name']}`", f"`{path.relative_to(REPO)}`",
+                             ", ".join(f"`{k}`" for k in keys), ", ".join(readers)))
+    return table(("Secret", "File", "Keys", "Read by"), rows)
+
+
+GENERATORS = {
+    "periodic-tasks": periodic_tasks,
+    "secrets": secrets,
+}
+
+
+def render(text: str) -> str:
+    """The text with every generated region filled; an unknown region name raises KeyError."""
+    return REGION.sub(lambda m: m.group(1) + GENERATORS[m.group("name")]() + "\n" + m.group(4), text)
+
+
+def main(argv: list[str]) -> int:
+    stale = []
+    for doc in DOCS:
+        text = doc.read_text()
+        rendered = render(text)
+        if rendered != text:
+            stale.append(str(doc.relative_to(REPO)))
+            if "--check" not in argv:
+                doc.write_text(rendered)
+    if "--check" in argv and stale:
+        print(f"generated regions differ from the code in {', '.join(stale)}: run `mise run docs`", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

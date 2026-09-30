@@ -166,6 +166,9 @@ class TestMain:
                 task.main(["update-galaxies"])
         assert exc.value.code == 1
 
+    def test_every_task_has_a_description(self):
+        assert set(task.DESCRIPTIONS) == set(task.TASKS)
+
     def test_no_task_argument_exits_2(self):
         with pytest.raises(SystemExit) as exc:
             task.main([])

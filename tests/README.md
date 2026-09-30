@@ -39,6 +39,7 @@ Tests of the Python entrypoint library (`files/misp_container/`), the scripts an
 | `test_init.py` | app/Config rendering, database.php/email.php generation, GPG key import, writable check |
 | `test_admin.py` | SQL escape function |
 | `test_s3.py` | The migrate Job's S3 client: AWS's Signature Version 4 examples, path-style and virtual-hosted requests, paged listing, errors |
+| `test_docs.py` | Every name a doc gives exists in the code, the complete lists are complete, the values quoted in sentences match the manifests, and the generated regions are current |
 | `test_agents_md.py` | `AGENTS.md` is what `scripts/generate_agents_md.py` makes of the tree |
 | `test_compose_files.py` | The test overlays repeat the env files they override, so podman-compose and docker compose start each service with the same settings |
 | `test_sync.py` | Org sync engine: config normalization, merge logic, UUID validation, env expansion, role/org/tag/user/server/taxonomy/warninglist/sharing group apply logic, build rules (pull vs push tag format), allow_external user placement, default_role, disable unmanaged resources, full orchestrator flow |

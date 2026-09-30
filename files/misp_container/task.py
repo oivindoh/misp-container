@@ -52,6 +52,26 @@ CAKE_TASKS = {
 API_TASKS = tuple(ENDPOINTS) + tuple(SERVER_TASKS) + INDEX_TASKS + (WORKFLOW_TASK,)
 TASKS = API_TASKS + tuple(CAKE_TASKS)
 
+# What each task does, for the usage message and docs/kubernetes.md (scripts/generate_docs.py)
+DESCRIPTIONS = {
+    "cache-feeds": "Cache every feed",
+    "fetch-feeds": "Fetch every enabled feed",
+    "cache-servers": "Cache the events of every server",
+    "update-galaxies": "Update MISP's bundled galaxies",
+    "update-taxonomies": "Update MISP's bundled taxonomies",
+    "update-warninglists": "Update MISP's bundled warninglists",
+    "update-noticelists": "Update MISP's bundled noticelists",
+    "update-object-templates": "Update MISP's bundled object templates",
+    "pull-servers": "Pull from every server with pull enabled",
+    "push-servers": "Push to every server with push enabled",
+    "push-taxii": "Push to every enabled TAXII server",
+    "sharing-group-blueprints": "Apply the sharing group blueprints",
+    WORKFLOW_TASK: "Run one ad-hoc workflow, by its ID",
+    "periodic-summary": "Send the daily, weekly (Mondays) and monthly (the first) summaries users subscribed to",
+    "check-user-validity": "Report every account as valid or invalid at the OIDC or LDAP provider",
+    "block-invalid-users": "Disable the accounts the OIDC or LDAP provider no longer backs",
+}
+
 # Every task type and action that MISP's scheduler offers
 # (app/Console/Command/SchedulerWorkerShell.php), with the task that does the
 # same work. scripts/check_scheduler_coverage.py fails a MISP release whose
@@ -194,8 +214,9 @@ def main(argv: list[str]) -> None:
     name = argv[0] if argv else ""
     arg_count = 2 if name == WORKFLOW_TASK else 1
     if name not in TASKS or len(argv) != arg_count:
-        log.error("usage: python3 -m misp_container.task <%s> (workflow takes a workflow ID)",
-                  "|".join(TASKS))
+        log.error("usage: python3 -m misp_container.task <task> (workflow takes a workflow ID)")
+        for known in TASKS:
+            log.error("  %-24s %s", known, DESCRIPTIONS[known])
         sys.exit(2)
 
     if name in CAKE_TASKS:

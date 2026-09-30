@@ -203,5 +203,5 @@ same-engine copy took under 3 minutes.
 
 The database schema is the same, so the Job copies it directly. Differences to account for:
 the official image runs as `www-data` (33), this one as UID 1000, so copied files need
-`chown`; `app/files` ships in this image and only the attachments, `scripts/tmp`, `certs`,
-`terms` and `img/orgs` are volumes; workers run in their own container.
+`chown`; `app/files` ships in this image and only the attachments, `app/files/scripts/tmp`,
+`certs`, `terms` and `img/orgs` are volumes; workers run in their own container.

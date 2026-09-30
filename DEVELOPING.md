@@ -213,6 +213,21 @@ MISP never reads `SystemSetting::BLOCKED_SETTINGS` (salt, encryption key, passwo
 `python_bin`, `ca_path`, `tmpdir`, `attachments_dir`, `system_setting_db` and a few more) from
 the database. Those settings must stay in `minimum_config`.
 
+## Docs from the code
+
+The docs state no fact the code holds by hand. Two mechanisms keep them in step, and the unit
+tests fail while either is out of step:
+
+| Mechanism | Covers |
+| --- | --- |
+| Generated regions, between `<!-- generated: <name> -->` and `<!-- end generated -->`, filled by `scripts/generate_docs.py` | The periodic tasks table, the Secrets table |
+| `tests/test_docs.py` | Every env var, setting, repository path, file name and mise task a doc names exists; the component, task, upstream check, metric, exit code and OIDC tables are complete; the sizes, requests, sync waves, defaults and ports quoted in sentences match the manifests and the code |
+
+Change the source, not the doc: a task description lives in `misp_container/task.py`
+(`DESCRIPTIONS`), a Secret's readers in the manifests. Then run `mise run docs`, which also
+regenerates `AGENTS.md`. Measured figures (image sizes, startup times, memory, benchmark
+times) have no source in the code; they carry the version they were measured on.
+
 ## Project Structure
 
 `AGENTS.md` holds the full map, generated from the docstrings, header comments, manifests,
