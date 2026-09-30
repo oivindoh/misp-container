@@ -113,7 +113,7 @@ The task:
 2. Optionally updates it if a new upstream tag is provided
 3. Checks origin for existing release tags
 4. Computes the next tag (`v2.5.38` or `v2.5.37-rN+1`)
-5. Updates the image tags in `deploy/base/kustomization.yaml`, the components that pin the image, the Compose files (`MISP_IMAGE_TAG` default) and, if present, the `?ref=` pins of the local ArgoCD overlay (not committed)
+5. Updates the image tags in `deploy/base/kustomization.yaml`, the components that pin the image, and the Compose files (`MISP_IMAGE_TAG` default)
 6. Shows the diff and asks for confirmation
 7. Commits and creates the git tag
 
@@ -286,9 +286,6 @@ deploy/
   base/                     # Kustomize base (MISP itself)
   components/               # Optional parts: database, cache, ingress, network policy, cronjobs, PDB
   overlays/                 # Kustomize overlays
-argocd/
-  application.yaml          # ArgoCD Application example
-  overlay/                  # Remote-base kustomize overlay
 docs/
   migration.md              # Migration guide from existing MISP
 ```

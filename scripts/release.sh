@@ -91,15 +91,6 @@ for path in ["deploy/docker-compose.yml"] + glob.glob("tests/docker-compose*.yml
     print(f"  {path}")
 PYEOF
 
-# --- ArgoCD overlay: pin the remote base and components to this release ---
-# The overlay is a local, untracked copy of the deployment repo's; edit it in
-# place and leave it out of the commit.
-ARGOCD_OVERLAY="argocd/overlay/kustomization.yaml"
-if [ -f "$ARGOCD_OVERLAY" ]; then
-    echo "Updating ${ARGOCD_OVERLAY} refs to ${NEXT_TAG} (not committed)..."
-    sed -i '' "s#\(misp-container\.git//[^?]*?ref=\)[^ ]*#\1${NEXT_TAG}#" "$ARGOCD_OVERLAY"
-fi
-
 # --- Verify ---
 echo ""
 echo "Changes:"

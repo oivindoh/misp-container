@@ -49,7 +49,9 @@ external PostgreSQL such as StackGres needs only the `DB_*` values. Keep a conne
 in front of it in session mode, as StackGres's is by default: the configure Job holds an
 advisory lock for its whole run. The migrate Job copies a MySQL or MariaDB MISP onto
 PostgreSQL ([migration.md](migration.md)). The On Demand correlation engine is
-MySQL-only, and the integration suite runs on both engines.
+MySQL-only, and the integration suite runs on both engines. On PostgreSQL, MISP does not
+create its high-performance indexes on the object, correlation, tag and warninglist tables
+([MISP#11178](https://github.com/MISP/MISP/issues/11178)).
 The image patches one line of CakePHP's PostgreSQL datasource (the `Dockerfile` names it) so
 that settings inserts work. `MISP_REDIS_*` also fills the background-job and ZeroMQ Redis
 settings, and `MISP_BASEURL` fills the external and REST client base URLs, unless those are
