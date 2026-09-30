@@ -200,7 +200,9 @@ class Stack:
             if status == 200:
                 return
             time.sleep(3)
-        raise RuntimeError(f"MISP did not answer on {base_url or self.base_url} in {timeout}s")
+        # A stack fixture that fails here yields no stack, so no test would dump the logs
+        path = self.dump_logs("misp-wait-timeout")
+        raise RuntimeError(f"MISP did not answer on {base_url or self.base_url} in {timeout}s; compose logs: {path}")
 
     def wait_for(self, service: str, script: str, timeout: int = 90) -> None:
         """Until a shell check in the service's container succeeds."""
