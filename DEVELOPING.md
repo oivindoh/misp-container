@@ -106,6 +106,10 @@ mise run release
 # New upstream MISP version
 mise run release v2.5.38
 # Updates Dockerfile ARG CORE_TAG, creates v2.5.38 tag
+
+# After a merged bump pull request, with the Dockerfile at v2.5.38 already
+mise run release
+# No tag for v2.5.38 yet -> creates v2.5.38
 ```
 
 The task:
@@ -113,7 +117,7 @@ The task:
 2. Optionally updates it if a new upstream tag is provided
 3. Checks origin for existing release tags
 4. Computes the next tag (`v2.5.38` or `v2.5.37-rN+1`)
-5. Sets `version` and `appVersion` in `deploy/chart/Chart.yaml` and the `MISP_IMAGE_TAG` default of the Compose files to the image tag
+5. Sets `appVersion` in `deploy/chart/Chart.yaml` and the `MISP_IMAGE_TAG` default of the Compose files to the image tag, and raises the chart `version` (see Tag format)
 6. Shows the diff and asks for confirmation
 7. Commits and creates the git tag
 
@@ -126,15 +130,22 @@ CI runs tests, scans, pushes the images and the chart, and creates a GitHub Rele
 - `ghcr.io/oivindoh/misp-container:<version>`
 - `ghcr.io/oivindoh/misp-container-caddy:<version>`
 - `ghcr.io/oivindoh/misp-container-modules:<version>`
-- `oci://ghcr.io/oivindoh/charts/misp`, chart version `<version>`
+- `oci://ghcr.io/oivindoh/charts/misp`, with the chart version of `Chart.yaml`
 
 ### Tag format
 
-| Tag | Meaning |
-|-----|---------|
-| `v2.5.38` | First release tracking MISP v2.5.38 |
-| `v2.5.38-r1` | Hotfix rebuild (base image update, config fix, security patch) |
-| `v2.5.38-r2` | Second hotfix |
+| Tag | Meaning | Chart version |
+|-----|---------|---------------|
+| `v2.5.38` | First release tracking MISP v2.5.38 | minor up: `1.1.0` |
+| `v2.5.38-r1` | Hotfix rebuild (base image update, config fix, security patch) | patch up: `1.1.1` |
+| `v2.5.38-r2` | Second hotfix | patch up: `1.1.2` |
+
+The git tag and the images carry the MISP version; the chart has its own SemVer version,
+with the image tag as its `appVersion`. The Chart.yaml of the previous release tag holds the
+version it published, and `release.sh` raises it from there. A change that breaks existing
+values raises the major by hand in `deploy/chart/Chart.yaml`, as `2.0.0`, in the same change;
+`release.sh` keeps a raised major. The release job refuses a tag whose image tag differs from
+`appVersion`, and a chart version that GHCR already holds.
 
 ## Settings Engine
 

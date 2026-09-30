@@ -71,11 +71,12 @@ Every other setting has an env var too; see [docs/configuration.md](docs/configu
 
 The Helm chart in `deploy/chart` renders MISP itself; each component (database, cache,
 ingress or HTTPRoute, network policies, CronJobs) switches on with `<component>.enabled`.
-Each release publishes the chart as `oci://ghcr.io/oivindoh/charts/misp`; its version is the
-release tag without the `v`. Helm, Argo CD or Flux installs it:
+Each release publishes the chart as `oci://ghcr.io/oivindoh/charts/misp`. The chart has its
+own SemVer version, and its `appVersion` is the MISP version of the images. Helm, Argo CD or
+Flux installs it:
 
 ```bash
-helm install misp oci://ghcr.io/oivindoh/charts/misp --version <release> \
+helm install misp oci://ghcr.io/oivindoh/charts/misp --version 1.0.0 \
     --namespace misp --create-namespace -f values.yaml
 ```
 

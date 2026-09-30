@@ -243,7 +243,7 @@ Fail when MISP no longer matches what this image patches or depends on. A failur
 | `check_upstream.py` | Fail when MISP no longer matches what this image patches or depends on. |
 | `generate_agents_md.py` | Write AGENTS.md: a map of the repository, read from the tree itself. |
 | `generate_docs.py` | Fill the generated regions of the docs from the code. |
-| `release.sh` | Prepare a release: bump MISP version (optional), update the image tags and the chart version, create git tag. |
+| `release.sh` | Prepare a release: bump MISP version (optional), update the image tags and the chart version, create git tag. The git tag and the images carry the MISP version (-rN for a hotfix); the chart has its own SemVer version, with the image tag as its appVersion. |
 | `update-composer-lock.sh` | Resolve MISP's composer dependencies for the current CORE_TAG plus this image's extra packages, and write the result to files/composer.lock. The image build installs exactly that lock and fails when it is out of date with upstream's composer.json (a new MISP release), so run this on every bump. |
 | `update-settings.sh` | Regenerate files/misp-config/settings-upstream.yaml from a live MISP. |
 | `update_settings.py` | Keep files/misp-config in step with the settings a live MISP knows. |
@@ -337,4 +337,4 @@ Stack files and runners:
 | `migration` | `build` | Build misp image; Build caddy image; Build modules image; Migration tests; Upload the test report and the compose logs |
 | `kind` | `build` | Build misp image; Build caddy image; Build modules image; Install kind and helm; Python for the smoke test; Kubernetes test on kind |
 | `scan` | `build` | Build ${{ matrix.target }} image (from cache); Trivy vulnerability scan (${{ matrix.target }}); Upload scan results |
-| `release` | `unit`, `chart`, `integration`, `integration-postgres`, `hub-spoke`, `migration`, `kind`, `scan` | Extract version info; Check the chart version; Check tag immutability; Log in to GHCR; Docker tags; Build and push misp (from cache); Build and push caddy (from cache); Build and push modules (from cache); Install helm; Push the chart; Create GitHub Release |
+| `release` | `unit`, `chart`, `integration`, `integration-postgres`, `hub-spoke`, `migration`, `kind`, `scan` | Extract version info; Install helm; Check the chart; Check tag immutability; Log in to GHCR; Docker tags; Build and push misp (from cache); Build and push caddy (from cache); Build and push modules (from cache); Push the chart; Create GitHub Release |
