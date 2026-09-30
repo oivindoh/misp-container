@@ -127,8 +127,8 @@ def kubernetes() -> str:
         if doc["kind"] == "Job":
             name = re.sub(r"-\d+$", "-<revision>", name)
         rendered.setdefault(template, []).append(f"{doc['kind']} `{name}`")
-    templates = [(f"`{p.name}`", ", ".join(rendered.get(f"templates/{p.name}", [])), comment_block(p))
-                 for p in sorted((chart.CHART / "templates").glob("*.yaml"))]
+    templates = [(f"`{p.relative_to(chart.CHART / 'templates')}`", ", ".join(rendered.get(str(p.relative_to(chart.CHART)), [])),
+                  comment_block(p)) for p in sorted((chart.CHART / "templates").rglob("*.yaml"))]
     comments = chart.value_comments()
     parts = chart.components()
     values = [(f"`{key}`", comments.get(key, "")) for key in comments if key not in parts]

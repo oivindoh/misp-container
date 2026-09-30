@@ -2,6 +2,8 @@ MISP {{ include "misp.tag" . }} in namespace {{ .Release.Namespace }}.
 
 The configure Job configure-{{ .Release.Revision }} sets MISP up; web and worker pods start once it has:
   kubectl -n {{ .Release.Namespace }} logs -f job/configure-{{ .Release.Revision }}
+Then check the release from inside the cluster:
+  helm test {{ .Release.Name }} --namespace {{ .Release.Namespace }} --logs
 {{- if not (or .Values.mariadb.enabled .Values.postgres.enabled) }}
 
 No database component is on: MISP connects to DB_HOST from the env value.

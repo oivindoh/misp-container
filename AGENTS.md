@@ -140,6 +140,7 @@ Values of the misp chart. The comment above each top-level key describes it; doc
 | `service-modules.yaml` | Service `modules` | misp-modules on port 6666, for MISP's enrichment, import, export and action calls. |
 | `service-web.yaml` | Service `web` | MISP over HTTP: caddy in the web pods, port 8080. The ingress or HTTPRoute routes here. |
 | `service-worker.yaml` | Service `worker` | supervisord in the worker pods, port 9001: the web pods list, start and stop the background workers here (SimpleBackgroundJobs.supervisor_host). |
+| `tests/test-misp.yaml` | Pod `misp-test` | helm test: checks a release from inside the cluster. It loads the login page through the web Service and, with ADMIN_KEY in misp-admin, calls the API as the admin: MISP.live, and a worker on every queue behind a reachable supervisord. The pod carries the API task label, so the ciliumNetworkPolicy component lets it reach web. |
 
 Values:
 
@@ -295,14 +296,14 @@ Stack files and runners:
 
 | File | Is |
 |---|---|
-| `tests/run-kind-test.sh` | Installs the Helm chart with the mariadb and redis components on a kind cluster (values tests/kind/values.yaml) and runs the smoke test (tests/e2e/test_smoke.py) against it. Then upgrades the release with a changed value and runs the smoke test again: the upgrade runs a new configure Job and rolls the pods. |
+| `tests/run-kind-test.sh` | Installs the Helm chart on a kind cluster (values tests/kind/values.yaml), runs the smoke test (tests/e2e/test_smoke.py) and the chart's helm test, and runs an API task, a console task and a housekeeping task from their CronJobs. Then it upgrades the release with a changed value and rolls it back: each runs the configure Job of its revision and rolls the pods, and the smoke test runs after each. |
 | `tests/docker-compose.migrate-mysql.yml` | Points every MISP container at the same-engine migration target (tests/migrate-target-mysql.env), after the copy. |
 | `tests/docker-compose.migrate-s3.yml` | Points every MISP container at the cross-engine migration target: the postgres service (tests/postgres.env) with attachments in S3 (tests/migrate-target-s3.env), after the copy. |
 | `tests/docker-compose.migrate.yml` | Overlay for the migration suite (tests/e2e/test_migration.py): a second MariaDB as the same-engine target, and the migrate service with the test env and a fixture attachments directory mounted as the source's files. |
 | `tests/docker-compose.postgres.yml` | Second overlay for the PostgreSQL run of the suite: switches every MISP container to the postgres service (tests/postgres.env). The mysql service still starts; MISP does not use it. |
 | `tests/docker-compose.sync-test.yml` | Hub-spoke sync integration test: 3 isolated MISP instances (A, B, C). |
 | `tests/docker-compose.test.yml` | Test overlay -- overrides deploy/docker-compose.yml with test-specific values. Used by tests/e2e/test_integration.py |
-| `tests/kind/values.yaml` | Values for tests/run-kind-test.sh: the mariadb and redis components, test secrets, the images under the tag kind, and a ReadWriteOnce attachments claim, because kind's local-path storage offers no ReadWriteMany. |
+| `tests/kind/values.yaml` | Values for tests/run-kind-test.sh: the mariadb, redis, cronjobs and housekeeping components, test secrets, the images under the tag kind, and a ReadWriteOnce attachments claim, because kind's local-path storage offers no ReadWriteMany. |
 
 ## Commands
 
@@ -314,7 +315,7 @@ Stack files and runners:
 | `mise run test-sync` | Run hub-spoke sync test (3 MISP instances) |
 | `mise run test-migration` | Run the migration suite (MariaDB to MariaDB and to PostgreSQL) |
 | `mise run test-chart` | Lint the Helm chart, render it with each component and validate against the schemas |
-| `mise run test-kind` | Install and upgrade the Helm chart on a kind cluster and run the smoke test (build the images first) |
+| `mise run test-kind` | Install, test, upgrade and roll back the Helm chart on a kind cluster (build the images first) |
 | `mise run agents-md` | Regenerate AGENTS.md from the tree |
 | `mise run docs` | Regenerate the generated regions of the docs and AGENTS.md from the code |
 | `mise run test-all` | Run unit + integration + sync + migration tests |
