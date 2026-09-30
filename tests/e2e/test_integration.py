@@ -115,6 +115,14 @@ def test_root_redirects_to_login(stack):
     assert stack.http("GET", "/", json_api=False, redirects=False)[0] == 302
 
 
+def test_a_forged_forwarded_for_stays_out_of_the_audit_log(stack):
+    # A failed API login is logged with the client address MISP reads from X-Forwarded-For
+    stack.http("GET", "/users/view/me", "0" * 40, headers={"X-Forwarded-For": "203.0.113.9"})
+    logged = stack.sql("SELECT ip FROM logs WHERE action = 'auth_fail' ORDER BY id DESC LIMIT 1")
+    assert logged and logged != "203.0.113.9", (
+        f"MISP logged {logged!r}: caddy passed on a client's X-Forwarded-For (TRUSTED_PROXY_CIDR)")
+
+
 # -- admin user configuration --------------------------------------------------------
 
 def test_admin_email_from_env(stack):

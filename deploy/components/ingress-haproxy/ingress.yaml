@@ -4,6 +4,13 @@ metadata:
   name: misp
   labels:
     app.kubernetes.io/name: web
+  annotations:
+    # MISP logs the first address in X-Forwarded-For (MISP.log_client_ip_header).
+    # HAProxy would append to a header the client sent, so a client could write
+    # any address into the audit log; this replaces the header with the address
+    # HAProxy sees. Behind another load balancer, that is the balancer's address
+    # unless it speaks the PROXY protocol to HAProxy.
+    haproxy.org/request-set-header: "X-Forwarded-For %[src]"
 spec:
   ingressClassName: haproxy
   tls:

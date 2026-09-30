@@ -91,6 +91,10 @@ services:
     user: "1000:1000"
     environment:
       PHP_FPM_HOST: web
+      # No proxy stands in front of caddy here, so it trusts none and passes MISP
+      # the address of each client, not an X-Forwarded-For the client sent. With a
+      # reverse proxy in front, set this to its address.
+      TRUSTED_PROXY_CIDR: 127.0.0.1/32
       # Set CADDY_ADDRESS to a domain (e.g. misp.example.com) for automatic HTTPS.
       # Leave unset for plain HTTP on :8080 (when behind a load balancer).
       # CADDY_ADDRESS: misp.example.com

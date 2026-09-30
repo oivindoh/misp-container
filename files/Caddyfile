@@ -1,6 +1,8 @@
 {
 	admin off
 	servers {
+		# Only a trusted proxy's X-Forwarded-For reaches MISP, which logs its first
+		# address as the client; from anyone else caddy puts the peer's address there
 		trusted_proxies static {$TRUSTED_PROXY_CIDR:private_ranges}
 	}
 }

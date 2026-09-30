@@ -245,6 +245,13 @@ deploy/
 | `pdb` | PodDisruptionBudgets for web and worker | One replica of each |
 | `migrate` | One-off Job copying an existing MySQL/MariaDB MISP into the database, see [docs/migration.md](docs/migration.md) | Always, once the Job has run |
 
+MISP logs the first address in `X-Forwarded-For` as the client of each request. The
+`ingress-haproxy` component replaces that header with the address HAProxy sees, so a client
+cannot write its own address into the audit log. Another ingress or Gateway must do the same.
+The caddy sidecar keeps the header only from a trusted proxy, `TRUSTED_PROXY_CIDR`: every
+private range in Kubernetes, where the ingress pods live, and none in Compose, where clients
+reach caddy directly. With `netpol-cilium`, only the ingress reaches the web pods.
+
 An overlay lists the base, the components it wants, and its own values:
 
 ```yaml
