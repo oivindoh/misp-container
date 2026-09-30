@@ -2,7 +2,7 @@
 
 Loads YAML config (local file + optional remote source), diffs against
 current MISP state via REST API, and applies changes. Designed to be
-fast on warm runs (nothing changed → reads only, no writes).
+fast on warm runs: with nothing changed, it only reads.
 """
 
 import json
