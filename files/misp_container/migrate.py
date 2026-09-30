@@ -19,10 +19,11 @@ updates on it, as on any upgrade. Cross engine (target postgres): the target
 gets this image's PostgreSQL baseline, the source must be at the same schema
 version, and the rows are copied into it column by column.
 
-Exit codes: 0 done; 1 copy failed; 2 configuration; 3 target not empty
-(MIGRATE_FORCE=true drops it first, and a copy this Job made only with
-MIGRATE_REPLACE_COPY=true as well); 4 identity mismatch; 5 source schema
-differs from this image's (cross engine only).
+Exit codes: 0 done, or the target holds a copy this Job made (it stays unless
+MIGRATE_FORCE=true and MIGRATE_REPLACE_COPY=true); 1 copy failed; 2
+configuration; 3 target not empty (MIGRATE_FORCE=true drops it first); 4
+identity mismatch; 5 source schema differs from this image's (cross engine
+only).
 """
 
 from __future__ import annotations
@@ -211,22 +212,23 @@ def last_copy(conn, tables: list[str]) -> str:
     return str(row[0]) if row and row[0] else ""
 
 
-def target_refusal(tables: int, copied: str, force: str, replace: str) -> str:
-    """Why the Job leaves a non-empty target alone; empty when it may drop it.
+def target_plan(tables: int, copied: str, force: str, replace: str) -> tuple[str, str]:
+    """What the Job does with the target: ("copy", ""), ("keep", why) or ("refuse", why).
 
-    Argo CD runs the Job on every sync while the migrate component is in the
-    overlay. A MIGRATE_FORCE=true left behind would drop the copy on the next
-    sync, so a copy this Job made needs MIGRATE_REPLACE_COPY=true as well.
+    The migration runs again on every upgrade or sync while it is enabled, and
+    on each retry of the configure Job it runs in. A copy this Job made stays,
+    and the run succeeds, so the configure step that follows is not blocked. A
+    MIGRATE_FORCE=true left behind does not drop it: only
+    MIGRATE_REPLACE_COPY=true as well does.
     """
     if not tables:
-        return ""
+        return "copy", ""
+    if copied and not (force == "true" and replace == "true"):
+        return "keep", (f"the target holds the copy this Job made at {copied}; it stays. Disable the migration "
+                        "once it is done; to copy again, set MIGRATE_FORCE=true and MIGRATE_REPLACE_COPY=true")
     if force != "true":
-        return f"the target database has {tables} tables; set MIGRATE_FORCE=true to drop them"
-    if copied and replace != "true":
-        return (f"the target holds a copy this Job made at {copied}; MIGRATE_FORCE=true would drop it. "
-                "Remove the migrate component once a copy is done; to copy again, set MIGRATE_REPLACE_COPY=true "
-                "as well")
-    return ""
+        return "refuse", f"the target database has {tables} tables; set MIGRATE_FORCE=true to drop them"
+    return "copy", ""
 
 
 def drop_all(conn, tables: list[str], target_engine: str) -> None:
@@ -583,10 +585,13 @@ def run() -> None:
     dst = db._connect()
     try:
         existing = target_tables(dst, target_engine)
-        refusal = target_refusal(len(existing), last_copy(dst, existing), env("MIGRATE_FORCE"),
-                                 env("MIGRATE_REPLACE_COPY"))
-        if refusal:
-            log.error("%s", refusal)
+        plan, why = target_plan(len(existing), last_copy(dst, existing), env("MIGRATE_FORCE"),
+                                env("MIGRATE_REPLACE_COPY"))
+        if plan == "keep":
+            log.info("%s", why)
+            return
+        if plan == "refuse":
+            log.error("%s", why)
             sys.exit(EXIT_NOT_EMPTY)
         if existing:
             drop_all(dst, existing, target_engine)

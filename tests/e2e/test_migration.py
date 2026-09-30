@@ -139,13 +139,13 @@ def identity_mismatch(first_copy, mysql_target):
 
 
 @pytest.fixture(scope="module")
-def force_refused(identity_mismatch, mysql_target):
+def force_alone(identity_mismatch, mysql_target):
     # The target holds the first copy: a MIGRATE_FORCE left behind must not drop it
     return migrate(mysql_target, DB_HOST="mysql-target", MIGRATE_FORCE="true")
 
 
 @pytest.fixture(scope="module")
-def forced_copy(force_refused, mysql_target):
+def forced_copy(force_alone, mysql_target):
     return migrate(mysql_target, DB_HOST="mysql-target", MIGRATE_FORCE="true", MIGRATE_REPLACE_COPY="true")
 
 
@@ -283,9 +283,10 @@ def test_mariadb_attachments_copied(first_copy):
     assert f"attachments copied from /mnt/source to {ATTACHMENTS}: 3 files" in first_copy[1]
 
 
-def test_mariadb_non_empty_target_refused(first_copy, mysql_target):
+def test_mariadb_rerun_keeps_the_jobs_copy(first_copy, mysql_target):
+    # A rerun or a configure retry after the copy succeeds and changes nothing
     rc, out = migrate(mysql_target, DB_HOST="mysql-target")
-    assert rc == 3, out[-3000:]
+    assert rc == 0 and "holds the copy this Job made" in out and "dropped" not in out, out[-3000:]
 
 
 def test_mariadb_identity_mismatch_refused(identity_mismatch):
@@ -296,9 +297,9 @@ def test_mariadb_identity_mismatch_names_the_setting(identity_mismatch):
     assert "MISP.uuid on the source differs from MISP_UUID" in identity_mismatch[1]
 
 
-def test_mariadb_force_alone_keeps_the_jobs_copy(force_refused):
-    rc, out = force_refused
-    assert rc == 3 and "holds a copy this Job made" in out, out[-3000:]
+def test_mariadb_force_alone_keeps_the_jobs_copy(force_alone):
+    rc, out = force_alone
+    assert rc == 0 and "holds the copy this Job made" in out and "dropped" not in out, out[-3000:]
 
 
 def test_mariadb_force_replaces_the_target(forced_copy):
