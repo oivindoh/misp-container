@@ -13,7 +13,7 @@ import sys
 
 from .api import MISPClient, APIError
 from .env import env
-from .log import setup as setup_logging, get as getlog
+from .log import is_log_line, setup as setup_logging, get as getlog
 
 log = getlog("task")
 
@@ -200,9 +200,13 @@ def run_cake_task(name: str) -> int:
     prepare()
     args = CAKE_TASKS[name]
     log.info("cake %s", " ".join(args))
-    result = subprocess.run([CAKE, *args], capture_output=True, text=True)
-    for line in (result.stdout + result.stderr).splitlines():
-        if line.strip():
+    result = subprocess.run([CAKE, *args], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    for line in result.stdout.splitlines():
+        # MISP's own log lines are in the container format already; the console's
+        # plain output gets it here
+        if is_log_line(line):
+            print(line, flush=True)
+        elif line.strip():
             log.info("%s", line)
     if result.returncode != 0:
         log.error("cake %s exited %d", " ".join(args), result.returncode)

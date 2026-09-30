@@ -51,6 +51,22 @@ class TestTextFormatter:
         assert "\033[33mWARNING\033[0m" in line
 
 
+class TestIsLogLine:
+    def test_json_entry(self):
+        from misp_container.log import is_log_line
+        assert is_log_line('{"time":"t","level":"info","context":"misp","message":"m"}')
+
+    def test_text_line(self):
+        from misp_container.log import is_log_line
+        assert is_log_line("2026-09-30 08:06:18 INFO  [misp] OIDC user alice")
+
+    def test_plain_output(self):
+        from misp_container.log import is_log_line
+        assert not is_log_line("alice@example.com: valid")
+        assert not is_log_line('{"not": "an entry"}')
+        assert not is_log_line("{broken")
+
+
 class TestFormatSelection:
     def test_json_from_env(self):
         with patch.dict(os.environ, {"LOG_FORMAT": " JSON "}):

@@ -139,6 +139,17 @@ class TestCakeTasks:
         assert run.call_args[0][0][1:] == ["Server", "sendPeriodicSummaryToUsers"]
         assert rc == 0
 
+    def test_misp_log_lines_pass_through_once(self, capsys):
+        from subprocess import CompletedProcess
+        misp = '{"time":"2026-09-30T08:06:18.647Z","level":"info","context":"misp","message":"OIDC user alice"}'
+        done = CompletedProcess([], 0, stdout=f"{misp}\nalice@example.com: valid\n", stderr=None)
+        with patch("misp_container.init.prepare"), patch("misp_container.env.apply_defaults"), \
+                patch("misp_container.task.subprocess.run", return_value=done), \
+                patch.object(task.log, "info") as info:
+            task.run_cake_task("check-user-validity")
+        assert capsys.readouterr().out.splitlines() == [misp]
+        assert [c.args[1] for c in info.call_args_list[1:]] == ["alice@example.com: valid"]
+
     def test_user_validity_variants(self):
         _, _, run = self._run("check-user-validity")
         assert run.call_args[0][0][1:] == ["Admin", "checkUserValidity"]

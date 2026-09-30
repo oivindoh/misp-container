@@ -5,6 +5,7 @@ Kubernetes default) or text (the Compose default, coloured on a terminal).
 """
 
 import json
+import re
 import logging
 import os
 import sys
@@ -61,6 +62,21 @@ class TextFormatter(logging.Formatter):
             level = f"{record.levelname:<5}"
             line = line.replace(level, f"{COLOURS[record.levelname]}{level}{RESET}", 1)
         return line
+
+
+# The start of a text line: date, time, level, [context]
+TEXT_LINE = re.compile(r"^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d [A-Z]+\s+\[[^\]]+\] ")
+
+
+def is_log_line(line: str) -> bool:
+    """Whether a line is already in a container log format: a JSON entry or a text line."""
+    if line.startswith("{"):
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            return False
+        return isinstance(entry, dict) and {"time", "level", "message"} <= entry.keys()
+    return TEXT_LINE.match(line) is not None
 
 
 def log_format() -> str:

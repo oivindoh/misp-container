@@ -572,6 +572,12 @@ def test_task_check_user_validity_reports_the_admin(user_validity):
     assert ADMIN_EMAIL in user_validity[1]
 
 
+def test_task_check_user_validity_lines_are_not_nested(user_validity):
+    # MISP's own log lines pass through as they are, not inside another entry
+    nested = [line for line in user_validity[1].splitlines() if '\\"context\\":\\"misp\\"' in line]
+    assert not nested, nested[:3]
+
+
 # -- org sync ------------------------------------------------------------------------
 
 ORGS = """taxonomies:
