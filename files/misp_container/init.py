@@ -1,7 +1,8 @@
 """Per-pod preparation: tmp directories, app/Config rendering, GPG key import.
 
-Every entrypoint (configure, web, worker) calls prepare() at start. app/Config
-is a per-pod volume rendered from the image defaults, settings.yaml and env.
+Every entrypoint (configure, web, worker) calls prepare() at start. It renders
+every file of app/Config from the image defaults, settings.yaml and env: an
+emptyDir per pod in Kubernetes, a volume the containers share in Compose.
 app/files ships in the image; only app/files/{scripts/tmp,certs,terms,img/orgs}
 are volumes.
 """
@@ -105,29 +106,17 @@ def prepare_config():
     config_dst = Path(MISP_CONFIG)
     config_dst.mkdir(parents=True, exist_ok=True)
 
-    # Static CakePHP files, once per volume
+    # From this image's MISP on every start: a Compose config volume outlives an
+    # upgrade. Pods that share the volume start at once, so each file is replaced whole.
     for name, source in (("core.php", "core.default.php"), ("routes.php", "routes.php")):
-        dst = config_dst / name
-        if not dst.exists() or dst.stat().st_size == 0:
-            src = defaults / source
-            if src.exists():
-                log.info("  %s from defaults", name)
-                _copy(src, dst)
-
-    bootstrap = config_dst / "bootstrap.php"
-    if not bootstrap.exists() or bootstrap.stat().st_size == 0:
-        src = defaults / "bootstrap.default.php"
+        src = defaults / source
         if src.exists():
-            log.info("  bootstrap.php from defaults")
-            _copy(src, bootstrap)
-
-    if bootstrap.exists():
+            _replace(config_dst / name, src.read_text())
+    src = defaults / "bootstrap.default.php"
+    if src.exists():
         from .log import log_format
-        content = bootstrap.read_text()
-        rendered = render_log_block(content, log_format())
-        if rendered != content:
-            log.info("  bootstrap.php logging to stderr (%s)", log_format())
-            bootstrap.write_text(rendered)
+        _replace(config_dst / "bootstrap.php", render_log_block(src.read_text(), log_format()))
+        log.info("  core.php, routes.php and bootstrap.php from this image, logging to stderr (%s)", log_format())
 
     # Rendered on every start: env is the source of truth for these
     log.info("  config.php from settings.yaml")
@@ -137,6 +126,13 @@ def prepare_config():
     log.info("  email.php from env")
     _generate_email_config(config_dst)
     log.info("app/Config ready")
+
+
+def _replace(path: Path, text: str) -> None:
+    """Write a file whole: a reader sees the old content or the new, never part of it."""
+    partial = path.with_name(f".{path.name}.{os.getpid()}")
+    partial.write_text(text)
+    os.replace(partial, path)
 
 
 def populate_gnupg():

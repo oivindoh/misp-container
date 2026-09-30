@@ -208,21 +208,27 @@ class TestRenderLogBlock:
         from misp_container.init import render_log_block
         assert "' [misp] '" in render_log_block(self.BASE, "yaml")
 
-    def test_existing_core_php_is_kept(self, tmp_path, monkeypatch):
+    def test_files_from_an_older_image_are_replaced(self, tmp_path, monkeypatch):
         from misp_container import init as init_mod
         defaults = tmp_path / "defaults"
         defaults.mkdir()
-        (defaults / "core.default.php").write_text("<?php // new")
+        (defaults / "core.default.php").write_text("<?php // new core")
+        (defaults / "routes.php").write_text("<?php // new routes")
+        (defaults / "bootstrap.default.php").write_text("<?php // new bootstrap\n")
         config_dir = tmp_path / "Config"
         config_dir.mkdir()
-        (config_dir / "core.php").write_text("<?php // mine")
+        for name in ("core.php", "routes.php", "bootstrap.php"):
+            (config_dir / name).write_text("<?php // from the last release")
         settings = tmp_path / "settings.yaml"
         settings.write_text("settings: {}\n")
         monkeypatch.setattr(init_mod, "MISP_CONFIG", str(config_dir))
         monkeypatch.setattr("misp_container.config.CONFIG_DIR", str(tmp_path))
         with patch.dict(os.environ, {"MISP_CONFIG_DEFAULTS": str(defaults), "DB_PORT": "3306", "SMTP_PORT": "25"}):
             init_mod.prepare_config()
-        assert (config_dir / "core.php").read_text() == "<?php // mine"
+        assert (config_dir / "core.php").read_text() == "<?php // new core"
+        assert (config_dir / "routes.php").read_text() == "<?php // new routes"
+        assert (config_dir / "bootstrap.php").read_text().startswith("<?php // new bootstrap")
+        assert not [p.name for p in config_dir.iterdir() if p.name.startswith(".")]
 
 
 class TestPopulateCerts:

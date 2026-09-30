@@ -63,7 +63,8 @@ flowchart LR
 ```
 
 The `misp-container` image serves six roles. Every entrypoint first renders `app/Config`
-from `settings.yaml` and env, copies the GPG key and server certificates from their Secrets,
+from this image's MISP, `settings.yaml` and env, on every start, so a MISP upgrade reaches a
+Compose config volume too. It copies the GPG key and server certificates from their Secrets,
 then does its own job:
 
 | Role | Entrypoint | Runs as | Does |
