@@ -166,7 +166,7 @@ attachments go to that bucket.
 | Data | Where it goes |
 |------|---------------|
 | Org logos (`app/webroot/img/orgs`) and custom images (`app/webroot/img/custom`) | The attachments claim under `img/orgs` and `img/custom` (Kubernetes); the `misp-img-orgs` and `misp-img-custom` volumes (Compose) |
-| Terms, server certificates | The `misp-certs` Secret (Kubernetes, see the README); the `misp-files-terms` and `misp-files-certs` volumes (Compose) |
+| Terms, server certificates | The `misp-certs` Secret (Kubernetes, see [kubernetes.md](kubernetes.md#secrets)); the `misp-files-terms` and `misp-files-certs` volumes (Compose) |
 | GPG keyring | The `misp-gnupg` Secret from the old `private.asc` export; or `AUTOCONF_GPG=true` for a new key, re-exported to sync partners |
 | Attachments already on S3 | Nothing: point `PLUGIN_S3_*` at the same bucket, or copy them to a new one with `MIGRATE_SOURCE_S3_*` |
 

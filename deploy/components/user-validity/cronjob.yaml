@@ -3,7 +3,7 @@
 # Needs the oidc or ldap group: MISP's check refuses to run without one. The
 # check reports each user as valid or invalid and changes nothing. To disable
 # the users that the identity provider no longer backs, replace the task with
-# block-invalid-users (README, "Periodic tasks").
+# block-invalid-users (docs/kubernetes.md, "Periodic tasks").
 apiVersion: batch/v1
 kind: CronJob
 metadata:
