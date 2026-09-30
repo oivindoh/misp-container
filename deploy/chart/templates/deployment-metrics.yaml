@@ -1,0 +1,76 @@
+# Prometheus exporter on port 9191: MISP's database, the job queues in Redis and
+# the sync partners (docs/metrics.md). It reads MISP's data and never changes it.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: metrics
+  labels:
+    {{- include "misp.labels" (dict "root" . "name" "metrics") | nindent 4 }}
+    app: metrics
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: metrics
+      app.kubernetes.io/name: metrics
+  template:
+    metadata:
+      labels:
+        app: metrics
+        app.kubernetes.io/name: metrics
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9191"
+        prometheus.io/path: "/metrics"
+        {{- include "misp.checksums" . | nindent 8 }}
+    spec:
+      {{- include "misp.podSecurityContext" . | nindent 6 }}
+      {{- include "misp.podScheduling" . | nindent 6 }}
+      containers:
+        - name: metrics
+          {{- include "misp.image" . | nindent 10 }}
+          command: ["/usr/bin/tini", "--", "python3", "/entrypoint-metrics.py"]
+          ports:
+            - name: metrics
+              containerPort: 9191
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: misp-env
+          # The database credentials and the Redis password only: the exporter
+          # never needs the admin secrets or the other application secrets
+          env:
+            - name: DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: misp-db
+                  key: DB_USER
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: misp-db
+                  key: DB_PASSWORD
+            - name: MISP_REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: misp-app
+                  key: MISP_REDIS_PASSWORD
+          resources:
+            {{- toYaml .Values.metrics.resources | nindent 12 }}
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: 9191
+            failureThreshold: 30
+            periodSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 9191
+            periodSeconds: 30
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 9191
+            periodSeconds: 60
+          {{- include "misp.containerSecurityContext" . | nindent 10 }}

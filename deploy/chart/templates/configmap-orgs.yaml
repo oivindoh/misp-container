@@ -1,0 +1,11 @@
+# Declarative org config for the org-sync Job (orgSync.orgs; format:
+# deploy/orgs.yaml.example).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: misp-orgs
+  labels:
+    {{- include "misp.labels" (dict "root" . "name" "misp-orgs") | nindent 4 }}
+data:
+  orgs.yaml: |
+    {{- toYaml .Values.orgSync.orgs | nindent 4 }}

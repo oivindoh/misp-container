@@ -1,0 +1,11 @@
+MISP {{ include "misp.tag" . }} in namespace {{ .Release.Namespace }}.
+
+The configure Job configure-{{ .Release.Revision }} sets MISP up; web and worker pods start once it has:
+  kubectl -n {{ .Release.Namespace }} logs -f job/configure-{{ .Release.Revision }}
+{{- if not (or .Values.mariadb.enabled .Values.postgres.enabled) }}
+
+No database component is on: MISP connects to DB_HOST from the env value.
+{{- end }}
+{{- if not .Values.redis.enabled }}
+No redis component is on: MISP connects to MISP_REDIS_HOST from the env value.
+{{- end }}

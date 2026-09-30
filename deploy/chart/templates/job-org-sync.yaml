@@ -1,0 +1,52 @@
+# Declarative org sync: applies the misp-orgs ConfigMap (orgs.yaml) through
+# the MISP API once the web Deployment serves. Exits 0 at once when ADMIN_KEY
+# is empty or orgs.yaml has nothing to apply. Each release revision has its
+# own Job; Argo CD: a Sync hook in wave 3, recreated on every sync.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: org-sync-{{ .Release.Revision }}
+  labels:
+    {{- include "misp.labels" (dict "root" . "name" "org-sync") | nindent 4 }}
+    app: org-sync
+  annotations:
+    argocd.argoproj.io/hook: Sync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+    argocd.argoproj.io/sync-wave: "3"
+spec:
+  backoffLimit: 2
+  template:
+    metadata:
+      labels:
+        app: org-sync
+        app.kubernetes.io/name: org-sync
+    spec:
+      restartPolicy: Never
+      {{- include "misp.podSecurityContext" . | nindent 6 }}
+      {{- include "misp.podScheduling" . | nindent 6 }}
+      containers:
+        - name: org-sync
+          {{- include "misp.image" . | nindent 10 }}
+          command: ["/usr/bin/tini", "--", "python3", "/entrypoint-sync.py"]
+          env:
+            - name: SYNC_BASE_URL
+              value: http://web:8080
+          envFrom:
+            - configMapRef:
+                name: misp-env
+            - secretRef:
+                name: misp-db
+            - secretRef:
+                name: misp-admin
+          volumeMounts:
+            - name: orgs
+              mountPath: /etc/misp-docker/orgs.yaml
+              subPath: orgs.yaml
+              readOnly: true
+          resources:
+            {{- toYaml .Values.orgSync.resources | nindent 12 }}
+          {{- include "misp.containerSecurityContext" . | nindent 10 }}
+      volumes:
+        - name: orgs
+          configMap:
+            name: misp-orgs

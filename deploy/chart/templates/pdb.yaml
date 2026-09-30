@@ -1,0 +1,18 @@
+# The pdb component: one voluntary disruption at a time for web and worker.
+# maxUnavailable, not minAvailable, so a single replica never blocks a node drain.
+{{- if .Values.pdb.enabled }}
+{{- range list "web" "worker" }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ . }}
+  labels:
+    {{- include "misp.labels" (dict "root" $ "name" .) | nindent 4 }}
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ . }}
+{{- end }}
+{{- end }}

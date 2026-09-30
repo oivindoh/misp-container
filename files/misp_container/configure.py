@@ -29,8 +29,8 @@ def run_custom_script(path: str, label: str) -> None:
         log.info("custom script %s complete", label)
 
 
-# Values shipped in secrets.env and the overlay examples. A deployment that
-# still carries one of them forgot to set its secrets.
+# Values shipped in the chart's secrets-*.env files and the examples. A
+# deployment that still carries one of them forgot to set its secrets.
 PLACEHOLDER_MARKERS = ("change-me", "override-me", "REPLACE-WITH", "0000000000")
 CHECKED_SECRETS = ("SECURITY_SALT", "SECURITY_ENCRYPTION_KEY", "ADMIN_PASSWORD", "ADMIN_KEY",
                    "DB_PASSWORD", "MYSQL_PASSWORD", "MYSQL_ROOT_PASSWORD", "POSTGRES_PASSWORD", "MISP_REDIS_PASSWORD",

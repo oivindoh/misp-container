@@ -7,10 +7,10 @@
 # (tests/test_compose_files.py).
 x-test-env: &test-env
   env_file:
-    - base/base.env
-    - base/secrets-db.env
-    - base/secrets-app.env
-    - base/secrets-admin.env
+    - chart/files/base.env
+    - chart/files/secrets-db.env
+    - chart/files/secrets-app.env
+    - chart/files/secrets-admin.env
     - compose.env
     - compose-secrets.env
     - ../tests/test-compose.env
@@ -38,10 +38,10 @@ services:
   sync:
     read_only: true
     env_file:
-      - base/base.env
-      - base/secrets-db.env
-      - base/secrets-app.env
-      - base/secrets-admin.env
+      - chart/files/base.env
+      - chart/files/secrets-db.env
+      - chart/files/secrets-app.env
+      - chart/files/secrets-admin.env
       - compose.env
       - compose-secrets.env
       - ../tests/test-compose.env
@@ -50,10 +50,10 @@ services:
   metrics:
     read_only: true
     env_file:
-      - base/base.env
-      - base/secrets-db.env
-      - base/secrets-app.env
-      - base/secrets-admin.env
+      - chart/files/base.env
+      - chart/files/secrets-db.env
+      - chart/files/secrets-app.env
+      - chart/files/secrets-admin.env
       - compose.env
       - compose-secrets.env
       - ../tests/test-compose.env
@@ -68,7 +68,7 @@ services:
 
   mysql:
     env_file:
-      - base/secrets-db.env
+      - chart/files/secrets-db.env
       - compose-secrets.env
       - ../tests/test-compose-secrets.env
     environment:
@@ -84,7 +84,7 @@ services:
   # PostgreSQL for the second run of the suite (tests/e2e/test_integration.py --db-engine postgres)
   postgres:
     env_file:
-      - base/secrets-db.env
+      - chart/files/secrets-db.env
       - compose-secrets.env
       - ../tests/test-compose-secrets.env
 

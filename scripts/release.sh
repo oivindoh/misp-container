@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Prepare a release: bump MISP version (optional), update image tags, create git tag.
+# Prepare a release: bump MISP version (optional), update the image tags and the chart version, create git tag.
 #
 # Usage:
 #   scripts/release.sh              # hotfix: v2.5.37-r3 -> v2.5.37-r4
@@ -61,21 +61,9 @@ echo "Next release tag: ${NEXT_TAG}"
 echo "Image tag:        ${IMAGE_TAG}"
 echo ""
 
-# --- Update kustomization.yaml image tags (the base, and components that pin their own images) ---
-for kust in deploy/base/kustomization.yaml deploy/components/*/kustomization.yaml; do
-    if grep -q "name: ghcr.io/oivindoh/misp-container" "$kust"; then
-        echo "Updating ${kust}..."
-        sed -i '' "/name: ghcr.io\/oivindoh\/misp-container/{n;s/newTag: .*/newTag: ${IMAGE_TAG}/;}" "$kust"
-    fi
-done
-
-# --- The components that run our image carry the tag in the image itself ---
-for manifest in deploy/components/*/*.yaml; do
-    if grep -q "image: ghcr.io/oivindoh/misp-container:" "$manifest"; then
-        echo "Updating ${manifest}..."
-        sed -i '' "s|image: ghcr.io/oivindoh/misp-container:.*|image: ghcr.io/oivindoh/misp-container:${IMAGE_TAG}|" "$manifest"
-    fi
-done
+# --- The chart: its version and appVersion are the image tag ---
+echo "Updating deploy/chart/Chart.yaml..."
+sed -i '' -e "s/^version: .*/version: ${IMAGE_TAG}/" -e "s/^appVersion: .*/appVersion: \"${IMAGE_TAG}\"/" deploy/chart/Chart.yaml
 
 # --- Update docker-compose.yml image tags ---
 echo "Updating deploy/docker-compose.yml..."
@@ -106,7 +94,7 @@ if [ "$CONFIRM" != "y" ] && [ "$CONFIRM" != "Y" ]; then
 fi
 
 # --- Commit and tag ---
-git add Dockerfile deploy/base/kustomization.yaml deploy/components/*/kustomization.yaml deploy/components/*/*.yaml deploy/docker-compose.yml tests/docker-compose*.yml
+git add Dockerfile deploy/chart/Chart.yaml deploy/docker-compose.yml tests/docker-compose*.yml
 git commit -m "(chore) release ${NEXT_TAG}"
 git tag "${NEXT_TAG}"
 

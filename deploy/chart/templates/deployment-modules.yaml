@@ -1,0 +1,74 @@
+# misp-modules: the enrichment, import, export and action modules MISP calls over
+# HTTP on port 6666. A distroless image without a shell, as UID 65532.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: modules
+  labels:
+    {{- include "misp.labels" (dict "root" . "name" "modules") | nindent 4 }}
+    app: modules
+spec:
+  replicas: {{ .Values.modules.replicas }}
+  selector:
+    matchLabels:
+      app: modules
+      app.kubernetes.io/name: modules
+  template:
+    metadata:
+      labels:
+        app: modules
+        app.kubernetes.io/name: modules
+    spec:
+      securityContext:
+        runAsUser: 65532
+        runAsGroup: 65532
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      {{- include "misp.podScheduling" . | nindent 6 }}
+      # Modules call external APIs (VirusTotal, Shodan, etc.). Lower ndots avoids
+      # 3+ wasted DNS expansions per external lookup that would be dropped by
+      # Cilium L7 DNS policies.
+      dnsConfig:
+        options:
+          - name: ndots
+            value: "1"
+      containers:
+        - name: modules
+          image: {{ .Values.image.modules }}:{{ include "misp.tag" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          # An empty address listens on IPv4 and IPv6; "::" alone is IPv6 only
+          args: ["-l", ""]
+          ports:
+            - name: http
+              containerPort: 6666
+              protocol: TCP
+          env:
+            - name: MPLCONFIGDIR
+              value: /tmp/matplotlib
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+          resources:
+            {{- toYaml .Values.modules.resources | nindent 12 }}
+          startupProbe:
+            httpGet:
+              path: /healthcheck
+              port: 6666
+            failureThreshold: 30
+            periodSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /healthcheck
+              port: 6666
+            periodSeconds: 30
+          livenessProbe:
+            httpGet:
+              path: /healthcheck
+              port: 6666
+            periodSeconds: 60
+          {{- include "misp.containerSecurityContext" . | nindent 10 }}
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 100Mi

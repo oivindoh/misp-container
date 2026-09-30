@@ -10,9 +10,9 @@ usable with Compose (podman) for development.
 - Non-root (UID 1000), read-only root filesystem, all capabilities dropped, sessions in Redis.
 - Every MISP setting has an env var (`MISP.redis_host` -> `MISP_REDIS_HOST`). Curated defaults
   live in `files/misp-config/settings.yaml`; every other setting is catalogued.
-- Kubernetes: `deploy/base` is MISP itself, `deploy/components/` holds the optional parts
-  (database, cache, ingress, network policies, cronjobs for all periodic work, PDBs), and
-  `deploy/overlays/prod` shows an overlay with KSOPS secrets.
+- Kubernetes: the Helm chart `deploy/chart` renders MISP itself; components switch on the
+  optional parts (database, cache, ingress or HTTPRoute, network policies, CronJobs for all
+  periodic work, PDBs). Each release publishes it to GHCR.
 - Compose: `cd deploy && podman compose up -d`, login `admin@admin.test` /
   `ChangeMe-Str0ng!Pass#2026` at `http://localhost:8080`.
 
@@ -46,7 +46,8 @@ Default login: `admin@admin.test` / `ChangeMe-Str0ng!Pass#2026`.
 entrypoints, named volumes instead of claims, `AUTOCONF_GPG=true` (a key generated on first
 start), and no CronJobs: run periodic tasks on demand
 (see [Periodic tasks](docs/kubernetes.md#periodic-tasks)). Values come from
-`deploy/base/*.env` with `deploy/compose.env` and `deploy/compose-secrets.env` on top.
+`deploy/chart/files/*.env`, the chart's defaults, with `deploy/compose.env` and
+`deploy/compose-secrets.env` on top.
 `MISP_IMAGE_TAG` selects the image tag.
 
 ## Essential variables
@@ -68,10 +69,18 @@ Every other setting has an env var too; see [docs/configuration.md](docs/configu
 
 ## Kubernetes
 
-`deploy/base` is MISP itself. An overlay adds the components it needs (database, cache,
-ingress, network policies, CronJobs) and its own values, and Argo CD, Flux or
-`kubectl apply -k` applies it. [docs/kubernetes.md](docs/kubernetes.md) shows an overlay and
-lists the components, Secrets, storage, network policies and periodic tasks.
+The Helm chart in `deploy/chart` renders MISP itself; each component (database, cache,
+ingress or HTTPRoute, network policies, CronJobs) switches on with `<component>.enabled`.
+Each release publishes the chart as `oci://ghcr.io/oivindoh/charts/misp`; its version is the
+release tag without the `v`. Helm, Argo CD or Flux installs it:
+
+```bash
+helm install misp oci://ghcr.io/oivindoh/charts/misp --version <release> \
+    --namespace misp --create-namespace -f values.yaml
+```
+
+[docs/kubernetes.md](docs/kubernetes.md) shows the values and lists the components, Secrets,
+storage, network policies and periodic tasks.
 
 ## Documentation
 
@@ -79,7 +88,7 @@ lists the components, Secrets, storage, network policies and periodic tasks.
 |----------|--------|
 | [docs/architecture.md](docs/architecture.md) | The roles, the configure Job, startup and footprint, rollout order, scaling |
 | [docs/configuration.md](docs/configuration.md) | Settings and their env vars, database, HTTPS, authentication plugins, custom scripts, logging |
-| [docs/kubernetes.md](docs/kubernetes.md) | Overlay, components, client addresses, Secrets, storage, network policies, periodic tasks |
+| [docs/kubernetes.md](docs/kubernetes.md) | Install, values, components, client addresses, Secrets, storage, network policies, periodic tasks |
 | [docs/org-sync.md](docs/org-sync.md) | Organisations, users, servers, tags and taxonomies from a YAML file |
 | [docs/metrics.md](docs/metrics.md) | The Prometheus metrics and example alerts |
 | [docs/migration.md](docs/migration.md) | Copying an existing MISP database and its attachments into a deployment |

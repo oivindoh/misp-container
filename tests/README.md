@@ -2,7 +2,7 @@
 
 ## TL;DR
 
-Unit tests on the Python library, an upstream guard that checks the MISP in the image against what this repository patches or depends on, and three stack suites in pytest (`tests/e2e/`): an integration suite on one Compose stack, a hub-spoke sync suite on three instances, and a migration suite that copies a seeded instance onto MariaDB and PostgreSQL. A smoke test checks any live MISP through its API. Two Kubernetes checks cover the Kustomize base: every render validated against the schemas, and the base applied to a kind cluster with the smoke test.
+Unit tests on the Python library, an upstream guard that checks the MISP in the image against what this repository patches or depends on, and three stack suites in pytest (`tests/e2e/`): an integration suite on one Compose stack, a hub-spoke sync suite on three instances, and a migration suite that copies a seeded instance onto MariaDB and PostgreSQL. A smoke test checks any live MISP through its API. Two Kubernetes checks cover the Helm chart: every render validated against the schemas, and the chart installed and upgraded on a kind cluster with the smoke test.
 
 ```bash
 mise run test                # unit tests (~0.2s)
@@ -10,11 +10,11 @@ mise run test-upstream       # the upstream guard in the image (~5s)
 mise run test-integration    # the upstream guard, then single-instance integration tests (~2min)
 mise run test-integration -- --db-engine postgres   # the same on PostgreSQL
 mise run test-sync           # hub-spoke sync test with 3 instances (~2min)
-mise run test-migration      # migrate Job: MariaDB to MariaDB, MariaDB to PostgreSQL (~3min)
+mise run test-migration      # the migration: MariaDB to MariaDB, MariaDB to PostgreSQL (~3min)
 mise run smoketest https://misp.example.com   # a live MISP; asks for an API key
 mise run test-all            # every suite
-mise run test-kustomize      # render the base with each component, validate against the schemas (~10s)
-mise run test-kind           # the base on a kind cluster, then the smoke test (build the images first)
+mise run test-chart          # helm lint, render the chart with each component, validate against the schemas (~10s)
+mise run test-kind           # the chart on a kind cluster: install, smoke test, upgrade (build the images first)
 ```
 
 The stack suites build the images with compose, start full MISP stacks, and tear them down. Pass `-- --skip-build` to reuse existing images and `-- --keep` to leave the stack up.
@@ -98,27 +98,32 @@ The full MISP stack in Compose, checked feature by feature.
 - `docker-compose.postgres.yml`, `postgres.env` -- second overlay for `--db-engine postgres`: points every MISP container at the postgres service
 - `dex.yaml` -- the OIDC provider's static client and user
 - `test-compose.env` -- test env overrides (BASE_URL, ADMIN_EMAIL, etc.)
-- `test-compose-secrets.env` -- test secrets (passwords, Redis key), layered over `deploy/base/secrets-*.env`
+- `test-compose-secrets.env` -- test secrets (passwords, Redis key), layered over `deploy/chart/files/secrets-*.env`
 - `garage.toml` -- Garage S3 config for attachment testing
 
 Run with: `mise run test-integration`
 
 ## Kubernetes checks
 
-**Render check** (`scripts/check-kustomize.sh`): renders the base alone, with each component,
-and with every component, and validates each render with `kubeconform -strict` against the
-Kubernetes schemas and, for the Cilium policies, the CRD catalog. It needs `kustomize` and
-`kubeconform` (`mise install` in the repository). CI job: `kustomize`.
+**Render check** (`scripts/check-chart.sh`): runs `helm lint --strict`, renders the chart with
+the default values, with each component on, with every component on, and with supplied
+Secrets, attachments in S3 and a workflow CronJob. It validates each render with
+`kubeconform -strict` against the Kubernetes schemas and, for the Cilium policies and the
+HTTPRoute, the CRD catalog. It needs `helm` and `kubeconform` (`mise install` in the
+repository). CI job: `chart`. The unit tests (`test_chart.py`) check what the renders hold.
 
 **kind test** (`tests/run-kind-test.sh`): creates a kind cluster, loads the three images
-under the tag `kind`, applies the overlay `tests/kind`, waits for the configure Job and the
-Deployments, and runs the smoke test (`e2e/test_smoke.py`) through a port-forward on 38080. On a failure it
-prints the pods, the events and the logs. `--keep` leaves the cluster running. CI job: `kind`.
+under the tag `kind`, installs the chart with `tests/kind/values.yaml`, waits for the
+configure Job and the Deployments, and runs the smoke test (`e2e/test_smoke.py`) through a
+port-forward on 38080. It then upgrades the release with a changed value, checks that the
+upgrade ran `configure-2`, removed `configure-1` and rolled the web pods, and runs the smoke
+test again. On a failure it prints the pods, the events and the logs. `--keep` leaves the
+cluster running. CI job: `kind`.
 
-| Overlay setting | Why |
-|-----------------|-----|
+| Value | Why |
+|-------|-----|
 | The `mariadb` and `redis` components, namespace `misp` | The smallest deployment that runs |
-| Test values for `misp-db`, `misp-app`, `misp-admin`, `MISP_UUID` | The configure Job refuses the base's placeholders |
+| Test values for `misp-db`, `misp-app`, `misp-admin`, `MISP_UUID` | The configure Job refuses the chart's placeholders |
 | A ReadWriteOnce attachments claim | kind's local-path storage offers no ReadWriteMany |
 
 The images must exist locally as `ghcr.io/oivindoh/misp-container{,-caddy,-modules}:${MISP_IMAGE_TAG:-2.5.37}`.
@@ -237,11 +242,11 @@ GitHub Actions on every push to master and every PR:
 | `integration-postgres` | The same on PostgreSQL, in parallel |
 | `hub-spoke` | The sync suite, in parallel with `integration` |
 | `migration` | The migration suite (pytest), in parallel; uploads the JUnit report and, after a failure, the compose logs |
-| `kustomize` | Every Kustomize render validated against the schemas |
-| `kind` | The base on a kind cluster, then the smoke test |
+| `chart` | `helm lint` and every chart render validated against the schemas |
+| `kind` | The chart on a kind cluster: install, smoke test, upgrade, smoke test |
 | `scan` | Trivy on the three images |
-| `release` | On a tag: push the images and create the GitHub Release, after every other job |
+| `release` | On a tag: push the images and the chart, and create the GitHub Release, after every other job |
 
 ## Environment
 
-All tests require podman with a compose provider (`podman compose`). Set `COMPOSE_CMD` and `CONTAINER_CMD` to use another runner, as CI does with `docker compose` and `docker`. Unit tests additionally need Python 3.13 + uv (managed by mise). The `mise.toml` auto-creates a venv on `cd` into the repo.
+All tests require podman with a compose provider (`podman compose`). Set `COMPOSE_CMD` and `CONTAINER_CMD` to use another runner, as CI does with `docker compose` and `docker`. Unit tests also need Python 3.13, uv and helm, which mise installs. The `mise.toml` auto-creates a venv on `cd` into the repo.

@@ -1,0 +1,224 @@
+# Values of the misp chart. The comment above each top-level key describes it;
+# docs/kubernetes.md and AGENTS.md take their tables from these comments. A key
+# with enabled: false is a component: an optional part that a release switches on.
+
+# The three images, all with one tag. An empty tag is the chart's appVersion.
+image:
+  misp: ghcr.io/oivindoh/misp-container
+  caddy: ghcr.io/oivindoh/misp-container-caddy
+  modules: ghcr.io/oivindoh/misp-container-modules
+  tag: ""
+  pullPolicy: IfNotPresent
+
+# Secrets with the registry credentials for the images, by name.
+imagePullSecrets: []
+
+# Node selection for every pod of the release.
+nodeSelector: {}
+
+# Tolerations for every pod of the release.
+tolerations: []
+
+# Affinity for every pod of the release.
+affinity: {}
+
+# The misp-env ConfigMap: these entries on top of files/base.env. Every MISP pod reads it.
+env: {}
+  # MISP_BASEURL: https://misp.example.com
+  # ADMIN_EMAIL: admin@example.com
+
+# The misp-db, misp-app and misp-admin Secrets: these entries on top of files/secrets-*.env,
+# whose placeholders the configure Job refuses. With create: false the chart renders none of
+# them: supply Secrets with the same names and keys (SOPS, External Secrets, Sealed Secrets).
+secrets:
+  create: true
+  db: {}
+  app: {}
+  admin: {}
+
+# The configure Job: schema, settings, admin user, GPG and auth, on every install and upgrade.
+configure:
+  resources:
+    requests: {cpu: 100m, memory: 512Mi}
+    limits: {cpu: 2000m, memory: 2Gi}
+
+# MISP's web tier: PHP-FPM and the caddy sidecar in each pod. Replicas scale freely.
+web:
+  replicas: 1
+  resources:
+    phpFpm:
+      requests: {cpu: 100m, memory: 256Mi}
+      limits: {cpu: 2000m, memory: 4Gi}
+    caddy:
+      requests: {cpu: 10m, memory: 32Mi}
+      limits: {cpu: 500m, memory: 128Mi}
+
+# The background workers. Replicas scale freely; the web pods reach supervisord on TCP 9001.
+worker:
+  replicas: 1
+  resources:
+    requests: {cpu: 10m, memory: 512Mi}
+    limits: {cpu: 1000m, memory: 2Gi}
+
+# The Prometheus exporter (docs/metrics.md).
+metrics:
+  resources:
+    requests: {cpu: 5m, memory: 32Mi}
+    limits: {cpu: 100m, memory: 128Mi}
+
+# misp-modules: the enrichment, import, export and action modules.
+modules:
+  replicas: 1
+  resources:
+    requests: {cpu: 10m, memory: 256Mi}
+    limits: {cpu: 1000m, memory: 1Gi}
+
+# The org-sync Job applies orgs, the content of orgs.yaml (deploy/orgs.yaml.example), through
+# the API after each install and upgrade. It exits at once when ADMIN_KEY is empty.
+orgSync:
+  orgs:
+    teams: []
+  resources:
+    requests: {cpu: 10m, memory: 64Mi}
+    limits: {cpu: 500m, memory: 256Mi}
+
+# Attachments, org logos and custom images on the claim attachments. Web and worker pods on
+# different nodes write there, so the storage class must offer ReadWriteMany. For attachments in
+# S3, set PLUGIN_S3_BUCKET_NAME in env and claim: false; org logos and custom images then stay
+# in each pod.
+attachments:
+  claim: true
+  size: 20Gi
+  accessMode: ReadWriteMany
+  storageClass: ""
+
+# Single-node MariaDB on a ReadWriteOnce claim. Leave it off for an external database (DB_HOST
+# in env).
+mariadb:
+  enabled: false
+  image: docker.io/library/mariadb:11.8.6@sha256:78a5047d3ba33975f183f183c2464cc7f1eab13ec8667e57cc9a5821d6da7577
+  size: 20Gi
+  storageClass: ""
+  args:
+    - --character-set-server=utf8mb4
+    - --collation-server=utf8mb4_unicode_ci
+    - --max-allowed-packet=1G
+    - --innodb-buffer-pool-size=2400M
+    - --innodb-read-io-threads=16
+  resources:
+    requests: {cpu: 200m, memory: 2Gi}
+    limits: {cpu: 4000m, memory: 8Gi}
+
+# Single-node PostgreSQL on a ReadWriteOnce claim, as the alternative to mariadb. It sets
+# DB_ENGINE, DB_HOST and DB_PORT in misp-env. Leave it off for an external PostgreSQL (StackGres
+# and the like).
+postgres:
+  enabled: false
+  image: docker.io/library/postgres:17
+  size: 20Gi
+  storageClass: ""
+  args: ["-c", "shared_buffers=512MB"]
+  resources:
+    requests: {cpu: 200m, memory: 1Gi}
+    limits: {cpu: 4000m, memory: 4Gi}
+
+# Single Redis without persistence: sessions and queued jobs do not survive a restart. Leave it
+# off for an external Redis (MISP_REDIS_HOST in env).
+redis:
+  enabled: false
+  image: docker.io/library/redis:8.6.3-trixie@sha256:0c341492924cad6f5483f9133e43bd6c51ecdecbcadfac5b51657393b6a7936c
+  resources:
+    requests: {cpu: 10m, memory: 64Mi}
+    limits: {cpu: 1000m, memory: 384Mi}
+
+# An Ingress to the web Service. The default annotation makes the haproxy ingress replace
+# X-Forwarded-For with the address it sees (docs/kubernetes.md, Client addresses).
+ingress:
+  enabled: false
+  className: haproxy
+  host: misp.example.com
+  tlsSecret: misp-tls
+  annotations:
+    haproxy.org/request-set-header: "X-Forwarded-For %[src]"
+
+# An HTTPRoute for a Gateway API implementation, in place of the ingress. The Gateway must
+# allow routes from this namespace; set TRUSTED_PROXY_CIDR in env to its proxy pods.
+httpRoute:
+  enabled: false
+  parentRefs:
+    - name: gateway
+      namespace: gateway-system
+  hostnames:
+    - misp.example.com
+
+# CiliumNetworkPolicies for every pod: the paths MISP needs, DNS, HTTPS out and SMTP out.
+# ingressNamespace holds the ingress or Gateway proxies, monitoringNamespace Prometheus.
+ciliumNetworkPolicy:
+  enabled: false
+  ingressNamespace: haproxy-controller
+  monitoringNamespace: monitoring
+
+# PodDisruptionBudgets for web and worker (maxUnavailable: 1).
+pdb:
+  enabled: false
+
+# The periodic tasks as CronJobs: tasks maps a task to its schedule, workflows a workflow ID to
+# its schedule. API tasks need ADMIN_KEY in secrets.admin and dispatch nothing while maxQueued
+# jobs or more wait.
+cronjobs:
+  enabled: false
+  maxQueued: 200
+  tasks:
+    cache-feeds: "20 2 * * *"
+    fetch-feeds: "30 2 * * *"
+    cache-servers: "40 2 * * *"
+    pull-servers: "*/5 * * * *"
+    push-servers: "*/15 * * * *"
+    update-galaxies: "0 3 * * *"
+    update-taxonomies: "10 3 * * *"
+    update-warninglists: "20 3 * * *"
+    update-noticelists: "30 3 * * *"
+    update-object-templates: "40 3 * * *"
+    push-taxii: "7 * * * *"
+    sharing-group-blueprints: "37 * * * *"
+    periodic-summary: "0 6 * * *"
+  workflows: {}
+  resources:
+    api:
+      requests: {cpu: 5m, memory: 32Mi}
+      limits: {cpu: 200m, memory: 128Mi}
+    console:
+      requests: {cpu: 50m, memory: 256Mi}
+      limits: {cpu: 1000m, memory: 1Gi}
+
+# A daily check of every account against the OIDC or LDAP provider, through MISP's console.
+# Needs the oidc or ldap group. check-user-validity reports; block-invalid-users disables the
+# accounts the provider no longer backs.
+userValidity:
+  enabled: false
+  schedule: "30 5 * * *"
+  task: check-user-validity
+
+# Nightly deletes of old rows in jobs, logs and audit_logs (HOUSEKEEPING_<TABLE>_DAYS in env,
+# defaults 2, 30 and 90).
+housekeeping:
+  enabled: false
+  schedules:
+    jobs: "0 2 * * *"
+    logs: "0 3 * * *"
+    audit_logs: "10 3 * * *"
+  resources:
+    requests: {cpu: 20m, memory: 64Mi}
+    limits: {cpu: 500m, memory: 256Mi}
+
+# A copy of an existing MySQL or MariaDB MISP into the database, before the configure Job runs
+# (docs/migration.md). secret: entries on top of files/secrets-migrate.env for the misp-migrate
+# Secret. volumes and volumeMounts: the source's attachments directory.
+migrate:
+  enabled: false
+  secret: {}
+  volumes: []
+  volumeMounts: []
+  resources:
+    requests: {cpu: 100m, memory: 256Mi}
+    limits: {cpu: 2000m, memory: 1Gi}

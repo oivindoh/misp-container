@@ -5,8 +5,9 @@ Usage: generate_docs.py [--check]
 
 A region sits between `<!-- generated: <name> -->` and `<!-- end generated -->`
 in README.md, DEVELOPING.md, tests/README.md or docs/*.md; GENERATORS names what
-fills it. --check exits 1 when a region differs from what the code gives;
-tests/test_docs.py runs it in the unit tests. Edit the code, not the region.
+fills it. The Kubernetes facts come from the rendered chart (chart.py). --check
+exits 1 when a region differs from what the code gives; tests/test_docs.py runs
+it in the unit tests. Edit the code, not the region.
 """
 
 from __future__ import annotations
@@ -15,13 +16,12 @@ import re
 import sys
 from pathlib import Path
 
-import yaml
-
 SCRIPTS = Path(__file__).resolve().parent
 REPO = SCRIPTS.parent
 sys.path.insert(0, str(REPO / "files"))
 sys.path.insert(0, str(SCRIPTS))
 
+import chart  # noqa: E402
 from generate_agents_md import table  # noqa: E402
 
 DOCS = [REPO / "README.md", REPO / "DEVELOPING.md", REPO / "tests" / "README.md", *sorted((REPO / "docs").glob("*.md"))]
@@ -29,17 +29,15 @@ REGION = re.compile(r"(<!-- generated: (?P<name>[\w-]+) -->\n)(?P<body>.*?)(<!--
 
 
 def task_cronjobs() -> dict[str, list[tuple[str, str]]]:
-    """{task: [(schedule, component)]} of the CronJobs in deploy/components that run the task runner."""
+    """{task: [(schedule, component)]} of the chart's CronJobs that run the task runner, every component on."""
     found: dict[str, list[tuple[str, str]]] = {}
-    for path in sorted((REPO / "deploy/components").glob("*/*.yaml")):
-        for doc in yaml.safe_load_all(path.read_text()):
-            if not isinstance(doc, dict) or doc.get("kind") != "CronJob":
-                continue
-            container = doc["spec"]["jobTemplate"]["spec"]["template"]["spec"]["containers"][0]
-            command = [*container.get("command", []), *container.get("args", [])]
-            if "misp_container.task" in command:
-                name = command[command.index("misp_container.task") + 1]
-                found.setdefault(name, []).append((doc["spec"]["schedule"], path.parent.name))
+    for template, doc in chart.render(every_component=True):
+        if doc["kind"] != "CronJob":
+            continue
+        command = chart.pod_spec(doc)["containers"][0]["command"]
+        if "misp_container.task" in command:
+            name = command[command.index("misp_container.task") + 1]
+            found.setdefault(name, []).append((doc["spec"]["schedule"], chart.template_component(template)))
     return found
 
 
@@ -54,61 +52,66 @@ def periodic_tasks() -> str:
     return table(("Task", "Does", "Kind", "CronJob schedule (component)"), rows)
 
 
-def pod_spec(doc: dict) -> dict | None:
-    spec = doc.get("spec", {})
-    if doc.get("kind") == "CronJob":
-        spec = spec.get("jobTemplate", {}).get("spec", {})
-    return spec.get("template", {}).get("spec") if doc.get("kind") in ("Deployment", "StatefulSet", "Job", "CronJob") else None
-
-
 def secret_users() -> dict[str, dict[str, set[str]]]:
     """{Secret: {user: keys}}: which workloads read a Secret, all of it (empty set) or some keys.
 
-    A base workload is named for itself, a component's workloads for the component.
+    A workload is named for its component, or for itself outside one; an init
+    container for itself.
     """
     users: dict[str, dict[str, set[str]]] = {}
-    paths = [*sorted((REPO / "deploy/base").glob("*.yaml")), *sorted((REPO / "deploy/components").glob("*/*.yaml"))]
-    for path in paths:
-        if path.name == "kustomization.yaml":
+    for template, doc in chart.render(every_component=True):
+        spec = chart.pod_spec(doc)
+        if not spec:
             continue
-        for doc in yaml.safe_load_all(path.read_text()):
-            spec = pod_spec(doc) if isinstance(doc, dict) else None
-            if not spec:
-                continue
-            user = doc["metadata"]["name"] if path.parent.name == "base" else path.parent.name
-            for c in [*spec.get("initContainers", []), *spec.get("containers", [])]:
-                for source in c.get("envFrom", []):
-                    if "secretRef" in source:
-                        users.setdefault(source["secretRef"]["name"], {})[user] = set()
-                for var in c.get("env", []):
-                    ref = var.get("valueFrom", {}).get("secretKeyRef")
-                    if ref:
-                        keys = users.setdefault(ref["name"], {}).setdefault(user, {ref["key"]})
-                        if keys:
-                            keys.add(ref["key"])
+        owner = chart.template_component(template) or re.sub(r"-\d+$", "", doc["metadata"]["name"])
+        containers = [(c["name"], c) for c in spec.get("initContainers", [])] + [(owner, c) for c in spec["containers"]]
+        for user, c in containers:
+            for source in c.get("envFrom", []):
+                if "secretRef" in source:
+                    users.setdefault(source["secretRef"]["name"], {})[user] = set()
+            for var in c.get("env", []):
+                ref = var.get("valueFrom", {}).get("secretKeyRef")
+                if ref:
+                    keys = users.setdefault(ref["name"], {}).setdefault(user, {ref["key"]})
+                    if keys:
+                        keys.add(ref["key"])
     return users
 
 
 def secrets() -> str:
     users = secret_users()
     rows = []
-    for kustomization in [REPO / "deploy/base/kustomization.yaml", *sorted((REPO / "deploy/components").glob("*/kustomization.yaml"))]:
-        for generator in yaml.safe_load(kustomization.read_text()).get("secretGenerator", []):
-            for env_file in generator.get("envs", []):
-                path = kustomization.parent / env_file
-                keys = [line.split("=", 1)[0] for line in path.read_text().splitlines()
-                        if "=" in line and not line.lstrip().startswith("#")]
-                readers = []
-                for user, subset in sorted(users.get(generator["name"], {}).items()):
-                    readers.append(f"{user} ({', '.join(f'`{k}`' for k in sorted(subset))})" if subset else user)
-                rows.append((f"`{generator['name']}`", f"`{path.relative_to(REPO)}`",
-                             ", ".join(f"`{k}`" for k in keys), ", ".join(readers)))
+    for path in sorted((chart.CHART / "files").glob("secrets-*.env"), key=lambda p: SECRET_ORDER.index(p.name)):
+        name = "misp-" + path.stem.removeprefix("secrets-")
+        keys = [line.split("=", 1)[0] for line in path.read_text().splitlines()
+                if "=" in line and not line.lstrip().startswith("#")]
+        readers = []
+        for user, subset in sorted(users.get(name, {}).items()):
+            readers.append(f"{user} ({', '.join(f'`{k}`' for k in sorted(subset))})" if subset else user)
+        rows.append((f"`{name}`", f"`{path.relative_to(REPO)}`", ", ".join(f"`{k}`" for k in keys), ", ".join(readers)))
     return table(("Secret", "File", "Keys", "Read by"), rows)
 
 
+# The order of the Secrets table: the three every release has, then the migration's
+SECRET_ORDER = ["secrets-db.env", "secrets-app.env", "secrets-admin.env", "secrets-migrate.env"]
+
+
+def components() -> str:
+    comments = chart.value_comments()
+    return table(("Component", "Adds"), [(f"`{key}`", comments.get(key, "")) for key in chart.components()])
+
+
+def values() -> str:
+    comments = chart.value_comments()
+    parts = chart.components()
+    return table(("Value", "Is"), [(f"`{key}`", text) for key, text in comments.items() if key not in parts])
+
+
 GENERATORS = {
+    "components": components,
     "periodic-tasks": periodic_tasks,
     "secrets": secrets,
+    "values": values,
 }
 
 

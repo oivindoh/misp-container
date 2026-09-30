@@ -1,0 +1,21 @@
+# misp-env: files/base.env, then what the postgres component implies, then the
+# env value. Every MISP pod reads it; its checksum rolls the Deployments.
+{{- $env := include "misp.envFile" (list . "files/base.env") | fromJson }}
+{{- if .Values.postgres.enabled }}
+{{- $_ := set $env "DB_ENGINE" "postgres" }}
+{{- $_ := set $env "DB_HOST" "postgres" }}
+{{- $_ := set $env "DB_PORT" "5432" }}
+{{- end }}
+{{- range $key, $value := .Values.env }}
+{{- $_ := set $env $key (toString $value) }}
+{{- end }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: misp-env
+  labels:
+    {{- include "misp.labels" (dict "root" . "name" "misp-env") | nindent 4 }}
+data:
+  {{- range $key := keys $env | sortAlpha }}
+  {{ $key }}: {{ index $env $key | quote }}
+  {{- end }}

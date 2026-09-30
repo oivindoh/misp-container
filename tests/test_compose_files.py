@@ -54,7 +54,7 @@ def test_overlay_repeats_the_env_files_it_overrides(overlay):
 
 def test_the_check_finds_a_list_that_drops_a_file(tmp_path):
     overlay = tmp_path / "docker-compose.broken.yml"
-    overlay.write_text("services:\n  web:\n    env_file:\n      - base/base.env\n      - ../tests/test-compose.env\n")
+    overlay.write_text("services:\n  web:\n    env_file:\n      - chart/files/base.env\n      - ../tests/test-compose.env\n")
     problems = broken_prefixes(overlay)
     assert problems and "service web" in problems[0] and "deploy/docker-compose.yml" in problems[0]
 

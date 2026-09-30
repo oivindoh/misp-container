@@ -20,6 +20,7 @@ REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "files"))
 sys.path.insert(0, str(REPO / "scripts"))
 
+import chart  # noqa: E402
 from misp_container import env as envmod, task  # noqa: E402
 from misp_container.config import derive_env_var  # noqa: E402
 
@@ -120,8 +121,13 @@ def test_every_repository_path_a_doc_names_exists():
 FILE_TOKEN = re.compile(r"([\w.-]+\.(?:py|sh|yaml|yml|env|toml))")
 
 
+def container_files() -> set[str]:
+    """Names of the files the containers read that base.env names (ORG_CONFIG_FILE: orgs.yaml)."""
+    return set(re.findall(r"=/\S*/([\w.-]+\.yaml)$", (REPO / "deploy/chart/files/base.env").read_text(), re.M))
+
+
 def test_every_file_name_a_doc_names_exists():
-    names = {p.name for p in repo_files()}
+    names = {p.name for p in repo_files()} | container_files()
     missing = sorted({(rel(doc), token) for doc, token in mentions(FILE_TOKEN) if token not in names})
     assert not missing, "docs name files that the repository does not have:\n" + \
         "\n".join(f"  {doc}: {name}" for doc, name in missing)
@@ -151,9 +157,32 @@ def table_names(doc: Path, header: str) -> set[str]:
 
 def test_the_components_table_lists_every_component():
     listed = table_names(REPO / "docs/kubernetes.md", "| Component |")
-    present = {p.name for p in (REPO / "deploy/components").iterdir() if p.is_dir()}
-    assert listed == present, (f"docs/kubernetes.md lists {sorted(listed - present)} that deploy/components "
+    present = set(chart.components())
+    assert listed == present, (f"docs/kubernetes.md lists {sorted(listed - present)} that deploy/chart/values.yaml "
                                f"lacks, and lacks {sorted(present - listed)}")
+
+
+# A backticked dotted name whose first part is a top-level value: a chart value
+VALUE_TOKEN = re.compile(r"([a-z][A-Za-z]*)((?:\.[\w-]+)+)(?:=\S*)?")
+FILE_SUFFIX = re.compile(r"\.(md|py|ya?ml|env|sh|json|php|log|tpl|txt|conf|pem|asc|ini|tgz)$")
+
+
+def test_every_chart_value_a_doc_names_exists():
+    values = yaml.safe_load((chart.CHART / "values.yaml").read_text())
+    unknown = []
+    for doc, token in mentions(VALUE_TOKEN):
+        top, rest = VALUE_TOKEN.fullmatch(token).group(1, 2)
+        if top not in values or FILE_SUFFIX.search(token.split("=")[0]):
+            continue
+        node = values[top]
+        for part in rest.split(".")[1:]:
+            if isinstance(node, dict) and not node:
+                break  # a free-form map: env, secrets.db, cronjobs.workflows and the like
+            if not isinstance(node, dict) or part not in node:
+                unknown.append(f"{rel(doc)}: `{token}`")
+                break
+            node = node[part]
+    assert not unknown, "docs name chart values that deploy/chart/values.yaml lacks:\n" + "\n".join(unknown)
 
 
 def test_the_periodic_tasks_table_lists_every_task():
@@ -226,24 +255,19 @@ def test_every_generator_fills_a_region():
 
 # -- values written into sentences ---------------------------------------------------
 
-def manifest(path: str) -> list[dict]:
-    return [d for d in yaml.safe_load_all((REPO / path).read_text()) if isinstance(d, dict)]
-
-
 def binary(quantity: str) -> str:
     """256Mi -> 256 MiB, 4Gi -> 4 GiB."""
     return re.sub(r"^(\d+)(Mi|Gi)$", r"\1 \2B", quantity)
 
 
-def container(path: str, name: str) -> dict:
-    spec = manifest(path)[0]["spec"]["template"]["spec"]
-    return next(c for c in spec["containers"] if c["name"] == name)
+def container(kind: str, name: str, container_name: str) -> dict:
+    return next(c for c in chart.pod_spec(chart.find(kind, name))["containers"] if c["name"] == container_name)
 
 
 def test_the_architecture_doc_quotes_the_requests_and_limits():
     text = " ".join((REPO / "docs/architecture.md").read_text().split())
-    web, worker = container("deploy/base/deployment-web.yaml", "php-fpm"), container("deploy/base/deployment-worker.yaml", "worker")
-    modules = container("deploy/base/deployment-modules.yaml", "modules")
+    web, worker = container("Deployment", "web", "php-fpm"), container("Deployment", "worker", "worker")
+    modules = container("Deployment", "modules", "modules")
     requests = [binary(c["resources"]["requests"]["memory"]) for c in (web, worker, modules)]
     limits = [binary(c["resources"]["limits"]["memory"]) for c in (web, worker, modules)]
     expected = (f"request {requests[0]} for PHP-FPM in a web pod, {requests[1]} for a worker pod and "
@@ -251,33 +275,29 @@ def test_the_architecture_doc_quotes_the_requests_and_limits():
     assert expected in text, f"docs/architecture.md should say: {expected}"
 
 
-def wave(path: str) -> str:
-    return manifest(path)[0]["metadata"]["annotations"]["argocd.argoproj.io/sync-wave"]
+def wave(kind: str, name: str) -> str:
+    return chart.find(kind, name)["metadata"]["annotations"]["argocd.argoproj.io/sync-wave"]
 
 
 def test_the_docs_quote_the_sync_waves():
     text = " ".join((REPO / "docs/architecture.md").read_text().split())
-    configure, deployments = wave("deploy/base/job-configure.yaml"), wave("deploy/base/deployment-web.yaml")
-    org_sync, migrate = wave("deploy/base/job-org-sync.yaml"), wave("deploy/components/migrate/job-migrate.yaml")
+    configure, deployments = wave("Job", "configure"), wave("Deployment", "web")
+    org_sync = wave("Job", "org-sync")
     expected = f"`configure` in wave {configure}, the Deployments in wave {deployments}, `org-sync` in wave {org_sync}"
     assert expected in text, f"docs/architecture.md should say: {expected}"
-    migration = " ".join((REPO / "docs/migration.md").read_text().split())
-    for expected in (f"sync wave {migrate}", f"The Job runs in wave {migrate}"):
-        assert expected in migration, f"docs/migration.md should say: {expected}"
 
 
 def test_the_storage_sizes():
     text = " ".join((REPO / "docs/kubernetes.md").read_text().split())
-    claim = manifest("deploy/base/pvc-attachments.yaml")[0]["spec"]
+    claim = chart.find("PersistentVolumeClaim", "attachments")["spec"]
     size, mode = claim["resources"]["requests"]["storage"], claim["accessModes"][0]
-    expected = f"PVC `attachments`, {size} {mode}"
+    expected = f"claim `attachments`, {size} {mode}"
     assert expected in text, f"docs/kubernetes.md should say: {expected}"
-    for component in ("mariadb", "postgres"):
-        statefulset = next(d for d in manifest(f"deploy/components/{component}/{component}.yaml") if d["kind"] == "StatefulSet")
+    for component, name in (("mariadb", "mysql"), ("postgres", "postgres")):
+        statefulset = chart.find("StatefulSet", name, every_component=True)
         db = statefulset["spec"]["volumeClaimTemplates"][0]["spec"]
-        for expected in (f"StatefulSet with a {db['resources']['requests']['storage']} PVC",
-                         f"StatefulSet, {db['resources']['requests']['storage']} {db['accessModes'][0]} PVC"):
-            assert expected in text, f"docs/kubernetes.md should say, for {component}: {expected}"
+        expected = f"StatefulSet, {db['resources']['requests']['storage']} {db['accessModes'][0]} claim"
+        assert expected in text, f"docs/kubernetes.md should say, for {component}: {expected}"
 
 
 def test_the_task_runner_defaults():
@@ -291,7 +311,7 @@ def test_the_task_runner_defaults():
 
 
 def test_the_mail_ports_of_the_network_policy():
-    policies = manifest("deploy/components/netpol-cilium/networkpolicy.yaml")
+    policies = [d for d in chart.objects(every_component=True) if d["kind"] == "CiliumNetworkPolicy"]
     ports = sorted({int(p["port"]) for d in policies for rule in d["spec"].get("egress", [])
                     for to in rule.get("toPorts", []) for p in to.get("ports", []) if int(p["port"]) in (25, 465, 587, 2525)})
     text = " ".join((REPO / "docs/kubernetes.md").read_text().split())
@@ -309,17 +329,17 @@ def test_the_logging_doc_names_every_relayed_file():
 
 
 def test_the_log_format_defaults():
-    base = (REPO / "deploy/base/base.env").read_text()
+    base = (chart.CHART / "files/base.env").read_text()
     compose = (REPO / "deploy/compose.env").read_text()
     base_default = re.search(r"^LOG_FORMAT=(\w+)", base, re.M).group(1)
     compose_default = re.search(r"^LOG_FORMAT=(\w+)", compose, re.M).group(1)
     text = " ".join((REPO / "docs/configuration.md").read_text().split())
-    for expected in (f"`{base_default}` (the base default", f"`{compose_default}` (the Compose default"):
+    for expected in (f"`{base_default}` (the `base.env` default", f"`{compose_default}` (the Compose default"):
         assert expected in text, f"docs/configuration.md should say: {expected}"
 
 
 def test_the_metrics_port():
-    port = manifest("deploy/base/service-metrics.yaml")[0]["spec"]["ports"][0]["port"]
+    port = chart.find("Service", "metrics")["spec"]["ports"][0]["port"]
     assert f"on port {port}" in " ".join((REPO / "docs/metrics.md").read_text().split()), \
         f"docs/metrics.md should say: on port {port}"
 

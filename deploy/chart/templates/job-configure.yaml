@@ -1,0 +1,87 @@
+# One-shot configuration: schema, settings, admin user, GPG, auth. Web and
+# worker pods wait until this Job has set MISP.live=true and recorded their
+# image version, so the order of the rollout does not depend on the tool that
+# applies the chart. Each release revision has its own Job, because a Job's pod
+# template cannot change; a run on a configured instance takes seconds. With
+# the migrate component, the copy runs first, in an init container.
+#
+# Argo CD renders every revision as 1: the Sync hook in wave 1 (the
+# Deployments are wave 2) recreates the Job on every sync.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: configure-{{ .Release.Revision }}
+  labels:
+    {{- include "misp.labels" (dict "root" . "name" "configure") | nindent 4 }}
+    app: configure
+  annotations:
+    argocd.argoproj.io/hook: Sync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  # A failed copy stops for the operator to read, not for a retry
+  backoffLimit: {{ ternary 0 3 .Values.migrate.enabled }}
+  template:
+    metadata:
+      labels:
+        app: configure
+        app.kubernetes.io/name: configure
+    spec:
+      restartPolicy: Never
+      {{- include "misp.podSecurityContext" . | nindent 6 }}
+      {{- include "misp.podScheduling" . | nindent 6 }}
+      {{- if .Values.migrate.enabled }}
+      initContainers:
+        # Copies the source database and attachments (docs/migration.md). It
+        # holds the configure lock while it copies, and keeps a copy it made
+        # before unless MIGRATE_REPLACE_COPY=true.
+        - name: migrate
+          {{- include "misp.image" . | nindent 10 }}
+          command: ["/usr/bin/tini", "--", "python3", "-m", "misp_container.migrate"]
+          envFrom:
+            - configMapRef:
+                name: misp-env
+            - secretRef:
+                name: misp-db
+            - secretRef:
+                name: misp-app
+            - secretRef:
+                name: misp-migrate
+          volumeMounts:
+            - name: attachments
+              mountPath: /var/www/MISP/app/attachments
+            - name: tmp
+              mountPath: /tmp
+            {{- with .Values.migrate.volumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          resources:
+            {{- toYaml .Values.migrate.resources | nindent 12 }}
+          {{- include "misp.containerSecurityContext" . | nindent 10 }}
+      {{- end }}
+      containers:
+        - name: configure
+          {{- include "misp.image" . | nindent 10 }}
+          command: ["/usr/bin/tini", "--", "python3", "/entrypoint-configure.py"]
+          envFrom:
+            - configMapRef:
+                name: misp-env
+            - secretRef:
+                name: misp-db
+            - secretRef:
+                name: misp-app
+            - secretRef:
+                name: misp-admin
+          volumeMounts:
+            {{- include "misp.appVolumeMounts" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.configure.resources | nindent 12 }}
+          {{- include "misp.containerSecurityContext" . | nindent 10 }}
+      volumes:
+        {{- include "misp.appVolumes" . | nindent 8 }}
+        {{- if .Values.migrate.enabled }}
+        {{- include "misp.attachmentsVolume" . | nindent 8 }}
+        {{- with .Values.migrate.volumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- end }}

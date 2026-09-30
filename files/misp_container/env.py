@@ -2,14 +2,14 @@
 
 All defaults live in two places:
 1. settings.yaml -- for MISP settings (auto-derived env vars)
-2. base.env / secrets.env -- for container config (MySQL, PHP, etc.)
+2. deploy/chart/files/*.env -- for container config (MySQL, PHP, etc.)
 
 apply_defaults() loads settings.yaml defaults into os.environ so that
 env("MISP_REDIS_HOST") works everywhere without inline defaults.
 
-The env files (base.env, secrets.env) are loaded by Docker Compose (env_file:)
-or Kubernetes (configMapGenerator/secretGenerator) before the container starts,
-so those values are already in os.environ.
+Docker Compose (env_file:) and the Helm chart (the misp-env ConfigMap and the
+Secrets) load the env files before the container starts, so those values are
+already in os.environ.
 """
 
 import os
@@ -78,7 +78,7 @@ def apply_defaults():
     """Apply runtime defaults that can't live in env files.
 
     MISP setting defaults live in settings.yaml (loaded by the config engine).
-    Container config defaults live in base.env (loaded by compose/kustomize).
+    Container config defaults live in base.env (read by the Helm chart and Compose).
     This function handles the WORKERS shorthand and the derived variables.
     """
     # Worker queue counts: WORKERS env var as shorthand for all queues

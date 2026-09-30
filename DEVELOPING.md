@@ -22,21 +22,21 @@ mise run test-integration  # the upstream guard, then the full Compose stack wit
 mise run test-integration -- --db-engine postgres   # the same suite on PostgreSQL
 mise run test-sync     # hub-spoke 3-instance sync (~2min)
 mise run test-all      # unit, the upstream guard, integration, sync, migration
-mise run test-kustomize  # every Kustomize render validated against the schemas
-mise run test-kind       # the base on a kind cluster, then the smoke test
+mise run test-chart     # helm lint, and every chart render validated against the schemas
+mise run test-kind      # the chart on a kind cluster: install, smoke test, upgrade, smoke test
 ```
 
 ## Tests
 
 | Suite | What it covers |
 |-------|----------------|
-| Unit | Config engine, config.php rendering, advisory lock, database helpers, app/Config preparation, task runner, sync engine, metrics exporter |
+| Unit | Config engine, config.php rendering, advisory lock, database helpers, app/Config preparation, task runner, sync engine, metrics exporter, the Helm chart's renders |
 | Upstream guard | The MISP in the image against what the image patches or depends on (see below) |
 | Integration | Full Compose stack: HTTP, auth, settings, PHP-FPM, workers, S3, org sync, metrics, modules enrichment, logging |
 | Hub-spoke sync | 3 isolated MISP instances: pull, push, tag-filtered sync |
-| Migration | The migrate Job: a seeded MariaDB copied onto a second MariaDB with the attachments on the volume, and onto PostgreSQL with the attachments in S3, refusals, the copy checked through the API, and a bucket copied into another |
-| Kustomize render | The base alone, with each component and with all of them, against the Kubernetes and CRD schemas |
-| Kubernetes (kind) | The base with `mariadb` and `redis` on a kind cluster, then the smoke test |
+| Migration | The migration: a seeded MariaDB copied onto a second MariaDB with the attachments on the volume, and onto PostgreSQL with the attachments in S3, refusals, the copy checked through the API, and a bucket copied into another |
+| Chart render | `helm lint`, then the default values, each component, every component and three more value sets, against the Kubernetes and CRD schemas |
+| Kubernetes (kind) | The chart with `mariadb` and `redis` on a kind cluster: install, smoke test, an upgrade with a new configure Job, smoke test |
 
 The integration suite runs every container with `read_only: true` (except web, whose version-gate checks patch `settings.yaml` in place) to catch filesystem writes before Kubernetes does. Under podman the suite also turns off the writable tmpfs that podman gives a read-only container, so `/tmp` is read-only locally as it is under docker and in Kubernetes. `--durations=5` lists the slowest steps. Set `COMPOSE_CMD` and `CONTAINER_CMD` for another runner; CI uses `docker compose` and `docker`.
 
@@ -78,8 +78,8 @@ revisit.
 | `log-block-php` | PHP in the image | `LOG_BLOCK` in `misp_container/init.py` | cannot run the logging block, in either format |
 
 A new queue needs its name in `WORKER_QUEUES` and `NUM_WORKERS_<QUEUE>` in
-`deploy/base/base.env`. New periodic work needs a task in `misp_container/task.py`
-(`SCHEDULER_COVERAGE`) and a CronJob in the `cronjobs` component.
+`deploy/chart/files/base.env`. New periodic work needs a task in `misp_container/task.py`
+(`SCHEDULER_COVERAGE`) and a schedule in `cronjobs.tasks` in `deploy/chart/values.yaml`.
 
 The `Dockerfile` patches two upstream files. Each patch checks its anchor first and fails
 the build with the file and the reason when the anchor moved:
@@ -113,7 +113,7 @@ The task:
 2. Optionally updates it if a new upstream tag is provided
 3. Checks origin for existing release tags
 4. Computes the next tag (`v2.5.38` or `v2.5.37-rN+1`)
-5. Updates the image tags in `deploy/base/kustomization.yaml`, the components that pin the image, and the Compose files (`MISP_IMAGE_TAG` default)
+5. Sets `version` and `appVersion` in `deploy/chart/Chart.yaml` and the `MISP_IMAGE_TAG` default of the Compose files to the image tag
 6. Shows the diff and asks for confirmation
 7. Commits and creates the git tag
 
@@ -122,10 +122,11 @@ After confirming:
 git push origin master <tag>
 ```
 
-CI runs tests, scans, pushes images, and creates a GitHub Release with:
+CI runs tests, scans, pushes the images and the chart, and creates a GitHub Release with:
 - `ghcr.io/oivindoh/misp-container:<version>`
 - `ghcr.io/oivindoh/misp-container-caddy:<version>`
 - `ghcr.io/oivindoh/misp-container-modules:<version>`
+- `oci://ghcr.io/oivindoh/charts/misp`, chart version `<version>`
 
 ### Tag format
 
@@ -220,7 +221,7 @@ tests fail while either is out of step:
 
 | Mechanism | Covers |
 | --- | --- |
-| Generated regions, between `<!-- generated: <name> -->` and `<!-- end generated -->`, filled by `scripts/generate_docs.py` | The periodic tasks table, the Secrets table |
+| Generated regions, between `<!-- generated: <name> -->` and `<!-- end generated -->`, filled by `scripts/generate_docs.py` | The periodic tasks table, the Secrets table, the value and component tables of the chart |
 | `tests/test_docs.py` | Every env var, setting, repository path, file name and mise task a doc names exists; the component, task, upstream check, metric, exit code and OIDC tables are complete; the sizes, requests, sync waves, defaults and ports quoted in sentences match the manifests and the code |
 
 Change the source, not the doc: a task description lives in `misp_container/task.py`
@@ -273,19 +274,22 @@ scripts/
   check_scheduler_coverage.py  # Fails when MISP's scheduler offers work no task covers
   check_upstream.py         # Fails when MISP changed something the image patches or depends on
   generate_agents_md.py     # Writes AGENTS.md from the tree (mise run agents-md)
+  generate_docs.py          # Fills the generated regions of the docs (mise run docs)
+  chart.py                  # Renders the Helm chart for the generators and the tests
+  check-chart.sh            # helm lint and every chart render against the schemas
   update-composer-lock.sh   # Resolves files/composer.lock through the composer-lock stage
 tests/
   test_*.py                 # Unit tests (see tests/README.md)
   e2e/                      # Stack suites and the smoke test in pytest (stack.py, conftest.py)
-  run-kind-test.sh          # The base on a kind cluster, then the smoke test
+  run-kind-test.sh          # The chart on a kind cluster, then the smoke test
+  kind/values.yaml          # The values of the kind test
   docker-compose.test.yml   # Test overlay on deploy/docker-compose.yml
   docker-compose.postgres.yml  # Second overlay for --db-engine postgres
   docker-compose.sync-test.yml
 deploy/
   docker-compose.yml        # Local development stack (podman compose)
-  base/                     # Kustomize base (MISP itself)
-  components/               # Optional parts: database, cache, ingress, network policy, cronjobs, PDB
-  overlays/                 # Kustomize overlays
+  chart/                    # Helm chart: MISP itself, and components for the optional parts
+    files/                  # The env defaults the chart and Compose both read
 docs/
   migration.md              # Migration guide from existing MISP
 ```

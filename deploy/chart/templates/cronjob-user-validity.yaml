@@ -1,0 +1,8 @@
+# The userValidity component: checks every MISP account against the OIDC or LDAP
+# provider through MISP's console. Needs the oidc or ldap group: MISP's check
+# refuses to run without one. check-user-validity reports each user as valid or
+# invalid and changes nothing; block-invalid-users disables the users the
+# provider no longer backs.
+{{- if .Values.userValidity.enabled }}
+{{ include "misp.taskCronJob" (dict "root" . "name" "user-validity" "task" .Values.userValidity.task "args" list "schedule" .Values.userValidity.schedule) }}
+{{- end }}
