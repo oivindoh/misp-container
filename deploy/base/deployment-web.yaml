@@ -1,3 +1,6 @@
+# MISP's web tier: PHP-FPM (port 9002) and a caddy sidecar that serves the static
+# files and passes the rest to PHP-FPM over FastCGI (port 8080). Replicas scale
+# freely: each pod renders its own app/Config and waits for the configure Job.
 apiVersion: apps/v1
 kind: Deployment
 metadata:

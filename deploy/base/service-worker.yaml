@@ -1,3 +1,5 @@
+# supervisord in the worker pods, port 9001: the web pods list, start and stop
+# the background workers here (SimpleBackgroundJobs.supervisor_host).
 apiVersion: v1
 kind: Service
 metadata:

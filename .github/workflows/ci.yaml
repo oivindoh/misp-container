@@ -1,3 +1,6 @@
+# Tests, scans and releases the images: unit tests, the Kustomize renders, the stack
+# suites in Compose, the base on kind and Trivy; on a tag, pushes the images and
+# creates the release (tests/README.md, CI).
 name: CI
 
 on:

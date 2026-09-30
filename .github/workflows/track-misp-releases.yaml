@@ -1,3 +1,6 @@
+# Opens a pull request for each new MISP release: bumps CORE_TAG, resolves
+# files/composer.lock and regenerates the settings catalogue (DEVELOPING.md,
+# New MISP releases).
 name: Track MISP releases
 
 on:

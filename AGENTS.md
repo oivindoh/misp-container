@@ -112,18 +112,18 @@ MISP itself: configure Job, web, worker, metrics, modules, org-sync Job, Service
 
 | Base file | Resources | Note |
 |---|---|---|
-| `deployment-metrics.yaml` | Deployment `metrics` |  |
-| `deployment-modules.yaml` | Deployment `modules` |  |
-| `deployment-web.yaml` | Deployment `web` |  |
+| `deployment-metrics.yaml` | Deployment `metrics` | Prometheus exporter on port 9191: MISP's database, the job queues in Redis and the sync partners (docs/metrics.md). It reads MISP's data and never changes it. |
+| `deployment-modules.yaml` | Deployment `modules` | misp-modules: the enrichment, import, export and action modules MISP calls over HTTP on port 6666. A distroless image without a shell, as UID 65532. |
+| `deployment-web.yaml` | Deployment `web` | MISP's web tier: PHP-FPM (port 9002) and a caddy sidecar that serves the static files and passes the rest to PHP-FPM over FastCGI (port 8080). Replicas scale freely: each pod renders its own app/Config and waits for the configure Job. |
 | `deployment-worker.yaml` | Deployment `worker` | Scalable job workers -- safe to run multiple replicas. MISP's own scheduler never runs: periodic tasks are Kubernetes CronJobs (the cronjobs component). |
 | `job-configure.yaml` | Job `configure` | One-shot configuration: schema, settings, admin user, GPG, auth. Web and worker pods wait until this Job has set MISP.live=true and recorded their image version, so the order of the rollout does not depend on the tool that applies the manifests. The Job removes itself ten minutes after it finishes (ttlSecondsAfterFinished), so the next apply or reconcile creates it again; a run on a configured instance takes seconds. |
 | `job-org-sync.yaml` | Job `org-sync` | Declarative org sync: applies the misp-orgs ConfigMap (orgs.yaml) through the MISP API once the web Deployment serves (sync wave 3). Exits 0 at once when ADMIN_KEY is empty or orgs.yaml has nothing to apply. |
 | `orgs.yaml` |  | Declarative org config applied by the org-sync Job. Empty by default; replace this ConfigMap in your overlay. Format: deploy/orgs.yaml.example |
 | `pvc-attachments.yaml` | PersistentVolumeClaim `attachments` | Attachments and malware samples. Web and worker pods on different nodes write here, so the storage class must support ReadWriteMany. Set PLUGIN_S3_BUCKET_NAME to store attachments in S3 instead, and remove this claim in the overlay. |
-| `service-metrics.yaml` | Service `metrics` |  |
-| `service-modules.yaml` | Service `modules` |  |
-| `service-web.yaml` | Service `web` |  |
-| `service-worker.yaml` | Service `worker` |  |
+| `service-metrics.yaml` | Service `metrics` | The exporter on port 9191, for Prometheus to scrape. |
+| `service-modules.yaml` | Service `modules` | misp-modules on port 6666, for MISP's enrichment, import, export and action calls. |
+| `service-web.yaml` | Service `web` | MISP over HTTP: caddy in the web pods, port 8080. The ingress routes here. |
+| `service-worker.yaml` | Service `worker` | supervisord in the worker pods, port 9001: the web pods list, start and stop the background workers here (SimpleBackgroundJobs.supervisor_host). |
 
 Components add to the base in an overlay:
 

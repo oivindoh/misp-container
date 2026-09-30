@@ -1,3 +1,5 @@
+# misp-modules: the enrichment, import, export and action modules MISP calls over
+# HTTP on port 6666. A distroless image without a shell, as UID 65532.
 apiVersion: apps/v1
 kind: Deployment
 metadata:

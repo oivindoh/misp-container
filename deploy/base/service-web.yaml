@@ -1,3 +1,4 @@
+# MISP over HTTP: caddy in the web pods, port 8080. The ingress routes here.
 apiVersion: v1
 kind: Service
 metadata:

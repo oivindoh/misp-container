@@ -1,3 +1,4 @@
+# The exporter on port 9191, for Prometheus to scrape.
 apiVersion: v1
 kind: Service
 metadata:
