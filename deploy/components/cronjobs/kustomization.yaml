@@ -7,8 +7,5 @@ kind: Component
 # summaries through MISP's console. ADMIN_KEY must be set in misp-admin.
 resources:
   - cronjobs.yaml
-# The task image tag follows the base's images transformer only inside the
-# base; pin it here to the same release.
-images:
-  - name: ghcr.io/oivindoh/misp-container
-    newTag: 2.5.37
+# The image carries this release's tag; an images entry in the overlay overrides it,
+# and this component rewrites no other image.

@@ -51,6 +51,10 @@ configMapGenerator:
       - ADMIN_EMAIL=admin@example.com
 ```
 
+Set `images` in the same kustomization that lists the components, so a tag of your choice
+reaches the components' CronJobs and Jobs too; each component carries the release's tag in
+its own manifests.
+
 ## Client addresses
 
 MISP logs the first address in `X-Forwarded-For` as the client of each request. The caddy

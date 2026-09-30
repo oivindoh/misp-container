@@ -45,7 +45,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: migrate
-          image: ghcr.io/oivindoh/misp-container
+          image: ghcr.io/oivindoh/misp-container:2.5.37
           command: ["/usr/bin/tini", "--", "python3", "-m", "misp_container.migrate"]
           envFrom:
             - configMapRef:

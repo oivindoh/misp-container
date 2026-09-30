@@ -33,7 +33,7 @@ spec:
               type: RuntimeDefault
           containers:
             - name: housekeeping
-              image: ghcr.io/oivindoh/misp-container
+              image: ghcr.io/oivindoh/misp-container:2.5.37
               command: ["/usr/bin/tini", "--", "python3", "-m", "misp_container.housekeeping", "jobs"]
               envFrom:
                 - configMapRef:
@@ -83,7 +83,7 @@ spec:
               type: RuntimeDefault
           containers:
             - name: housekeeping
-              image: ghcr.io/oivindoh/misp-container
+              image: ghcr.io/oivindoh/misp-container:2.5.37
               command: ["/usr/bin/tini", "--", "python3", "-m", "misp_container.housekeeping", "logs"]
               envFrom:
                 - configMapRef:
@@ -133,7 +133,7 @@ spec:
               type: RuntimeDefault
           containers:
             - name: housekeeping
-              image: ghcr.io/oivindoh/misp-container
+              image: ghcr.io/oivindoh/misp-container:2.5.37
               command: ["/usr/bin/tini", "--", "python3", "-m", "misp_container.housekeeping", "audit_logs"]
               envFrom:
                 - configMapRef:

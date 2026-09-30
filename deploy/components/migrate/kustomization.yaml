@@ -11,6 +11,5 @@ secretGenerator:
   - name: misp-migrate
     envs:
       - secrets-migrate.env
-images:
-  - name: ghcr.io/oivindoh/misp-container
-    newTag: 2.5.37
+# The image carries this release's tag; an images entry in the overlay overrides it,
+# and this component rewrites no other image.

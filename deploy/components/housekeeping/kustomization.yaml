@@ -6,6 +6,5 @@ kind: Component
 # HOUSEKEEPING_AUDIT_LOGS_DAYS in misp-env (defaults 2, 30, 90).
 resources:
   - housekeeping-cronjobs.yaml
-images:
-  - name: ghcr.io/oivindoh/misp-container
-    newTag: 2.5.37
+# The image carries this release's tag; an images entry in the overlay overrides it,
+# and this component rewrites no other image.
