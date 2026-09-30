@@ -7,8 +7,8 @@ on:
   push:
     # Branch pushes: test + scan (no release).
     # Tag pushes: test + scan + release.
-    # Push branch and tag together (git push origin master v2.5.37) triggers
-    # two runs, but the branch run is cheap if the tag run also passes.
+    # A release pushes master and its tag together, which starts two runs of one
+    # commit: the gate job stops the master run, and the tag run tests and releases.
     branches: [master]
     tags: ["v*"]
   pull_request:
@@ -27,10 +27,30 @@ env:
   IMAGE_MODULES: ghcr.io/${{ github.repository }}-modules
 
 jobs:
+  # Stops a master run whose commit carries a release tag: the run of the tag
+  # tests the same commit and releases it. build, unit and chart wait for it, and
+  # every other job waits for them. When the lookup fails, both runs go ahead.
+  gate:
+    runs-on: ubuntu-latest
+    permissions: {}
+    outputs:
+      release_commit: ${{ steps.tag.outputs.release_commit }}
+    steps:
+      - name: Look for a release tag on the commit
+        id: tag
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = push ] && [ "$GITHUB_REF_TYPE" = branch ] &&
+             git ls-remote --tags "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git" 'v*' 2>/dev/null | grep -q "^$GITHUB_SHA"; then
+            echo "release_commit=true" >> "$GITHUB_OUTPUT"
+            echo "A release tag points at $GITHUB_SHA: its tag run tests and releases it."
+          fi
+
   # Builds each image into its own layer cache scope, in parallel. The suite
   # jobs rebuild from those caches in seconds and run against the images they
   # loaded.
   build:
+    needs: gate
+    if: needs.gate.outputs.release_commit != 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -65,6 +85,8 @@ jobs:
           cache-to: type=gha,mode=max,scope=${{ matrix.scope }}
 
   unit:
+    needs: gate
+    if: needs.gate.outputs.release_commit != 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -90,6 +112,8 @@ jobs:
   # and with all of them, and validates every render against the Kubernetes and
   # CRD schemas
   chart:
+    needs: gate
+    if: needs.gate.outputs.release_commit != 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read

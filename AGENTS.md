@@ -329,9 +329,10 @@ Stack files and runners:
 
 | Job | Needs | Steps |
 |---|---|---|
-| `build` |  | Build ${{ matrix.name }} image |
-| `unit` |  | Install helm; Unit tests |
-| `chart` |  | Install helm and kubeconform; Lint, render and validate |
+| `gate` |  | Look for a release tag on the commit |
+| `build` | `gate` | Build ${{ matrix.name }} image |
+| `unit` | `gate` | Install helm; Unit tests |
+| `chart` | `gate` | Install helm and kubeconform; Lint, render and validate |
 | `integration` | `build` | Build misp image; Build caddy image; Build modules image; Integration tests; Upload the test report and the compose logs |
 | `integration-postgres` | `build` | Build misp image; Build caddy image; Build modules image; Integration tests on PostgreSQL; Upload the test report and the compose logs |
 | `hub-spoke` | `build` | Build misp image; Build caddy image; Build modules image; Hub-spoke sync tests; Upload the test report and the compose logs |

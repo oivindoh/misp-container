@@ -238,6 +238,7 @@ GitHub Actions on every push to master and every PR:
 
 | Job | Runs |
 |-----|------|
+| `gate` | Stops a master run whose commit carries a release tag, since the tag run tests and releases that commit |
 | `build` | The three images into the layer cache |
 | `unit` | The unit tests |
 | `integration` | The upstream guard, then the integration suite on MariaDB, against the images from `build` (`MISP_IMAGE_TAG=ci`); uploads the JUnit report and, after a failure, the compose logs |
