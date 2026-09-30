@@ -9,13 +9,13 @@
 #   pytest tests/e2e/test_sync.py --skip-build
 
 x-misp-image: &misp-image
-  image: ghcr.io/oivindoh/misp-container:${MISP_IMAGE_TAG:-2.5.37}
+  image: ghcr.io/oivindoh/misp-container:${MISP_IMAGE_TAG:-2.5.47}
   build:
     context: ..
     target: final
 
 x-caddy-image: &caddy-image
-  image: ghcr.io/oivindoh/misp-container-caddy:${MISP_IMAGE_TAG:-2.5.37}
+  image: ghcr.io/oivindoh/misp-container-caddy:${MISP_IMAGE_TAG:-2.5.47}
   build:
     context: ..
     target: caddy

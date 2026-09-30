@@ -7,7 +7,7 @@ type: application
 version: 1.0.0
 # The image tag of the release: the MISP version, with -rN for a hotfix. The
 # images default to it.
-appVersion: "2.5.37"
+appVersion: "2.5.47"
 home: https://github.com/oivindoh/misp-container
 sources:
   - https://github.com/oivindoh/misp-container
