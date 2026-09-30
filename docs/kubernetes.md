@@ -33,6 +33,15 @@ So a version range such as `1.*` in an Argo CD `targetRevision` or a Flux HelmRe
 follows every MISP release and hotfix, and stops before a change to the values. From a
 checkout, install `deploy/chart` instead.
 
+Check a release from inside the cluster once the configure Job has run:
+
+```bash
+helm test misp --namespace misp --logs
+```
+
+The test pod loads the login page through the `web` Service. With `ADMIN_KEY` set, it also
+checks through the API that `MISP.live` is true and that a worker runs every queue.
+
 ```yaml
 # values.yaml
 env:
@@ -123,7 +132,7 @@ workload gets a whole Secret, or only the keys the table names:
 |---|---|---|---|
 | `misp-db` | `deploy/chart/files/secrets-db.env` | `DB_USER`, `DB_PASSWORD`, `MYSQL_ROOT_PASSWORD` | configure, cronjobs, housekeeping, mariadb (`DB_PASSWORD`, `DB_USER`, `MYSQL_ROOT_PASSWORD`), metrics (`DB_PASSWORD`, `DB_USER`), migrate, org-sync, postgres (`DB_PASSWORD`, `DB_USER`), userValidity, web, worker |
 | `misp-app` | `deploy/chart/files/secrets-app.env` | `MISP_REDIS_PASSWORD`, `GNUPG_PASSWORD`, `SECURITY_ENCRYPTION_KEY`, `SECURITY_SALT` | configure, cronjobs, metrics (`MISP_REDIS_PASSWORD`), migrate, redis (`MISP_REDIS_PASSWORD`), userValidity, web, worker |
-| `misp-admin` | `deploy/chart/files/secrets-admin.env` | `ADMIN_PASSWORD`, `ADMIN_KEY` | configure, cronjobs (`ADMIN_KEY`), org-sync |
+| `misp-admin` | `deploy/chart/files/secrets-admin.env` | `ADMIN_PASSWORD`, `ADMIN_KEY` | configure, cronjobs (`ADMIN_KEY`), misp-test (`ADMIN_KEY`), org-sync |
 | `misp-migrate` | `deploy/chart/files/secrets-migrate.env` | `MIGRATE_SOURCE_HOST`, `MIGRATE_SOURCE_USER`, `MIGRATE_SOURCE_PASSWORD`, `MIGRATE_FORCE`, `MIGRATE_REPLACE_COPY`, `MIGRATE_SOURCE_FILES`, `MIGRATE_SOURCE_S3_BUCKET`, `MIGRATE_SOURCE_S3_ENDPOINT`, `MIGRATE_SOURCE_S3_REGION`, `MIGRATE_SOURCE_S3_ACCESS_KEY`, `MIGRATE_SOURCE_S3_SECRET_KEY` | migrate |
 <!-- end generated -->
 

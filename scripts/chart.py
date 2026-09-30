@@ -90,7 +90,10 @@ def find(kind: str, name: str, *sets: str, every_component: bool = False) -> dic
 
 
 def pod_spec(doc: dict) -> dict | None:
+    """The pod spec of a workload or a Pod; None for anything else."""
     spec = doc.get("spec", {})
+    if doc.get("kind") == "Pod":
+        return spec
     if doc.get("kind") == "CronJob":
         spec = spec.get("jobTemplate", {}).get("spec", {})
     return spec.get("template", {}).get("spec") if doc.get("kind") in ("Deployment", "StatefulSet", "Job", "CronJob") else None

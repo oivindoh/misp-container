@@ -2,10 +2,12 @@
 set -euo pipefail
 
 #
-# Installs the Helm chart with the mariadb and redis components on a kind cluster
-# (values tests/kind/values.yaml) and runs the smoke test (tests/e2e/test_smoke.py)
-# against it. Then upgrades the release with a changed value and runs the smoke
-# test again: the upgrade runs a new configure Job and rolls the pods.
+# Installs the Helm chart on a kind cluster (values tests/kind/values.yaml), runs
+# the smoke test (tests/e2e/test_smoke.py) and the chart's helm test, and runs an
+# API task, a console task and a housekeeping task from their CronJobs. Then it
+# upgrades the release with a changed value and rolls it back: each runs the
+# configure Job of its revision and rolls the pods, and the smoke test runs after
+# each.
 #
 # Usage:
 #   tests/run-kind-test.sh           # create the cluster, test, delete it
@@ -93,21 +95,27 @@ for repo in ghcr.io/oivindoh/misp-container ghcr.io/oivindoh/misp-container-cadd
     echo "loaded ${repo}:kind"
 done
 
-# Waits for the configure Job of a release revision, then for the Deployments
-wait_for_release() {
-    local job="configure-$1" deadline state
-    deadline=$(( $(date +%s) + 900 ))
+# Waits up to $2 seconds for a Job to succeed; prints its log and the cluster
+# state when it fails
+wait_for_job() {
+    local job="$1" deadline state
+    deadline=$(( $(date +%s) + $2 ))
     while :; do
         state=$(kc get job "$job" -o jsonpath='{.status.conditions[?(@.status=="True")].type}' 2>/dev/null || true)
         case "$state" in
-            *Complete*) echo "$job succeeded"; break ;;
-            *Failed*) echo "$job failed"; diagnose; exit 1 ;;
+            *Complete*) echo "$job succeeded"; return ;;
+            *Failed*) echo "$job failed"; kc logs "job/$job" --all-containers --tail=60 || true; diagnose; exit 1 ;;
         esac
         if [ "$(date +%s)" -ge "$deadline" ]; then
-            echo "$job did not finish in 15 minutes"; diagnose; exit 1
+            echo "$job did not finish in $2 s"; kc logs "job/$job" --all-containers --tail=60 || true; diagnose; exit 1
         fi
         sleep 5
     done
+}
+
+# Waits for the configure Job of a release revision, then for the Deployments
+wait_for_release() {
+    wait_for_job "configure-$1" 900
     for deploy in web worker modules metrics; do
         if ! kc rollout status "deploy/$deploy" --timeout=600s; then
             diagnose; exit 1
@@ -140,6 +148,18 @@ wait_for_release 1
 
 section "Smoke test"
 smoke_test
+
+section "helm test"
+if ! helm test misp --namespace "$NAMESPACE" --logs --timeout 5m; then
+    diagnose; exit 1
+fi
+
+section "Periodic tasks"
+# One of each kind, started from its CronJob: an API task, a console task, housekeeping
+for cronjob in update-noticelists periodic-summary housekeeping-jobs; do
+    kc create job --from="cronjob/$cronjob" "$cronjob-kind"
+    wait_for_job "$cronjob-kind" 300
+done
 section "Logs"
 # The chart's default is LOG_FORMAT=json: every line of the configure Job is one JSON object
 json_lines=$(kc logs job/configure-1 | python3 -c '
@@ -164,6 +184,25 @@ if [ "$(kc get pods -l app.kubernetes.io/name=web -o name)" = "$web_before" ]; t
     echo "the upgrade did not roll the web pods"; diagnose; exit 1
 fi
 smoke_test
+
+section "Rollback"
+# Revision 1 again: its configure Job runs once more, the value goes back, the pods roll
+web_before=$(kc get pods -l app.kubernetes.io/name=web -o name)
+helm rollback misp 1 --namespace "$NAMESPACE"
+wait_for_release 1
+if kc get job configure-2 >/dev/null 2>&1; then
+    echo "the rollback left job/configure-2"; diagnose; exit 1
+fi
+if [ "$(kc get configmap misp-env -o jsonpath='{.data.PHP_MAX_FILE_UPLOADS}')" = 51 ]; then
+    echo "the rollback left the upgrade's value in misp-env"; diagnose; exit 1
+fi
+if [ "$(kc get pods -l app.kubernetes.io/name=web -o name)" = "$web_before" ]; then
+    echo "the rollback did not roll the web pods"; diagnose; exit 1
+fi
+smoke_test
+if ! helm test misp --namespace "$NAMESPACE" --logs --timeout 5m; then
+    diagnose; exit 1
+fi
 
 echo ""
 echo "kind test passed in $(( $(date +%s) - START ))s"

@@ -14,7 +14,7 @@ mise run test-migration      # the migration: MariaDB to MariaDB, MariaDB to Pos
 mise run smoketest https://misp.example.com   # a live MISP; asks for an API key
 mise run test-all            # every suite
 mise run test-chart          # helm lint, render the chart with each component, validate against the schemas (~10s)
-mise run test-kind           # the chart on a kind cluster: install, smoke test, upgrade (build the images first)
+mise run test-kind           # the chart on a kind cluster: install, helm test, task runs, upgrade, rollback (build the images first)
 ```
 
 The stack suites build the images with compose, start full MISP stacks, and tear them down. Pass `-- --skip-build` to reuse existing images and `-- --keep` to leave the stack up.
@@ -113,16 +113,24 @@ HTTPRoute, the CRD catalog. It needs `helm` and `kubeconform` (`mise install` in
 repository). CI job: `chart`. The unit tests (`test_chart.py`) check what the renders hold.
 
 **kind test** (`tests/run-kind-test.sh`): creates a kind cluster, loads the three images
-under the tag `kind`, installs the chart with `tests/kind/values.yaml`, waits for the
-configure Job and the Deployments, and runs the smoke test (`e2e/test_smoke.py`) through a
-port-forward on 38080. It then upgrades the release with a changed value, checks that the
-upgrade ran `configure-2`, removed `configure-1` and rolled the web pods, and runs the smoke
-test again. On a failure it prints the pods, the events and the logs. `--keep` leaves the
-cluster running. CI job: `kind`.
+under the tag `kind`, and installs the chart with `tests/kind/values.yaml`. Each step must pass:
+
+1. The configure Job and the Deployments finish; the smoke test (`e2e/test_smoke.py`) passes
+   through a port-forward on 38080, and so does the chart's `helm test`.
+2. An API task (`update-noticelists`), a console task (`periodic-summary`) and a housekeeping
+   task (`housekeeping-jobs`), each started from its CronJob, succeed.
+3. An upgrade with a changed value runs `configure-2`, removes `configure-1` and rolls the web
+   pods; the smoke test passes.
+4. `helm rollback` to revision 1 runs `configure-1` again, removes `configure-2`, restores the
+   value and rolls the web pods; the smoke test and `helm test` pass.
+
+On a failure it prints the pods, the events and the logs. `--keep` leaves the cluster
+running. CI job: `kind`.
 
 | Value | Why |
 |-------|-----|
 | The `mariadb` and `redis` components, namespace `misp` | The smallest deployment that runs |
+| The `cronjobs` and `housekeeping` components | The task runs start from their CronJobs |
 | Test values for `misp-db`, `misp-app`, `misp-admin`, `MISP_UUID` | The configure Job refuses the chart's placeholders |
 | A ReadWriteOnce attachments claim | kind's local-path storage offers no ReadWriteMany |
 
@@ -246,7 +254,7 @@ GitHub Actions on every push to master and every PR:
 | `hub-spoke` | The sync suite, in parallel with `integration` |
 | `migration` | The migration suite (pytest), in parallel; uploads the JUnit report and, after a failure, the compose logs |
 | `chart` | `helm lint` and every chart render validated against the schemas |
-| `kind` | The chart on a kind cluster: install, smoke test, upgrade, smoke test |
+| `kind` | The chart on a kind cluster: install, smoke test, `helm test`, task runs, upgrade, rollback |
 | `scan` | Trivy on the three images |
 | `release` | On a tag: push the images and the chart, and create the GitHub Release, after every other job |
 

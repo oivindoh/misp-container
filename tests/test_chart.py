@@ -132,6 +132,15 @@ def test_attachments_in_s3_render_no_claim():
     assert next(v for v in volumes if v["name"] == "attachments") == {"name": "attachments", "emptyDir": {"sizeLimit": "1Gi"}}
 
 
+def test_the_helm_test_reaches_web_through_the_network_policy():
+    pod = chart.find("Pod", "misp-test", "ciliumNetworkPolicy.enabled=true")
+    assert pod["metadata"]["annotations"]["helm.sh/hook"] == "test"
+    component = pod["metadata"]["labels"]["app.kubernetes.io/component"]
+    web = chart.find("CiliumNetworkPolicy", "web", "ciliumNetworkPolicy.enabled=true")
+    allowed = [e["matchLabels"] for rule in web["spec"]["ingress"] for e in rule["fromEndpoints"]]
+    assert {"app.kubernetes.io/component": component} in allowed
+
+
 def test_every_component_renders_and_the_default_renders_none():
     default = {(d["kind"], d["metadata"]["name"]) for d in chart.objects()}
     for component in chart.components():

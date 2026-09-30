@@ -1,11 +1,16 @@
-# Values for tests/run-kind-test.sh: the mariadb and redis components, test
-# secrets, the images under the tag kind, and a ReadWriteOnce attachments
-# claim, because kind's local-path storage offers no ReadWriteMany.
+# Values for tests/run-kind-test.sh: the mariadb, redis, cronjobs and
+# housekeeping components, test secrets, the images under the tag kind, and a
+# ReadWriteOnce attachments claim, because kind's local-path storage offers no
+# ReadWriteMany.
 image:
   tag: kind
 mariadb:
   enabled: true
 redis:
+  enabled: true
+cronjobs:
+  enabled: true
+housekeeping:
   enabled: true
 attachments:
   accessMode: ReadWriteOnce

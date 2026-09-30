@@ -39,7 +39,7 @@ description = "Lint the Helm chart, render it with each component and validate a
 run = "scripts/check-chart.sh"
 
 [tasks.test-kind]
-description = "Install and upgrade the Helm chart on a kind cluster and run the smoke test (build the images first)"
+description = "Install, test, upgrade and roll back the Helm chart on a kind cluster (build the images first)"
 run = "tests/run-kind-test.sh ${@}"
 
 [tasks.agents-md]

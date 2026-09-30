@@ -23,7 +23,7 @@ mise run test-integration -- --db-engine postgres   # the same suite on PostgreS
 mise run test-sync     # hub-spoke 3-instance sync (~2min)
 mise run test-all      # unit, the upstream guard, integration, sync, migration
 mise run test-chart     # helm lint, and every chart render validated against the schemas
-mise run test-kind      # the chart on a kind cluster: install, smoke test, upgrade, smoke test
+mise run test-kind      # the chart on a kind cluster: install, helm test, task runs, upgrade, rollback
 ```
 
 ## Tests
@@ -36,7 +36,7 @@ mise run test-kind      # the chart on a kind cluster: install, smoke test, upgr
 | Hub-spoke sync | 3 isolated MISP instances: pull, push, tag-filtered sync |
 | Migration | The migration: a seeded MariaDB copied onto a second MariaDB with the attachments on the volume, and onto PostgreSQL with the attachments in S3, refusals, the copy checked through the API, and a bucket copied into another |
 | Chart render | `helm lint`, then the default values, each component, every component and three more value sets, against the Kubernetes and CRD schemas |
-| Kubernetes (kind) | The chart with `mariadb` and `redis` on a kind cluster: install, smoke test, an upgrade with a new configure Job, smoke test |
+| Kubernetes (kind) | The chart on a kind cluster: install, smoke test, `helm test`, one task of each kind from its CronJob, an upgrade and a rollback, each with a new configure Job and the smoke test |
 
 The integration suite runs every container with `read_only: true` (except web, whose version-gate checks patch `settings.yaml` in place) to catch filesystem writes before Kubernetes does. Under podman the suite also turns off the writable tmpfs that podman gives a read-only container, so `/tmp` is read-only locally as it is under docker and in Kubernetes. `--durations=5` lists the slowest steps. Set `COMPOSE_CMD` and `CONTAINER_CMD` for another runner; CI uses `docker compose` and `docker`.
 

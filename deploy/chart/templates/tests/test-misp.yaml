@@ -1,0 +1,65 @@
+# helm test: checks a release from inside the cluster. It loads the login page
+# through the web Service and, with ADMIN_KEY in misp-admin, calls the API as
+# the admin: MISP.live, and a worker on every queue behind a reachable
+# supervisord. The pod carries the API task label, so the ciliumNetworkPolicy
+# component lets it reach web.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: misp-test
+  labels:
+    {{- include "misp.labels" (dict "root" . "name" "misp-test") | nindent 4 }}
+    app.kubernetes.io/component: misp-task
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  restartPolicy: Never
+  {{- include "misp.podSecurityContext" . | nindent 2 }}
+  {{- include "misp.podScheduling" . | nindent 2 }}
+  containers:
+    - name: test
+      {{- include "misp.image" . | nindent 6 }}
+      command:
+        - python3
+        - -c
+        - |
+          import json, os, urllib.error, urllib.request
+          from misp_container import WORKER_QUEUES
+
+          def get(path, key=""):
+              # MISP answers a JSON request without a key with 403, the login page included
+              headers = {"Accept": "application/json", "Authorization": key} if key else {}
+              request = urllib.request.Request("http://web:8080" + path, headers=headers)
+              try:
+                  with urllib.request.urlopen(request, timeout=30) as response:
+                      return response.read()
+              except urllib.error.URLError as e:
+                  raise SystemExit(f"failed: GET {path}: {e}")
+
+          get("/users/login")
+          print("ok: the login page answers")
+          key = os.environ.get("ADMIN_KEY", "")
+          if not key:
+              print("skipped: ADMIN_KEY is empty in misp-admin, so the API checks do not run")
+              raise SystemExit(0)
+          version = json.loads(get("/servers/getVersion", key))["version"]
+          print(f"ok: the API answers as the admin, MISP {version}")
+          live = json.loads(get("/servers/getSetting/MISP.live", key)).get("value")
+          assert live in (True, 1, "1", "true"), f"MISP.live is {live!r}"
+          print("ok: MISP.live is true")
+          workers = json.loads(get("/servers/getWorkers", key))
+          assert workers.get("supervisord_status") is True, "the web pods cannot reach supervisord in the worker pods"
+          idle = [q for q in WORKER_QUEUES if not (workers.get(q, {}).get("workers") or [])]
+          assert not idle, f"no worker runs the queues {idle}"
+          print(f"ok: workers run the queues {', '.join(WORKER_QUEUES)}")
+      env:
+        - name: ADMIN_KEY
+          valueFrom:
+            secretKeyRef:
+              name: misp-admin
+              key: ADMIN_KEY
+              optional: true
+      resources:
+        {{- toYaml .Values.cronjobs.resources.api | nindent 8 }}
+      {{- include "misp.containerSecurityContext" . | nindent 6 }}
