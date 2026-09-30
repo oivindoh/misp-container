@@ -217,8 +217,10 @@ them out (`--ignore=tests/e2e`).
 A suite is one module. Module fixtures run each step once and hand its result on; the tests
 run in file order. At a module's first failure every service's log goes to
 `$TMPDIR/<suite>-first-failure-compose-logs.txt`, and after a failure the teardown writes
-`$TMPDIR/<suite>-compose-logs.txt`. CI uploads both with the JUnit report. The first dump
-keeps the log of a container that a later step removes, such as a web replica.
+`$TMPDIR/<suite>-compose-logs.txt`. When MISP never answers while a stack starts, before any
+test runs, the logs go to `$TMPDIR/misp-wait-timeout-compose-logs.txt`. CI uploads them all with
+the JUnit report. The first dump keeps the log of a container that a later step removes, such
+as a web replica.
 
 The suites behave the same under podman-compose, locally, and docker compose, in CI:
 
