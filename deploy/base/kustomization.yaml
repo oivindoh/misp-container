@@ -1,3 +1,7 @@
+# MISP itself: configure Job, web, worker, metrics, modules,
+# org-sync Job, Services, config and the attachments claim. Database, cache,
+# ingress, network policies, cronjobs and PDBs are components under
+# deploy/components/ that an overlay opts into.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
@@ -6,53 +10,50 @@ labels:
       app.kubernetes.io/instance: misp-base
 
 resources:
+  - job-configure.yaml
+  - job-org-sync.yaml
   - deployment-web.yaml
   - deployment-worker.yaml
-  - deployment-scheduler.yaml
   - deployment-metrics.yaml
   - deployment-modules.yaml
   - service-web.yaml
   - service-modules.yaml
   - service-metrics.yaml
   - service-worker.yaml
-  - mariadb.yaml
-  - redis.yaml
-  - ingress.yaml
-  - housekeeping-cronjobs.yaml
-  - cronjobs.yaml
-  - networkpolicy.yaml
-  - pdb.yaml
+  - pvc-attachments.yaml
 
-# Configuration from .env files.
-# Overlays add their own .env files with behavior:merge for overrides.
-# Secret .env files can be encrypted with: sops -e -i k8s/base/secrets.env
+# Configuration from .env files. Overlays merge their own values on top.
+# The three Secrets follow their consumers: web and worker pods get misp-db
+# and misp-app, never misp-admin; metrics gets two keys of misp-db.
+# Production overlays replace them through KSOPS (deploy/overlays/prod).
 secretGenerator:
-  - name: misp-secrets
+  - name: misp-db
     envs:
-      - secrets.env
+      - secrets-db.env
+  - name: misp-app
+    envs:
+      - secrets-app.env
+  - name: misp-admin
+    envs:
+      - secrets-admin.env
 
 configMapGenerator:
   - name: misp-env
     envs:
       - base.env
+  # Declarative org config for the org-sync Job. Overlays replace it:
+  #   configMapGenerator:
+  #     - name: misp-orgs
+  #       behavior: replace
+  #       files: [orgs.yaml=orgs.yaml]
+  - name: misp-orgs
+    files:
+      - orgs.yaml
 
 images:
   - name: ghcr.io/oivindoh/misp-container
     newTag: 2.5.37
   - name: ghcr.io/oivindoh/misp-container-caddy
     newTag: 2.5.37
-  - name: ghcr.io/oivindoh/misp-container-sync
-    newTag: 2.5.37
-  - name: ghcr.io/oivindoh/misp-container-metrics
-    newTag: 2.5.37
   - name: ghcr.io/oivindoh/misp-container-modules
     newTag: 2.5.37
-  - name: docker.io/library/mariadb
-    newTag: 11.8.6
-    digest: sha256:78a5047d3ba33975f183f183c2464cc7f1eab13ec8667e57cc9a5821d6da7577
-  - name: docker.io/library/redis
-    newTag: 8.6.3-trixie
-    digest: sha256:0c341492924cad6f5483f9133e43bd6c51ecdecbcadfac5b51657393b6a7936c
-  - name: docker.io/curlimages/curl
-    newTag: "8.13.0"
-    digest: sha256:d43bdb28bae0be0998f3be83199bfb2b81e0a30b034b6d7586ce7e05de34c3fd

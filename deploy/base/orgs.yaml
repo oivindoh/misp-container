@@ -1,0 +1,3 @@
+# Declarative org config applied by the org-sync Job. Empty by default;
+# replace this ConfigMap in your overlay. Format: deploy/orgs.yaml.example
+teams: []

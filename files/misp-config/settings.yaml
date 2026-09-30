@@ -16,12 +16,17 @@
 #   If the env var exists and is non-empty, the setting is enforced every startup.
 #   If no env var, the default is applied once (then user owns it via the UI).
 #
-# Groups are applied in order:
-#   minimum_config -> db_enable -> initialisation -> critical -> optional -> gpg -> s3 -> proxy -> kafka -> linotp
+# minimum_config and db_enable are rendered into config.php by the init container.
+# The configure step applies the other groups to the database in this order:
+#   initialisation -> critical -> optional -> gpg -> s3 -> proxy -> kafka -> linotp
 
 settings:
 
-  # -- minimum_config: bootstrap settings written to config.php ----------------
+  # -- minimum_config: rendered into config.php by init, in every pod ----------
+  # MISP never reads SystemSetting::BLOCKED_SETTINGS from the database (salt,
+  # encryption key, password policy, python_bin, ca_path, tmpdir,
+  # attachments_dir, self_update, online_version_check, system_setting_db,
+  # GnuPG.binary, disable_local_feed_access), so those live here.
   minimum_config:
 
     # Redis connection
@@ -132,16 +137,25 @@ settings:
     MISP.osuser:
       description: "The Unix user MISP (php) is running as"
       value: misp
-    MISP.uuid:
-      description: "The MISP instance UUID. This UUID is used to identify this instance"
-      value: ""
-      force: true
 
-    # Security bootstrap
+    # Security bootstrap (BLOCKED_SETTINGS: only config.php counts)
     Security.salt:
       value: ""
       sensitive: true
       force: true
+      blank_protection: true
+    Security.encryption_key:
+      value: ""
+      sensitive: true
+      force: true
+      blank_protection: true
+    Security.password_policy_length:
+      description: "Password length requirement. If it is not set or it is set to 0, then the default value is assumed (12)"
+      value: 12
+    # 12-15 must be "complex" - after 16 characters anything goes
+    Security.password_policy_complexity:
+      description: "Password complexity requirement. Leave it empty for the default setting (3 out of 4, with either a digit or a special..."
+      value: '/^((?=.*\d)|(?=.*\W+))(?![\n])(?=.*[A-Z])(?=.*[a-z]).*$|.{16,}/'
     Security.rest_client_enable_arbitrary_urls:
       description: "Enable this setting if you wish for users to be able to query any arbitrary URL via the rest client. Keep in mind tha..."
       value: false
@@ -195,9 +209,6 @@ settings:
     MISP.contact:
       description: "The e-mail address that MISP should include as a contact address for the instance's support team"
       value: admin@admin.test
-    MISP.attachments_dir:
-      description: "Directory where attachments are stored. MISP will NOT migrate the existing data if you change this setting. The only ..."
-      value: /var/www/MISP/app/attachments
     MISP.uuid:
       description: "The MISP instance UUID. This UUID is used to identify this instance"
       value: ""
@@ -207,16 +218,6 @@ settings:
       value: eng
 
     # Security
-    Security.encryption_key:
-      value: ""
-      sensitive: true
-      force: true
-      blank_protection: true
-    Security.salt:
-      value: ""
-      sensitive: true
-      force: true
-      blank_protection: true
     Security.advanced_authkeys:
       description: "Advanced authkeys will allow each user to create and manage a set of authkeys for themselves, each with individual ex..."
       value: true
@@ -248,14 +249,6 @@ settings:
       description: "The duration (in seconds) of how long the user will be locked out when the allowed number of login attempts are exhau..."
       value: 300
 
-    # Password policy
-    Security.password_policy_length:
-      description: "Password length requirement. If it is not set or it is set to 0, then the default value is assumed (12)"
-      value: 12
-    # 12-15 must be "complex" - after 16 characters anything goes
-    Security.password_policy_complexity:
-      description: "Password complexity requirement. Leave it empty for the default setting (3 out of 4, with either a digit or a special..."
-      value: '/^((?=.*\d)|(?=.*\W+))(?![\n])(?=.*[A-Z])(?=.*[a-z]).*$|.{16,}/'
     Security.api_key_quick_lookup_expiration:
       description: "If the api key quick lookup is enabled, this setting will allow you to tune the expiration of the keys in redis. A lo..."
       value: 180
@@ -380,14 +373,12 @@ settings:
     MISP.disable_emailing:
       description: "You can disable all e-mailing using this setting. When enabled, no outgoing e-mails will be sent by MISP"
       value: true
+      force: true
     MISP.showorgalternate:
       description: "True enables the alternate org fields for the event index (source org and member org) instead of the traditional way ..."
       value: false
 
     # Correlation
-    MISP.correlation_engine:
-      description: "Choose which correlation engine to use. MISP defaults to the default engine, maintaining all data in the database whi..."
-      value: default
     MISP.correlation_limit:
       description: "Set a value for the maximum number of correlations a value should have before MISP will refuse to correlate it (extre..."
       value: 20
@@ -431,6 +422,7 @@ settings:
     MISP.disable_cached_exports:
       description: "Cached exports can take up a considerable amount of space and can be disabled instance wide using this setting. Even ..."
       value: true
+      force: true
     MISP.download_attachments_on_load:
       description: "Always download attachments when loaded by a user in a browser. It is highly recommended to leave this setting on tru..."
       value: true
@@ -443,9 +435,10 @@ settings:
     MISP.event_view_filter_fields:
       description: "Specify which fields to filter on when you search on the event view. Default values are : \"id, uuid, value, comment, ..."
       value: "id, uuid, value, comment, type, category, Tag.name"
+    # caddy in the same pod is a trusted proxy and forwards the client address
     MISP.log_client_ip_header:
       description: "If log_client_ip is enabled, you can customize which header field contains the client's IP address. This is generally..."
-      value: REMOTE_ADDR
+      value: HTTP_X_FORWARDED_FOR
     MISP.log_errors_ndjson_path:
       description: "Path for the ndjson error log file - defaults to /var/www/MISP/app//app/tmp/logs/error.log.ndjson"
       value: /var/www/MISP/app/tmp/logs/error.log.ndjson
@@ -486,9 +479,11 @@ settings:
     Security.rest_client_baseurl:
       description: "If left empty, the baseurl of your MISP is used. However, in some instances (such as port-forwarded VM installations)..."
       value: https://localhost
+    # MISP rejects the value until the organisation exists; the admin step creates it later
     MISP.host_org_id:
       description: "The hosting organisation of this instance. If this is not selected then replication instances cannot be added"
       value: 1
+      force: true
     Plugin.Enrichment_hover_enable:
       description: "Enable/disable the hover over information retrieved from the enrichment modules"
       value: false
@@ -700,7 +695,7 @@ settings:
       value: false
     GnuPG.sign:
       description: "Enable the signing of GnuPG emails. By default, GnuPG emails are signed"
-      value: true
+      value: false
     SMIME.enabled:
       description: "Enable S/MIME encryption. The encryption posture of the GnuPG.onlyencrypted and GnuPG.bodyonlyencrypted settings are ..."
       value: false
@@ -713,6 +708,7 @@ settings:
     SMIME.password:
       value: ""
       sensitive: true
+      blank_protection: true
 
   # -- s3: S3 attachment storage (only applied when PLUGIN_S3_BUCKET_NAME is set)
   s3:
@@ -822,3 +818,163 @@ settings:
     LinOTPAuth.verifyssl:
       description: "Set to false to skip SSL/TLS verify"
       value: true
+
+  # -- oidc: OidcAuth plugin, rendered into config.php when OIDC_ENABLE=true ---
+  # The documented OIDC_* names map onto these (env.py ALIASES). role_mapper and
+  # scopes take JSON in env; scopes also takes a comma-separated list.
+  oidc:
+    Security.auth:
+      description: "Authentication plugins MISP loads; each enabled auth group adds its own"
+      value: ["OidcAuth.Oidc"]
+    OidcAuth.provider_url:
+      value: ""
+      blank_protection: true
+    OidcAuth.issuer:
+      description: "Defaults to provider_url when unset"
+      value: ""
+      blank_protection: true
+    OidcAuth.client_id:
+      value: ""
+      blank_protection: true
+    OidcAuth.client_secret:
+      value: ""
+      sensitive: true
+      blank_protection: true
+    OidcAuth.role_mapper:
+      description: "IdP role (value of roles_property) to MISP role id or name; first match wins"
+      value: {}
+    OidcAuth.default_org:
+      description: "Organisation id, UUID or name for users the IdP gives no organisation"
+      value: ""
+      blank_protection: true
+    OidcAuth.scopes:
+      value: ["profile", "email"]
+    OidcAuth.roles_property:
+      value: roles
+    OidcAuth.roles_delimiter:
+      value: ","
+    OidcAuth.organisation_property:
+      value: organization
+    OidcAuth.organisation_uuid_property:
+      value: organization_uuid
+    OidcAuth.authentication_method:
+      value: client_secret_post
+    OidcAuth.code_challenge_method:
+      value: S256
+    OidcAuth.disable_request_object:
+      value: false
+    OidcAuth.disable_pushed_authorization_request:
+      value: false
+    OidcAuth.mixedAuth:
+      description: "true keeps the password form and adds a login button; false redirects every login to the IdP"
+      value: false
+    OidcAuth.unblock:
+      value: false
+    OidcAuth.skipProxy:
+      value: true
+    OidcAuth.offline_access:
+      value: false
+    OidcAuth.check_user_validity:
+      value: 0
+    OidcAuth.update_user_role:
+      value: true
+    OidcAuth.allow_email_linking:
+      value: false
+    OidcAuth.require_email_verified:
+      value: true
+    OidcAuth.login_button_text:
+      value: "Login with OIDC"
+
+  # -- ldap: LdapAuth plugin, rendered into config.php when LDAPAUTH_ENABLE=true
+  ldap:
+    Security.auth:
+      value: ["LdapAuth.Ldap"]
+    LdapAuth.ldapServer:
+      value: ""
+      blank_protection: true
+    LdapAuth.ldapDn:
+      value: ""
+      blank_protection: true
+    LdapAuth.ldapReaderUser:
+      value: ""
+      blank_protection: true
+    LdapAuth.ldapReaderPassword:
+      value: ""
+      sensitive: true
+      blank_protection: true
+    LdapAuth.ldapSearchFilter:
+      value: ""
+      blank_protection: true
+    LdapAuth.ldapSearchAttribute:
+      value: mail
+    LdapAuth.ldapEmailField:
+      value: mail
+    LdapAuth.ldapDefaultOrgId:
+      value: ""
+      blank_protection: true
+    LdapAuth.ldapDefaultRoleId:
+      value: ""
+      blank_protection: true
+    LdapAuth.ldapRoleField:
+      value: ""
+      blank_protection: true
+    LdapAuth.ldapOrgField:
+      value: ""
+      blank_protection: true
+    LdapAuth.ldapOrgGroupMapping:
+      value: {}
+    LdapAuth.ldapProtocol:
+      value: 3
+    LdapAuth.ldapNetworkTimeout:
+      value: 5
+    LdapAuth.ldapAllowReferrals:
+      value: false
+    LdapAuth.ldapNestedGroups:
+      value: false
+    LdapAuth.ldapCheckUserAccountControl:
+      value: false
+    LdapAuth.ldapEscape:
+      value: true
+    LdapAuth.ldapHeaderAuth:
+      value: false
+    LdapAuth.ldapHeaderAuthHeader:
+      value: ""
+      blank_protection: true
+    LdapAuth.ldapHeaderAuthTrustedProxies:
+      value: []
+    LdapAuth.debug:
+      value: false
+
+  # -- apache_auth: ApacheSecureAuth (header auth with LDAP lookup), rendered into
+  # config.php when APACHESECUREAUTH_LDAP_ENABLE=true
+  apache_auth:
+    ApacheSecureAuth.apacheEnv:
+      value: REMOTE_USER
+    ApacheSecureAuth.ldapServer:
+      value: ""
+      blank_protection: true
+    ApacheSecureAuth.ldapReaderUser:
+      value: ""
+      blank_protection: true
+    ApacheSecureAuth.ldapReaderPassword:
+      value: ""
+      sensitive: true
+      blank_protection: true
+    ApacheSecureAuth.ldapDN:
+      value: ""
+      blank_protection: true
+    ApacheSecureAuth.ldapSearchAttribute:
+      value: uid
+    ApacheSecureAuth.ldapFilter:
+      value: ""
+      blank_protection: true
+    ApacheSecureAuth.ldapDefaultRoleId:
+      value: ""
+      blank_protection: true
+    ApacheSecureAuth.ldapDefaultOrg:
+      value: ""
+      blank_protection: true
+    ApacheSecureAuth.ldapEmailField:
+      value: mail
+    ApacheSecureAuth.starttls:
+      value: false

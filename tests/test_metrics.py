@@ -1,5 +1,6 @@
 """Unit tests for the Prometheus metrics exporter."""
 
+import io
 import os
 import sys
 import time
@@ -14,6 +15,9 @@ from misp_container.metrics import (
     _metric,
     _collect_db_metrics,
     _collect_network_metrics,
+    _collect_queue_metrics,
+    _Redis,
+    RedisError,
     _check_server_auth,
     _check_tls_cert,
     collect_all,
@@ -363,32 +367,6 @@ class TestCollectDbMetrics:
         assert "misp_server_info" not in parsed
 
     @patch("misp_container.metrics._connect")
-    def test_job_queue_depth(self, mock_connect):
-        """misp_jobs_queued shows currently queued/running jobs by worker."""
-        mock_connect.return_value = _make_conn({
-            "system_settings": [],
-            "information_schema": [],
-            "organisations": {
-                "orgs": 0, "orgs_local": 0,
-                "users_active": 0, "users_disabled": 0,
-                "sharing_groups": 0, "tags": 0,
-            },
-            "FROM servers": [],
-            "status IN (1, 2)": [
-                {"worker": "default", "cnt": 3},
-                {"worker": "prio", "cnt": 1},
-            ],
-            "LEFT JOIN servers": [],
-            "misp_container_sync_log": [],
-        })
-        output, _ = _collect_db_metrics()
-        parsed = _parse_metrics(output)
-
-        queued = {s[0]["worker"]: s[1] for s in parsed["misp_jobs_queued"]}
-        assert queued["default"] == "3"
-        assert queued["prio"] == "1"
-
-    @patch("misp_container.metrics._connect")
     def test_job_counters(self, mock_connect):
         """All jobs fetched in one query; split into server vs non-server counters."""
         mock_connect.return_value = _make_conn({
@@ -400,7 +378,6 @@ class TestCollectDbMetrics:
                 "sharing_groups": 0, "tags": 0,
             },
             "FROM servers": [],
-            "status IN (1, 2)": [],
             "LEFT JOIN servers": [
                 # Server jobs (server_id is not None)
                 {"worker": "default", "job_type": "pull", "status": 4, "server_id": 1, "server_name": "Partner A", "cnt": 8},
@@ -410,6 +387,7 @@ class TestCollectDbMetrics:
                 {"worker": "default", "job_type": "publish", "status": 4, "server_id": None, "server_name": None, "cnt": 15},
                 {"worker": "cache", "job_type": "cache_feeds", "status": 4, "server_id": None, "server_name": None, "cnt": 7},
                 {"worker": "default", "job_type": "publish", "status": 3, "server_id": None, "server_name": None, "cnt": 2},
+                {"worker": "prio", "job_type": "publish_event", "status": 0, "server_id": None, "server_name": None, "cnt": 4},
             ],
             "misp_container_sync_log": [],
         })
@@ -432,6 +410,30 @@ class TestCollectDbMetrics:
         assert by_key[("default", "publish", "completed")] == "15"
         assert by_key[("cache", "cache_feeds", "completed")] == "7"
         assert by_key[("default", "publish", "failed")] == "2"
+        # MISP leaves a job at 0 while it waits and runs
+        assert by_key[("prio", "publish_event", "unfinished")] == "4"
+        assert "misp_jobs_queued" not in parsed
+
+    @patch("misp_container.metrics._connect")
+    def test_enabled_scheduled_tasks_by_type(self, mock_connect):
+        mock_connect.return_value = _make_conn({
+            "organisations": {"orgs": 0, "orgs_local": 0, "users_active": 0,
+                              "users_disabled": 0, "sharing_groups": 0, "tags": 0},
+            "FROM scheduled_tasks": [{"type": "Server", "cnt": 2}, {"type": "Feed", "cnt": 1}],
+        })
+        parsed = _parse_metrics(_collect_db_metrics()[0])
+        enabled = {s[0]["type"]: s[1] for s in parsed["misp_scheduled_tasks_enabled"]}
+        assert enabled == {"Server": "2", "Feed": "1"}
+
+    @patch("misp_container.metrics._connect")
+    def test_no_enabled_scheduled_tasks_is_zero(self, mock_connect):
+        mock_connect.return_value = _make_conn({
+            "organisations": {"orgs": 0, "orgs_local": 0, "users_active": 0,
+                              "users_disabled": 0, "sharing_groups": 0, "tags": 0},
+            "FROM scheduled_tasks": [],
+        })
+        parsed = _parse_metrics(_collect_db_metrics()[0])
+        assert parsed["misp_scheduled_tasks_enabled"] == [({}, "0")]
 
     @patch("misp_container.metrics._connect")
     def test_sync_log_metrics(self, mock_connect):
@@ -452,7 +454,7 @@ class TestCollectDbMetrics:
                 {"operation": "org-sync", "status": "error", "runs": 1,
                  "last_run": "2026-05-15 09:00:00", "avg_duration": 1.0},
             ],
-            "UNIX_TIMESTAMP": [{"ts": 1747310400}],
+            "UNIX_TIMESTAMP": [{"operation": "org-sync", "ts": 1747310400}],
         })
         output, _ = _collect_db_metrics()
         parsed = _parse_metrics(output)
@@ -462,7 +464,7 @@ class TestCollectDbMetrics:
         assert by_status["success"] == "5"
         assert by_status["error"] == "1"
 
-        assert parsed["misp_sync_last_success_timestamp_seconds"][0] == ({}, "1747310400")
+        assert parsed["misp_sync_last_success_timestamp_seconds"][0] == ({"operation": "org-sync"}, "1747310400")
 
     @patch("misp_container.metrics._connect")
     def test_sync_log_table_missing(self, mock_connect):
@@ -504,7 +506,6 @@ class TestCollectDbMetrics:
                 "sharing_groups": 0, "tags": 0,
             },
             "FROM servers": [],
-            "status IN (1, 2)": [],
             "LEFT JOIN servers": [],
             "misp_container_sync_log": [],
         })
@@ -676,11 +677,166 @@ class TestCheckTlsCert:
 # ---------------------------------------------------------------------------
 
 
+class FakeSocket:
+    """A socket that records what is sent and answers from scripted bytes."""
+
+    def __init__(self, replies: bytes):
+        self.sent = b""
+        self._replies = io.BytesIO(replies)
+        self.closed = False
+
+    def sendall(self, data):
+        self.sent += data
+
+    def makefile(self, mode):
+        return self._replies
+
+    def close(self):
+        self.closed = True
+
+
+class TestRedisClient:
+    """The minimal RESP client the exporter uses for the job queues."""
+
+    def _client(self, replies, **kwargs):
+        sock = FakeSocket(replies)
+        with patch("misp_container.metrics.socket.create_connection", return_value=sock):
+            return _Redis("redis", 6379, **kwargs), sock
+
+    def test_command_encoding_and_integer_reply(self):
+        client, sock = self._client(b":7\r\n")
+        assert client.call("LLEN", "background_jobs:default") == 7
+        assert sock.sent == b"*2\r\n$4\r\nLLEN\r\n$23\r\nbackground_jobs:default\r\n"
+
+    def test_auth_and_select_before_commands(self):
+        client, sock = self._client(b"+OK\r\n+OK\r\n", password="s3cret", database=1)
+        assert sock.sent == (b"*2\r\n$4\r\nAUTH\r\n$6\r\ns3cret\r\n"
+                             b"*2\r\n$6\r\nSELECT\r\n$1\r\n1\r\n")
+
+    def test_no_auth_and_no_select_for_database_zero(self):
+        client, sock = self._client(b"")
+        assert sock.sent == b""
+
+    def test_error_reply_raises(self):
+        client, _ = self._client(b"-NOAUTH Authentication required.\r\n")
+        with pytest.raises(RedisError, match="NOAUTH"):
+            client.call("LLEN", "x")
+
+    def test_closed_connection_raises(self):
+        client, _ = self._client(b"")
+        with pytest.raises(RedisError, match="closed"):
+            client.call("LLEN", "x")
+
+    def test_bulk_null_and_array_replies(self):
+        client, _ = self._client(b"$5\r\nhello\r\n$-1\r\n*2\r\n$1\r\na\r\n:3\r\n")
+        assert client.call("GET", "k") == "hello"
+        assert client.call("GET", "missing") is None
+        assert client.call("X") == ["a", 3]
+
+    def test_scan_follows_the_cursor(self):
+        replies = (b"*2\r\n$2\r\n17\r\n*1\r\n$3\r\nk:1\r\n"
+                   b"*2\r\n$1\r\n0\r\n*2\r\n$3\r\nk:2\r\n$3\r\nk:3\r\n")
+        client, sock = self._client(replies)
+        assert client.scan("k:*") == ["k:1", "k:2", "k:3"]
+        assert sock.sent.count(b"SCAN") == 2
+        assert b"$2\r\n17\r\n" in sock.sent
+
+
+class FakeRedis:
+    """Stands in for _Redis: list lengths and running keys by name."""
+
+    instances = []
+
+    def __init__(self, host, port, password="", database=0, timeout=3):
+        self.args = (host, port, password, database)
+        self.lists = {}
+        self.keys = []
+        self.closed = False
+        FakeRedis.instances.append(self)
+        self.lists.update(FakeRedis.preset_lists)
+        self.keys.extend(FakeRedis.preset_keys)
+
+    def call(self, *args):
+        if args[0] == "LLEN":
+            return self.lists.get(args[1], 0)
+        raise AssertionError(f"unexpected command {args}")
+
+    def scan(self, pattern):
+        prefix = pattern.rstrip("*")
+        return [k for k in self.keys if k.startswith(prefix)]
+
+    def close(self):
+        self.closed = True
+
+
+class TestCollectQueueMetrics:
+    """misp_jobs_queued reads waiting and running jobs from Redis."""
+
+    SETTINGS = {"host": "redis", "port": "6379", "password": "pw",
+                "database": "1", "namespace": "background_jobs"}
+
+    def setup_method(self):
+        FakeRedis.instances = []
+        FakeRedis.preset_lists = {}
+        FakeRedis.preset_keys = []
+
+    def _collect(self, settings=None):
+        with patch("misp_container.metrics._job_redis_settings", return_value=settings or self.SETTINGS), \
+             patch("misp_container.metrics._Redis", FakeRedis):
+            return _parse_metrics(_collect_queue_metrics())
+
+    def test_waiting_plus_running_per_queue(self):
+        FakeRedis.preset_lists = {"background_jobs:default": 2, "background_jobs:prio": 1}
+        FakeRedis.preset_keys = ["background_jobs:running:default:0b1c",
+                                 "background_jobs:running:cache:9f2e"]
+        parsed = self._collect()
+        queued = {s[0]["worker"]: s[1] for s in parsed["misp_jobs_queued"]}
+        assert queued == {"cache": "1", "default": "3", "email": "0", "prio": "1", "update": "0"}
+
+    def test_connects_with_misp_settings_and_closes(self):
+        self._collect()
+        client = FakeRedis.instances[0]
+        assert client.args == ("redis", "6379", "pw", "1")
+        assert client.closed
+
+    def test_namespace_from_settings(self):
+        FakeRedis.preset_lists = {"other:default": 5}
+        settings = dict(self.SETTINGS, namespace="other")
+        queued = {s[0]["worker"]: s[1] for s in self._collect(settings)["misp_jobs_queued"]}
+        assert queued["default"] == "5"
+
+    def test_closes_when_a_call_fails(self):
+        class Failing(FakeRedis):
+            def call(self, *args):
+                raise RedisError("boom")
+        with patch("misp_container.metrics._job_redis_settings", return_value=self.SETTINGS), \
+             patch("misp_container.metrics._Redis", Failing):
+            with pytest.raises(RedisError):
+                _collect_queue_metrics()
+        assert FakeRedis.instances[0].closed
+
+
 class TestCollectAll:
     """collect_all combines DB + network metrics with scrape metadata."""
 
     def setup_method(self):
         _reset_caches()
+        self._queues = patch("misp_container.metrics._collect_queue_metrics",
+                             return_value=_metric("misp_jobs_queued", "q", "gauge", [({"worker": "default"}, 0)]))
+        self._queues.start()
+
+    def teardown_method(self):
+        self._queues.stop()
+
+    @patch("misp_container.metrics._collect_network_metrics", return_value="")
+    @patch("misp_container.metrics._collect_db_metrics")
+    def test_redis_failure_sets_error_and_omits_the_queue_metric(self, mock_db, mock_net):
+        """The task runner treats a missing misp_jobs_queued as unknown and dispatches."""
+        mock_db.return_value = (_metric("misp_up", "up", "gauge", [({}, 1)]), [])
+        with patch("misp_container.metrics._collect_queue_metrics", side_effect=OSError("refused")):
+            parsed = _parse_metrics(collect_all())
+        assert "misp_jobs_queued" not in parsed
+        assert parsed["misp_scrape_errors"][0] == ({}, "1")
 
     @patch("misp_container.metrics._collect_network_metrics", return_value="")
     @patch("misp_container.metrics._collect_db_metrics")
@@ -754,7 +910,7 @@ class TestSyncLogTable:
 
         calls = [str(c) for c in cursor.execute.call_args_list]
         assert any("CREATE TABLE" in c for c in calls)
-        assert any("DELETE" in c and "30 DAY" in c for c in calls)
+        assert any("DELETE" in c and "30 DAY" in c and "operation <> 'migrate'" in c for c in calls)
         conn.commit.assert_called_once()
         conn.close.assert_called_once()
 
@@ -780,3 +936,38 @@ class TestSyncLogTable:
         assert args[0][1][1] == "success"
         conn.commit.assert_called_once()
         conn.close.assert_called_once()
+
+
+class TestCheckServerAuthEncrypted:
+    """With Security.encryption_key set, servers.authkey is ciphertext the probe cannot send."""
+
+    def _http_error(self, code):
+        import urllib.error
+        return urllib.error.HTTPError("https://x", code, "denied", {}, None)
+
+    def test_plain_key_rejected_is_unreachable(self):
+        with patch("misp_container.metrics.urllib.request.urlopen", side_effect=self._http_error(403)):
+            assert _check_server_auth("https://x", "a" * 40) is False
+
+    def test_encrypted_key_counts_http_answer_as_reachable(self):
+        from misp_container.metrics import ENCRYPTED_MAGIC
+        with patch("misp_container.metrics.urllib.request.urlopen", side_effect=self._http_error(403)):
+            assert _check_server_auth("https://x", ENCRYPTED_MAGIC + "cipher") is True
+
+    def test_encrypted_key_is_not_sent(self):
+        from misp_container.metrics import ENCRYPTED_MAGIC
+        seen = {}
+
+        def fake_urlopen(req, timeout=None, context=None):
+            seen["headers"] = dict(req.header_items())
+            raise self._http_error(401)
+
+        with patch("misp_container.metrics.urllib.request.urlopen", side_effect=fake_urlopen):
+            _check_server_auth("https://x", ENCRYPTED_MAGIC + "cipher")
+        assert "Authorization" not in seen["headers"]
+
+    def test_bytes_authkey_from_pymysql(self):
+        from misp_container.metrics import ENCRYPTED_MAGIC
+        with patch("misp_container.metrics.urllib.request.urlopen", side_effect=self._http_error(403)):
+            assert _check_server_auth("https://x", (ENCRYPTED_MAGIC + "cipher").encode("latin-1")) is True
+            assert _check_server_auth("https://x", b"a" * 40) is False

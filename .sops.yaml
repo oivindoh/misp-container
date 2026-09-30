@@ -5,7 +5,7 @@ creation_rules:
     age: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIP85EpeWD3ZQyeCG6gYJTwK1dC3ZhWgv739bHO21PpAz
 
   # dotenv secret files (encrypt values, keys stay readable)
-  - path_regex: 'secrets\.env$'
+  - path_regex: 'secrets(-[a-z]+)?\.env$'
     age: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIP85EpeWD3ZQyeCG6gYJTwK1dC3ZhWgv739bHO21PpAz
   - path_regex: 'secrets\.sops\.env$'
     age: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIP85EpeWD3ZQyeCG6gYJTwK1dC3ZhWgv739bHO21PpAz

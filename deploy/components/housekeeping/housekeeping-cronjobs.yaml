@@ -1,0 +1,154 @@
+# Nightly housekeeping: batched deletes of old rows in jobs, logs and
+# audit_logs, through the main image (python3 -m misp_container.housekeeping),
+# on MariaDB or PostgreSQL. No OPTIMIZE TABLE: on InnoDB it rebuilds the table
+# under a metadata lock. Retention is a policy choice: set
+# HOUSEKEEPING_<TABLE>_DAYS in misp-env.
+# -- Delete jobs older than HOUSEKEEPING_JOBS_DAYS (2) --
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: housekeeping-jobs
+  labels:
+    app.kubernetes.io/name: housekeeping-jobs
+spec:
+  schedule: "0 2 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 3600
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: housekeeping-jobs
+        spec:
+          restartPolicy: OnFailure
+          securityContext:
+            runAsUser: 1000
+            runAsGroup: 1000
+            runAsNonRoot: true
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: housekeeping
+              image: ghcr.io/oivindoh/misp-container:2.5.37
+              command: ["/usr/bin/tini", "--", "python3", "-m", "misp_container.housekeeping", "jobs"]
+              envFrom:
+                - configMapRef:
+                    name: misp-env
+                - secretRef:
+                    name: misp-db
+              resources:
+                requests:
+                  cpu: 20m
+                  memory: 64Mi
+                limits:
+                  cpu: 500m
+                  memory: 256Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: [ALL]
+---
+# -- Delete logs older than HOUSEKEEPING_LOGS_DAYS (30) --
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: housekeeping-logs
+  labels:
+    app.kubernetes.io/name: housekeeping-logs
+spec:
+  schedule: "0 3 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 3600
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: housekeeping-logs
+        spec:
+          restartPolicy: OnFailure
+          securityContext:
+            runAsUser: 1000
+            runAsGroup: 1000
+            runAsNonRoot: true
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: housekeeping
+              image: ghcr.io/oivindoh/misp-container:2.5.37
+              command: ["/usr/bin/tini", "--", "python3", "-m", "misp_container.housekeeping", "logs"]
+              envFrom:
+                - configMapRef:
+                    name: misp-env
+                - secretRef:
+                    name: misp-db
+              resources:
+                requests:
+                  cpu: 20m
+                  memory: 64Mi
+                limits:
+                  cpu: 500m
+                  memory: 256Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: [ALL]
+---
+# -- Delete audit_logs older than HOUSEKEEPING_AUDIT_LOGS_DAYS (90) --
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: housekeeping-audit-logs
+  labels:
+    app.kubernetes.io/name: housekeeping-audit-logs
+spec:
+  schedule: "10 3 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 3600
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: housekeeping-audit-logs
+        spec:
+          restartPolicy: OnFailure
+          securityContext:
+            runAsUser: 1000
+            runAsGroup: 1000
+            runAsNonRoot: true
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: housekeeping
+              image: ghcr.io/oivindoh/misp-container:2.5.37
+              command: ["/usr/bin/tini", "--", "python3", "-m", "misp_container.housekeeping", "audit_logs"]
+              envFrom:
+                - configMapRef:
+                    name: misp-env
+                - secretRef:
+                    name: misp-db
+              resources:
+                requests:
+                  cpu: 20m
+                  memory: 64Mi
+                limits:
+                  cpu: 500m
+                  memory: 256Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: [ALL]

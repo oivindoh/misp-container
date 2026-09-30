@@ -25,9 +25,10 @@ class APIError(Exception):
 class MISPClient:
     """HTTP client for the MISP REST API."""
 
-    def __init__(self, base_url: str, api_key: str, verify_ssl: bool = True):
+    def __init__(self, base_url: str, api_key: str, verify_ssl: bool = True, timeout: int = 30):
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
+        self.timeout = timeout
         self._ctx = ssl.create_default_context()
         if not verify_ssl:
             self._ctx.check_hostname = False
@@ -48,7 +49,7 @@ class MISPClient:
             "Content-Type": "application/json",
         })
         try:
-            with urllib.request.urlopen(req, context=self._ctx, timeout=30) as resp:
+            with urllib.request.urlopen(req, context=self._ctx, timeout=self.timeout) as resp:
                 raw = resp.read()
                 try:
                     return json.loads(raw)

@@ -1,3 +1,5 @@
+# Prometheus exporter on port 9191: MISP's database, the job queues in Redis and
+# the sync partners (docs/metrics.md). It reads MISP's data and never changes it.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -30,7 +32,8 @@ spec:
 
       containers:
         - name: metrics
-          image: ghcr.io/oivindoh/misp-container-metrics
+          image: ghcr.io/oivindoh/misp-container
+          command: ["/usr/bin/tini", "--", "python3", "/entrypoint-metrics.py"]
           ports:
             - name: metrics
               containerPort: 9191
@@ -38,15 +41,31 @@ spec:
           envFrom:
             - configMapRef:
                 name: misp-env
-            - secretRef:
-                name: misp-secrets
+          # The database credentials and the Redis password only: the exporter
+          # never needs the admin secrets or the other application secrets
+          env:
+            - name: DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: misp-db
+                  key: DB_USER
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: misp-db
+                  key: DB_PASSWORD
+            - name: MISP_REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: misp-app
+                  key: MISP_REDIS_PASSWORD
           resources:
             requests:
               cpu: 5m
               memory: 32Mi
             limits:
               cpu: 100m
-              memory: 64Mi
+              memory: 128Mi
           startupProbe:
             httpGet:
               path: /healthz

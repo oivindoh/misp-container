@@ -13,7 +13,7 @@ import sys
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
 from misp_container.env import apply_defaults
-from misp_container.db import wait_for_mysql
+from misp_container.db import wait_for_db
 from misp_container.metrics import collect_all
 from misp_container.log import setup as setup_logging, get as getlog
 
@@ -55,7 +55,7 @@ class MetricsHandler(BaseHTTPRequestHandler):
 def main():
     log.info("MISP metrics exporter starting")
     apply_defaults()
-    wait_for_mysql(retries=30, wait_seconds=5)
+    wait_for_db(retries=30, wait_seconds=5)
 
     # Try IPv6 dual-stack first (K8s), fall back to IPv4 (Docker)
     try:

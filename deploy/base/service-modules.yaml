@@ -1,3 +1,4 @@
+# misp-modules on port 6666, for MISP's enrichment, import, export and action calls.
 apiVersion: v1
 kind: Service
 metadata:

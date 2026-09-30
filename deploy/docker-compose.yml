@@ -1,43 +1,31 @@
-# Docker Compose for running MISP.
+# Compose stack for running MISP with podman.
 #
 # Pull and run (no build required):
-#   docker compose up -d
+#   podman compose up -d
 #
 # Build from source and run:
-#   docker compose build
-#   docker compose up -d
+#   podman compose build
+#   podman compose up -d
 #
 # Default login: admin@admin.test / ChangeMe-Str0ng!Pass#2026
 #
-# Set MISP_IMAGE_TAG to pin a version, e.g.:
-#   MISP_IMAGE_TAG=2.5.37 docker compose up -d
+# MISP_IMAGE_TAG selects the image tag (default: the current release); CI sets
+# it to the tag it built so the suites run the images from the checkout.
 
 x-misp-image: &misp-image
-  image: ghcr.io/oivindoh/misp-container:2.5.37
+  image: ghcr.io/oivindoh/misp-container:${MISP_IMAGE_TAG:-2.5.37}
   build:
     context: ..
     target: final
 
 x-misp-caddy-image: &misp-caddy-image
-  image: ghcr.io/oivindoh/misp-container-caddy:2.5.37
+  image: ghcr.io/oivindoh/misp-container-caddy:${MISP_IMAGE_TAG:-2.5.37}
   build:
     context: ..
     target: caddy
 
-x-misp-sync-image: &misp-sync-image
-  image: ghcr.io/oivindoh/misp-container-sync:2.5.37
-  build:
-    context: ..
-    target: sync
-
-x-misp-metrics-image: &misp-metrics-image
-  image: ghcr.io/oivindoh/misp-container-metrics:2.5.37
-  build:
-    context: ..
-    target: metrics
-
 x-misp-modules-image: &misp-modules-image
-  image: ghcr.io/oivindoh/misp-container-modules:2.5.37
+  image: ghcr.io/oivindoh/misp-container-modules:${MISP_IMAGE_TAG:-2.5.37}
   build:
     context: ..
     target: modules
@@ -46,35 +34,42 @@ x-misp-common: &misp-common
   <<: *misp-image
   env_file:
     - base/base.env
-    - base/secrets.env
+    - base/secrets-db.env
+    - base/secrets-app.env
+    - base/secrets-admin.env
     - compose.env
     - compose-secrets.env
   user: "1000:1000"
 
 services:
-  # -- One-shot init: populates shared volumes from the image --------------
-  init:
+  # -- One-shot configure: schema, settings, admin, GPG, sets MISP.live -----
+  configure:
     <<: *misp-common
-    command: ["python3", "/entrypoint-init.py"]
+    command: ["python3", "/entrypoint-configure.py"]
     volumes:
-      - misp-files:/var/www/MISP/app/files
-      - misp-attachments:/var/www/MISP/app/attachments
+      - misp-files-scripts-tmp:/var/www/MISP/app/files/scripts/tmp
+      - misp-files-certs:/var/www/MISP/app/files/certs
+      - misp-files-terms:/var/www/MISP/app/files/terms
+      - misp-files-img-orgs:/var/www/MISP/app/files/img/orgs
       - misp-config:/var/www/MISP/app/Config
       - misp-tmp:/var/www/MISP/app/tmp
       - misp-gnupg:/var/www/MISP/.gnupg
-      - misp-img-orgs:/var/www/MISP/app/webroot/img/orgs
-      - misp-img-custom:/var/www/MISP/app/webroot/img/custom
-      - init-tmp:/tmp
+      - configure-tmp:/tmp
     depends_on:
       mysql:
         condition: service_healthy
+      redis:
+        condition: service_healthy
 
-  # -- PHP-FPM -------------------------------------------------------------
+  # -- PHP-FPM (scale freely: podman compose up -d --scale web=2) ------------
   web:
     <<: *misp-common
     command: ["python3", "/entrypoint-web.py"]
     volumes:
-      - misp-files:/var/www/MISP/app/files
+      - misp-files-scripts-tmp:/var/www/MISP/app/files/scripts/tmp
+      - misp-files-certs:/var/www/MISP/app/files/certs
+      - misp-files-terms:/var/www/MISP/app/files/terms
+      - misp-files-img-orgs:/var/www/MISP/app/files/img/orgs
       - misp-attachments:/var/www/MISP/app/attachments
       - misp-config:/var/www/MISP/app/Config
       - misp-tmp:/var/www/MISP/app/tmp
@@ -83,7 +78,7 @@ services:
       - misp-img-custom:/var/www/MISP/app/webroot/img/custom
       - php-tmp:/tmp
     depends_on:
-      init:
+      configure:
         condition: service_completed_successfully
       mysql:
         condition: service_healthy
@@ -96,6 +91,10 @@ services:
     user: "1000:1000"
     environment:
       PHP_FPM_HOST: web
+      # No proxy stands in front of caddy here, so it trusts none and passes MISP
+      # the address of each client, not an X-Forwarded-For the client sent. With a
+      # reverse proxy in front, set this to its address.
+      TRUSTED_PROXY_CIDR: 127.0.0.1/32
       # Set CADDY_ADDRESS to a domain (e.g. misp.example.com) for automatic HTTPS.
       # Leave unset for plain HTTP on :8080 (when behind a load balancer).
       # CADDY_ADDRESS: misp.example.com
@@ -116,14 +115,17 @@ services:
     <<: *misp-common
     command: ["python3", "/entrypoint-worker.py"]
     volumes:
-      - misp-files:/var/www/MISP/app/files
+      - misp-files-scripts-tmp:/var/www/MISP/app/files/scripts/tmp
+      - misp-files-certs:/var/www/MISP/app/files/certs
+      - misp-files-terms:/var/www/MISP/app/files/terms
+      - misp-files-img-orgs:/var/www/MISP/app/files/img/orgs
       - misp-attachments:/var/www/MISP/app/attachments
       - misp-config:/var/www/MISP/app/Config
       - worker-misp-tmp:/var/www/MISP/app/tmp
       - misp-gnupg:/var/www/MISP/.gnupg
       - worker-tmp:/tmp
     depends_on:
-      init:
+      configure:
         condition: service_completed_successfully
       mysql:
         condition: service_healthy
@@ -132,13 +134,8 @@ services:
 
   # -- Org sync (runs once after MISP is ready, then exits) ----------------
   sync:
-    <<: *misp-sync-image
-    user: "1000:1000"
-    env_file:
-      - base/base.env
-      - base/secrets.env
-      - compose.env
-      - compose-secrets.env
+    <<: *misp-common
+    command: ["python3", "/entrypoint-sync.py"]
     environment:
       SYNC_BASE_URL: http://caddy:8080
     # volumes:
@@ -165,18 +162,47 @@ services:
 
   # -- Prometheus metrics exporter ------------------------------------------
   metrics:
-    <<: *misp-metrics-image
-    user: "1000:1000"
-    env_file:
-      - base/base.env
-      - base/secrets.env
-      - compose.env
-      - compose-secrets.env
+    <<: *misp-common
+    command: ["python3", "/entrypoint-metrics.py"]
     ports:
       - "9191:9191"
     depends_on:
       mysql:
         condition: service_healthy
+
+  # -- Migration of an existing MySQL/MariaDB MISP into this stack (one-off):
+  #    podman compose --profile migrate run --rm migrate
+  #    Source connection: components/migrate/secrets-migrate.env. To copy the
+  #    attachments, mount the source's attachments directory at /mnt/source and
+  #    set MIGRATE_SOURCE_FILES=/mnt/source, or set MIGRATE_SOURCE_S3_* for the
+  #    source's bucket. See docs/migration.md.
+  migrate:
+    <<: *misp-image
+    profiles: [migrate]
+    command: ["python3", "-m", "misp_container.migrate"]
+    env_file:
+      - base/base.env
+      - base/secrets-db.env
+      - base/secrets-app.env
+      - compose.env
+      - compose-secrets.env
+      - components/migrate/secrets-migrate.env
+    user: "1000:1000"
+    volumes:
+      - misp-attachments:/var/www/MISP/app/attachments
+      - migrate-tmp:/tmp
+      # - /srv/old-misp/app/files:/mnt/source:ro
+    depends_on:
+      mysql:
+        condition: service_healthy
+
+  # -- Tools (podman compose --profile tools run --rm composer-lock) ---------
+  composer-lock:
+    profiles: [tools]
+    build:
+      context: ..
+      target: composer-lock
+    command: ["cat", "/tmp/composer.lock"]
 
   # -- MariaDB -------------------------------------------------------------
   mysql:
@@ -186,7 +212,7 @@ services:
       - --collation-server=utf8mb4_unicode_ci
       - --max-allowed-packet=1G
     env_file:
-      - base/secrets.env
+      - base/secrets-db.env
       - compose-secrets.env
     environment:
       MARIADB_DATABASE: misp
@@ -198,6 +224,26 @@ services:
       timeout: 5s
       retries: 10
       start_period: 30s
+
+  # -- PostgreSQL (podman compose --profile postgres; set DB_ENGINE=postgres,
+  #    DB_HOST=postgres, DB_PORT=5432 in compose.env) ----------------------------
+  postgres:
+    profiles: [postgres]
+    image: docker.io/library/postgres:17
+    env_file:
+      - base/secrets-db.env
+      - compose-secrets.env
+    environment:
+      POSTGRES_DB: misp
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d misp"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
 
   # -- Redis ---------------------------------------------------------------
   redis:
@@ -218,17 +264,22 @@ services:
       retries: 5
 
 volumes:
-  misp-files:
+  misp-files-scripts-tmp:
+  misp-files-certs:
+  misp-files-terms:
+  misp-files-img-orgs:
   misp-attachments:
   misp-config:
   misp-tmp:
   misp-gnupg:
   misp-img-orgs:
   misp-img-custom:
-  init-tmp:
+  configure-tmp:
+  migrate-tmp:
   php-tmp:
   worker-misp-tmp:
   worker-tmp:
   mysql-data:
+  postgres-data:
   caddy-data:
   caddy-config:

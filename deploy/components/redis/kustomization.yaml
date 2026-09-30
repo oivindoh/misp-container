@@ -1,0 +1,12 @@
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+
+# Single Redis without persistence: sessions and queued jobs do not survive a
+# restart. Leave this component out to use an external Redis, and set
+# MISP_REDIS_HOST in the overlay.
+resources:
+  - redis.yaml
+images:
+  - name: docker.io/library/redis
+    newTag: 8.6.3-trixie
+    digest: sha256:0c341492924cad6f5483f9133e43bd6c51ecdecbcadfac5b51657393b6a7936c

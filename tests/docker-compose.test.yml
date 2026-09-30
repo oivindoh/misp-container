@@ -1,17 +1,25 @@
-# Test overlay -- overrides docker-compose.yml with test-specific values.
-# Used by tests/run-integration-tests.sh
+# Test overlay -- overrides deploy/docker-compose.yml with test-specific values.
+# Used by tests/e2e/test_integration.py
 
+# Every env_file list here repeats the list it overrides, then adds the test
+# files. podman-compose appends an override list and docker compose merges it
+# and drops repeats; only a repeated prefix gives both runners the same settings
+# (tests/test_compose_files.py).
 x-test-env: &test-env
   env_file:
     - base/base.env
-    - base/secrets.env
+    - base/secrets-db.env
+    - base/secrets-app.env
+    - base/secrets-admin.env
+    - compose.env
+    - compose-secrets.env
     - ../tests/test-compose.env
     - ../tests/test-compose-secrets.env
 
 services:
   # read_only on all our containers to catch filesystem write issues
   # before they hit Kubernetes (readOnlyRootFilesystem: true)
-  init:
+  configure:
     <<: *test-env
     read_only: true
   web:
@@ -25,13 +33,17 @@ services:
   caddy:
     read_only: true
     ports:
-      - "18080:8080"
+      - "28080:8080"
 
   sync:
     read_only: true
     env_file:
       - base/base.env
-      - base/secrets.env
+      - base/secrets-db.env
+      - base/secrets-app.env
+      - base/secrets-admin.env
+      - compose.env
+      - compose-secrets.env
       - ../tests/test-compose.env
       - ../tests/test-compose-secrets.env
 
@@ -39,7 +51,11 @@ services:
     read_only: true
     env_file:
       - base/base.env
-      - base/secrets.env
+      - base/secrets-db.env
+      - base/secrets-app.env
+      - base/secrets-admin.env
+      - compose.env
+      - compose-secrets.env
       - ../tests/test-compose.env
       - ../tests/test-compose-secrets.env
     ports:
@@ -52,23 +68,34 @@ services:
 
   mysql:
     env_file:
-      - base/secrets.env
+      - base/secrets-db.env
+      - compose-secrets.env
       - ../tests/test-compose-secrets.env
     environment:
       MARIADB_DATABASE: misp
 
+  # command and healthcheck come from the base file; repeating a list here
+  # makes podman-compose concatenate it
   redis:
     env_file:
+      - compose-secrets.env
       - ../tests/test-compose-secrets.env
-    command: >
-      sh -c 'redis-server
-      --requirepass "$$MISP_REDIS_PASSWORD"
-      --maxmemory 128mb
-      --maxmemory-policy noeviction
-      --save ""
-      --appendonly no'
-    healthcheck:
-      test: ["CMD-SHELL", "redis-cli -a $$MISP_REDIS_PASSWORD --no-auth-warning ping"]
+
+  # PostgreSQL for the second run of the suite (tests/e2e/test_integration.py --db-engine postgres)
+  postgres:
+    env_file:
+      - base/secrets-db.env
+      - compose-secrets.env
+      - ../tests/test-compose-secrets.env
+
+  # OIDC provider for the login test (tests/dex.yaml)
+  dex:
+    image: ghcr.io/dexidp/dex:v2.45.1
+    command: ["dex", "serve", "/etc/dex/config.yaml"]
+    volumes:
+      - ../tests/dex.yaml:/etc/dex/config.yaml:ro
+    ports:
+      - "15556:5556"
 
   # S3-compatible storage for attachment testing
   garage:

@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
 """Background worker entrypoint.
 
-Waits for web container to finish configuring (MISP.live=true),
+Waits for the configure step to finish (MISP.live=true),
 generates supervisord config, then exec's supervisord.
 Runs as UID 1000 (misp) - no root operations.
 """
 
 import os
 import sys
-import time
 from pathlib import Path
 
-from misp_container import CAKE, MISP_BASE
+from misp_container import CAKE, MISP_BASE, WORKER_GROUP, WORKER_QUEUES
 from misp_container.env import apply_defaults, env
 from misp_container import db
+from misp_container.init import prepare, check_writable
 from misp_container.log import setup as setup_logging, get as getlog
 
 SUPERVISORD_CONF = "/tmp/supervisord-workers.conf"
@@ -26,18 +26,18 @@ process_name=%(program_name)s_%(process_num)02d
 numprocs={numprocs}
 autostart=true
 autorestart=true
+stopwaitsecs={stopwait}
+stopasgroup=true
+killasgroup=true
 stdout_logfile=/dev/stdout
 stdout_logfile_maxbytes=0
 stderr_logfile=/dev/stderr
 stderr_logfile_maxbytes=0
 """
 
-SCHEDULER_TEMPLATE = """
-[program:scheduler]
-directory={misp_base}
-command={cake} scheduler_worker
-process_name=%(program_name)s
-numprocs=1
+LOGRELAY_TEMPLATE = """
+[program:logrelay]
+command={python} -m misp_container.logrelay
 autostart=true
 autorestart=true
 stdout_logfile=/dev/stdout
@@ -81,51 +81,29 @@ username={sv_user}
 password={sv_pass}
 """
 
+    # A job already popped from Redis is lost when its worker dies, so a
+    # stopping worker gets this long to finish before SIGKILL
+    stopwait = env("WORKER_STOP_GRACE", "300")
+
     sections = [header]
-    for name in ("default", "prio", "email", "update", "cache"):
+    for name in WORKER_QUEUES:
         numprocs = env(f"NUM_WORKERS_{name.upper()}", "0")
         if int(numprocs) > 0:
             sections.append(WORKER_TEMPLATE.format(
-                name=name, misp_base=MISP_BASE, cake=CAKE, numprocs=numprocs,
+                name=name, misp_base=MISP_BASE, cake=CAKE, numprocs=numprocs, stopwait=stopwait,
             ))
 
-    if env("ENABLE_SCHEDULER") == "true":
-        sections.append(SCHEDULER_TEMPLATE.format(misp_base=MISP_BASE, cake=CAKE))
-    else:
-        log.info("scheduler disabled (ENABLE_SCHEDULER=false)")
+    # Outside the worker group: MISP must not list or manage it as a worker
+    sections.append(LOGRELAY_TEMPLATE.format(python=sys.executable))
 
-    # MISP's BackgroundJobsTool filters processes by group name 'misp-workers'.
-    # Group all worker programs under this name so the diagnostic page sees them.
-    worker_programs = [name for name in ("default", "prio", "email", "update", "cache")
+    # MISP's BackgroundJobsTool finds its workers by this group name, for the
+    # diagnostic page and for restarts
+    worker_programs = [name for name in WORKER_QUEUES
                        if int(env(f"NUM_WORKERS_{name.upper()}", "0")) > 0]
-    if env("ENABLE_SCHEDULER") == "true":
-        worker_programs.append("scheduler")
     if worker_programs:
-        sections.append(f"\n[group:misp-workers]\nprograms={','.join(worker_programs)}\n")
+        sections.append(f"\n[group:{WORKER_GROUP}]\nprograms={','.join(worker_programs)}\n")
 
     Path(SUPERVISORD_CONF).write_text("".join(sections))
-
-
-def wait_for_web():
-    """Wait for the web container to finish configuring (MISP.live=true)."""
-    log.info("waiting for web container to finish configuring")
-    db.wait_for_mysql(retries=60, wait_seconds=5)
-
-    for i in range(120, 0, -1):
-        try:
-            result = db.query(
-                "SELECT value FROM system_settings WHERE setting='MISP.live';"
-            ).strip().strip('"')
-            if result == "true":
-                log.info("MISP is live, web configuration complete")
-                return
-        except Exception:
-            pass
-        log.info("waiting for MISP.live=true (%d retries left)", i)
-        time.sleep(3)
-
-    log.error("web container did not set MISP.live=true after timeout")
-    sys.exit(1)
 
 
 # -- Main --
@@ -136,7 +114,11 @@ log = getlog("worker")
 log.info("MISP worker container starting")
 
 apply_defaults()
-wait_for_web()
+prepare()
+if not env("PLUGIN_S3_BUCKET_NAME"):
+    check_writable(env("MISP_ATTACHMENTS_DIR"), "attachments")
+db.wait_for_db(retries=60, wait_seconds=5)
+db.wait_for_live()
 generate_supervisord_config()
 
 log.info("starting background workers via supervisord")

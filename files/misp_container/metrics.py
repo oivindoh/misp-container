@@ -1,7 +1,8 @@
 """MISP Prometheus metrics exporter.
 
-Collects operational metrics from the MISP database and remote server
-connectivity checks, exposing them in Prometheus exposition format.
+Collects operational metrics from the MISP database, the background job
+queues in Redis and remote server connectivity checks, exposing them in
+Prometheus exposition format.
 """
 
 from __future__ import annotations
@@ -9,9 +10,13 @@ from __future__ import annotations
 import socket
 import ssl
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 
+from functools import lru_cache
+
+from . import WORKER_QUEUES
 from .env import env
 from .log import get as getlog
 
@@ -55,25 +60,158 @@ def _metric(name: str, help_text: str, mtype: str, samples: list) -> str:
 
 
 def _connect():
-    import pymysql
-    import pymysql.cursors
+    """A connection whose cursor returns dict rows on either engine."""
+    from . import db
+    return _DictConnection(db._connect())
 
-    kwargs = {
-        "host": env("MYSQL_HOST"),
-        "port": int(env("MYSQL_PORT")),
-        "user": env("MYSQL_USER"),
-        "password": env("MYSQL_PASSWORD"),
-        "database": env("MYSQL_DATABASE"),
-        "charset": "utf8mb4",
-        "cursorclass": pymysql.cursors.DictCursor,
-        "connect_timeout": 5,
-        "read_timeout": 10,
-    }
-    if env("MYSQL_TLS") == "true":
-        import ssl as _ssl
 
-        kwargs["ssl"] = {"ssl": _ssl.create_default_context()}
-    return pymysql.connect(**kwargs)
+class _DictConnection:
+    """DB-API connection wrapper: cursors yield dicts keyed by column name."""
+
+    def __init__(self, conn):
+        self._conn = conn
+
+    def cursor(self):
+        return _DictCursor(self._conn.cursor())
+
+    def commit(self):
+        self._conn.commit()
+
+    def close(self):
+        self._conn.close()
+
+
+class _DictCursor:
+    def __init__(self, cur):
+        self._cur = cur
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self._cur.close()
+        return False
+
+    def execute(self, sql, params=None):
+        return self._cur.execute(sql, params or ())
+
+    def _names(self):
+        return [d[0] for d in (self._cur.description or [])]
+
+    def _row(self, row):
+        return None if row is None else {n: v for n, v in zip(self._names(), row)}
+
+    def fetchone(self):
+        return self._row(self._cur.fetchone())
+
+    def fetchall(self):
+        return [self._row(r) for r in self._cur.fetchall()]
+
+
+# ---------------------------------------------------------------------------
+# Background job queues (Redis)
+# ---------------------------------------------------------------------------
+
+# MISP's key for a job a worker runs: <namespace>:running:<queue>:<job id>
+RUNNING_PREFIX = "running"
+
+
+class RedisError(Exception):
+    pass
+
+
+class _Redis:
+    """The few Redis commands the exporter needs, over one socket (RESP2)."""
+
+    def __init__(self, host: str, port, password: str = "", database=0, timeout: float = 3):
+        self._sock = socket.create_connection((host, int(port)), timeout=timeout)
+        self._reader = self._sock.makefile("rb")
+        if password:
+            self.call("AUTH", password)
+        if int(database or 0):
+            self.call("SELECT", database)
+
+    def call(self, *args):
+        parts = [b"*%d\r\n" % len(args)]
+        for arg in args:
+            data = str(arg).encode()
+            parts.append(b"$%d\r\n%s\r\n" % (len(data), data))
+        self._sock.sendall(b"".join(parts))
+        return self._reply()
+
+    def _reply(self):
+        line = self._reader.readline()
+        if not line.endswith(b"\r\n"):
+            raise RedisError("connection closed")
+        kind, rest = line[:1], line[1:-2]
+        if kind == b"+":
+            return rest.decode()
+        if kind == b"-":
+            raise RedisError(rest.decode(errors="replace"))
+        if kind == b":":
+            return int(rest)
+        if kind == b"$":
+            size = int(rest)
+            if size < 0:
+                return None
+            return self._reader.read(size + 2)[:-2].decode(errors="replace")
+        if kind == b"*":
+            size = int(rest)
+            return None if size < 0 else [self._reply() for _ in range(size)]
+        raise RedisError(f"unexpected reply {line[:40]!r}")
+
+    def scan(self, pattern: str) -> list[str]:
+        keys, cursor = [], "0"
+        while True:
+            cursor, batch = self.call("SCAN", cursor, "MATCH", pattern, "COUNT", 1000)
+            keys.extend(batch)
+            if cursor == "0":
+                return keys
+
+    def close(self) -> None:
+        self._reader.close()
+        self._sock.close()
+
+
+@lru_cache(maxsize=1)
+def _job_redis_settings() -> dict[str, str]:
+    """The Redis connection MISP uses for background jobs: env over settings.yaml."""
+    from .config import load_settings_yaml
+    wanted = {f"SimpleBackgroundJobs.redis_{k}": k
+              for k in ("host", "port", "password", "database", "namespace")}
+    found = {}
+    for specs in load_settings_yaml().values():
+        for spec in specs:
+            if spec.name in wanted:
+                found[wanted[spec.name]] = spec.effective_value
+    return found
+
+
+def _collect_queue_metrics() -> str:
+    """Jobs waiting in or running from each queue, read where MISP keeps them.
+
+    MISP's jobs table is no queue: a row has status 0 while its job waits and
+    runs, and 3 or 4 once it ends. The live state is in Redis: a list per queue
+    for waiting jobs, and a running:<queue>:<id> key while a worker runs one.
+    """
+    cfg = _job_redis_settings()
+    ns = cfg.get("namespace") or "background_jobs"
+    client = _Redis(cfg.get("host") or "redis", cfg.get("port") or 6379,
+                    cfg.get("password", ""), cfg.get("database") or 1)
+    try:
+        counts = {q: int(client.call("LLEN", f"{ns}:{q}")) for q in WORKER_QUEUES}
+        running_prefix = f"{ns}:{RUNNING_PREFIX}:"
+        for key in client.scan(f"{running_prefix}*"):
+            queue = key[len(running_prefix):].split(":", 1)[0]
+            counts[queue] = counts.get(queue, 0) + 1
+    finally:
+        client.close()
+    return _metric(
+        "misp_jobs_queued",
+        "Background jobs waiting or running by worker queue (Redis)",
+        "gauge",
+        [({"worker": q}, n) for q, n in sorted(counts.items())],
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -142,23 +280,32 @@ def _collect_db_metrics() -> tuple[str, list[dict]]:
             # tables (attributes, shadow_attributes) to avoid full index scans.
             # Small tables (orgs, users, tags) use exact COUNT(*).
             try:
-                db = env("MYSQL_DATABASE")
-                cur.execute(
-                    "SELECT TABLE_NAME, TABLE_ROWS FROM information_schema.TABLES "
-                    "WHERE TABLE_SCHEMA = %s "
-                    "AND TABLE_NAME IN ('events', 'attributes', 'shadow_attributes')",
-                    (db,),
-                )
+                from . import db as dbmod
+                if dbmod.is_postgres():
+                    cur.execute(
+                        'SELECT relname AS "TABLE_NAME", GREATEST(n_live_tup, 0) AS "TABLE_ROWS" '
+                        "FROM pg_stat_user_tables "
+                        "WHERE relname IN ('events', 'attributes', 'shadow_attributes')"
+                    )
+                else:
+                    cur.execute(
+                        "SELECT TABLE_NAME, TABLE_ROWS FROM information_schema.TABLES "
+                        "WHERE TABLE_SCHEMA = %s "
+                        "AND TABLE_NAME IN ('events', 'attributes', 'shadow_attributes')",
+                        (env("DB_NAME"),),
+                    )
                 approx = {r["TABLE_NAME"]: int(r["TABLE_ROWS"] or 0) for r in cur.fetchall()}
 
                 # Small tables: exact counts are cheap
+                from . import db as dbmod
+                t, f = dbmod.bool_lit(True), dbmod.bool_lit(False)
                 cur.execute(
-                    """
+                    f"""
                     SELECT
                         (SELECT COUNT(*) FROM organisations) AS orgs,
-                        (SELECT COUNT(*) FROM organisations WHERE local = 1) AS orgs_local,
-                        (SELECT COUNT(*) FROM users WHERE disabled = 0) AS users_active,
-                        (SELECT COUNT(*) FROM users WHERE disabled = 1) AS users_disabled,
+                        (SELECT COUNT(*) FROM organisations WHERE local = {t}) AS orgs_local,
+                        (SELECT COUNT(*) FROM users WHERE disabled = {f}) AS users_active,
+                        (SELECT COUNT(*) FROM users WHERE disabled = {t}) AS users_disabled,
                         (SELECT COUNT(*) FROM sharing_groups) AS sharing_groups,
                         (SELECT COUNT(*) FROM tags) AS tags
                     """
@@ -222,40 +369,30 @@ def _collect_db_metrics() -> tuple[str, list[dict]]:
                 log.debug("servers: %s", e)
 
             # -- Jobs ----------------------------------------------------------
-            # Queue depth is a gauge (point-in-time). Job totals are counters
-            # (monotonic until MISP prunes the table -- Prometheus handles
-            # counter resets via increase()/rate()). No time window here;
-            # let PromQL handle windowing.
+            # Job totals are counters (monotonic until MISP prunes the table --
+            # Prometheus handles counter resets via increase()/rate()). The
+            # queue depth comes from Redis (_collect_queue_metrics).
             try:
-                status_map = {1: "queued", 2: "running", 3: "failed", 4: "completed"}
-
-                # Queue depth: current jobs waiting to be processed
-                cur.execute(
-                    "SELECT worker, COUNT(*) AS cnt FROM jobs "
-                    "WHERE status IN (1, 2) GROUP BY worker"
-                )
-                qrows = cur.fetchall()
-                blocks.append(
-                    _metric(
-                        "misp_jobs_queued",
-                        "Jobs currently queued or running by worker",
-                        "gauge",
-                        [({"worker": r["worker"] or "unknown"}, r["cnt"]) for r in qrows]
-                        if qrows else [({}, 0)],
-                    )
-                )
+                # MISP writes 0 when it creates a job and 3 or 4 when the job
+                # ends; 0 covers waiting, running and lost jobs alike
+                status_map = {0: "unfinished", 1: "queued", 2: "running", 3: "failed", 4: "completed"}
 
                 # All jobs in one query -- LEFT JOIN to servers for pull/push,
                 # split into server vs non-server in Python.
+                from . import db as dbmod
+                if dbmod.is_postgres():
+                    server_id_expr = "NULLIF(regexp_replace(j.job_input, '^.*: ', ''), '')::bigint"
+                else:
+                    server_id_expr = "CAST(SUBSTRING_INDEX(j.job_input, ': ', -1) AS UNSIGNED)"
                 cur.execute(
-                    """
+                    f"""
                     SELECT j.worker, j.job_type, j.status,
                            s.id AS server_id, s.name AS server_name,
                            COUNT(*) AS cnt
                     FROM jobs j
                     LEFT JOIN servers s
                       ON j.job_type IN ('pull', 'push')
-                     AND CAST(SUBSTRING_INDEX(j.job_input, ': ', -1) AS UNSIGNED) = s.id
+                     AND {server_id_expr} = s.id
                     GROUP BY j.worker, j.job_type, j.status, s.id, s.name
                     """
                 )
@@ -310,15 +447,36 @@ def _collect_db_metrics() -> tuple[str, list[dict]]:
             except Exception as e:
                 log.debug("jobs: %s", e)
 
+            # Tasks under MISP's Scheduled tasks page: no scheduler_worker
+            # runs in this deployment, so an enabled one never runs
+            try:
+                from . import db as dbmod
+                cur.execute(
+                    "SELECT type, COUNT(*) AS cnt FROM scheduled_tasks "
+                    f"WHERE enabled = {dbmod.bool_lit(True)} GROUP BY type"
+                )
+                rows = cur.fetchall()
+                blocks.append(
+                    _metric(
+                        "misp_scheduled_tasks_enabled",
+                        "Tasks enabled under MISP's Scheduled tasks, which nothing runs here",
+                        "gauge",
+                        [({"type": r["type"]}, r["cnt"]) for r in rows] if rows else [({}, 0)],
+                    )
+                )
+            except Exception as e:
+                log.debug("scheduled tasks: %s", e)
+
             # Sync container log (our custom table)
             try:
+                from . import db as dbmod
                 cur.execute(
                     "SELECT operation, status, "
                     "  COUNT(*) AS runs, "
                     "  MAX(timestamp) AS last_run, "
                     "  AVG(duration_seconds) AS avg_duration "
                     "FROM misp_container_sync_log "
-                    "WHERE timestamp > DATE_SUB(NOW(), INTERVAL 24 HOUR) "
+                    f"WHERE timestamp > {dbmod.ago(24, 'HOUR')} "
                     "GROUP BY operation, status"
                 )
                 rows = cur.fetchall()
@@ -330,25 +488,25 @@ def _collect_db_metrics() -> tuple[str, list[dict]]:
                     blocks.append(
                         _metric(
                             "misp_sync_runs_24h",
-                            "Org sync runs in the last 24 hours",
+                            "Container runs (org-sync, configure) in the last 24 hours by outcome",
                             "gauge",
                             run_samples,
                         )
                     )
 
-                # Last successful sync timestamp
+                # Last successful run per operation (org-sync, configure)
                 cur.execute(
-                    "SELECT UNIX_TIMESTAMP(MAX(timestamp)) AS ts "
-                    "FROM misp_container_sync_log WHERE status = 'success'"
+                    f"SELECT operation, {dbmod.epoch('MAX(timestamp)')} AS ts "
+                    "FROM misp_container_sync_log WHERE status = 'success' GROUP BY operation"
                 )
-                row = cur.fetchone()
-                if row and row["ts"]:
+                last = [({"operation": r["operation"]}, int(r["ts"])) for r in cur.fetchall() if r.get("ts")]
+                if last:
                     blocks.append(
                         _metric(
                             "misp_sync_last_success_timestamp_seconds",
-                            "Unix timestamp of last successful org sync",
+                            "Unix timestamp of the last successful run per operation",
                             "gauge",
-                            [({}, int(row["ts"]))],
+                            last,
                         )
                     )
             except Exception:
@@ -380,17 +538,32 @@ def _check_tls_cert(hostname: str, port: int = 443, timeout: int = 5) -> float |
         return None
 
 
+# MISP stores servers.authkey as this marker plus ciphertext once
+# Security.encryption_key is set (EncryptedValue::ENCRYPTED_MAGIC)
+ENCRYPTED_MAGIC = "\x1f\x1d"
+
+
 def _check_server_auth(url: str, authkey: str, timeout: int = 5) -> bool:
-    """Check if a remote MISP server accepts our auth."""
+    """Check that a remote MISP server answers, with our auth when we have it.
+
+    An encrypted authkey cannot be sent, so for those any HTTP answer counts
+    as reachable, including 401 and 403.
+    """
+    if isinstance(authkey, bytes):
+        # pymysql returns the column as bytes; latin-1 keeps the marker bytes intact
+        authkey = authkey.decode("latin-1")
+    encrypted = authkey.startswith(ENCRYPTED_MAGIC)
+    headers = {"Accept": "application/json"}
+    if not encrypted:
+        headers["Authorization"] = authkey
     try:
         target = f"{url.rstrip('/')}/servers/getVersion"
-        req = urllib.request.Request(
-            target,
-            headers={"Authorization": authkey, "Accept": "application/json"},
-        )
+        req = urllib.request.Request(target, headers=headers)
         ctx = ssl.create_default_context()
         with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
             return 200 <= resp.status < 400
+    except urllib.error.HTTPError as e:
+        return encrypted and e.code in (401, 403)
     except Exception:
         return False
 
@@ -433,7 +606,7 @@ def _collect_network_metrics(servers: list[dict]) -> str:
         blocks.append(
             _metric(
                 "misp_server_reachable",
-                "Whether the remote MISP server is reachable and accepts auth",
+                "Whether the remote MISP server is reachable (auth verified unless the key is stored encrypted)",
                 "gauge",
                 reachable_samples,
             )
@@ -472,6 +645,13 @@ def collect_all() -> str:
         errors += 1
 
     try:
+        queue_output = _collect_queue_metrics()
+    except Exception as e:
+        log.warning("cannot read the job queues from Redis: %s", e)
+        queue_output = ""
+        errors += 1
+
+    try:
         net_output = _collect_network_metrics(servers)
     except Exception as e:
         log.error("network metrics collection failed: %s", e)
@@ -497,7 +677,7 @@ def collect_all() -> str:
         ]
     )
 
-    parts = [p for p in (db_output, net_output, meta) if p]
+    parts = [p for p in (db_output, queue_output, net_output, meta) if p]
     return "\n\n".join(parts) + "\n"
 
 
@@ -509,8 +689,21 @@ def init_sync_log_table() -> None:
     conn = _connect()
     try:
         with conn.cursor() as cur:
-            cur.execute(
+            from . import db as dbmod
+            if dbmod.is_postgres():
+                ddl = """
+                CREATE TABLE IF NOT EXISTS misp_container_sync_log (
+                    id SERIAL PRIMARY KEY,
+                    timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    operation VARCHAR(64) NOT NULL,
+                    status VARCHAR(16) NOT NULL,
+                    summary TEXT,
+                    duration_seconds FLOAT,
+                    error_message TEXT
+                )
                 """
+            else:
+                ddl = """
                 CREATE TABLE IF NOT EXISTS misp_container_sync_log (
                     id INT AUTO_INCREMENT PRIMARY KEY,
                     timestamp DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -521,12 +714,11 @@ def init_sync_log_table() -> None:
                     error_message TEXT
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
                 """
-            )
-            # Prune entries older than 30 days
-            cur.execute(
-                "DELETE FROM misp_container_sync_log "
-                "WHERE timestamp < DATE_SUB(NOW(), INTERVAL 30 DAY)"
-            )
+            cur.execute(ddl)
+            # Prune entries older than 30 days. The migrate Job's rows stay: it reads
+            # them to refuse dropping a copy it made (migrate.py)
+            cur.execute(f"DELETE FROM misp_container_sync_log WHERE timestamp < {dbmod.ago(30, 'DAY')} "
+                        "AND operation <> 'migrate'")
         conn.commit()
     finally:
         conn.close()

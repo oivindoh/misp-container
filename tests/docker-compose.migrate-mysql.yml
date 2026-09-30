@@ -1,0 +1,28 @@
+# Points every MISP container at the same-engine migration target
+# (tests/migrate-target-mysql.env), after the copy.
+x-target-env: &target-env
+  env_file:
+    - base/base.env
+    - base/secrets-db.env
+    - base/secrets-app.env
+    - base/secrets-admin.env
+    - compose.env
+    - compose-secrets.env
+    - ../tests/test-compose.env
+    - ../tests/test-compose-secrets.env
+    - ../tests/migrate-target-mysql.env
+
+services:
+  configure:
+    <<: *target-env
+    depends_on:
+      mysql-target:
+        condition: service_healthy
+  web:
+    <<: *target-env
+  worker:
+    <<: *target-env
+  sync:
+    <<: *target-env
+  metrics:
+    <<: *target-env

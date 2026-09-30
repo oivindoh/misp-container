@@ -51,7 +51,7 @@ def setup_admin() -> None:
             if rc != 0:
                 log.error("failed to set admin password: %s", out)
             else:
-                db.query("UPDATE users SET change_pw=0, last_pw_change=UNIX_TIMESTAMP() WHERE id=1;")
+                db.query(f"UPDATE users SET change_pw={db.bool_lit(False)}, last_pw_change={db.now_epoch()} WHERE id=1;")
 
     # Set admin API key
     api_key = _read_secret("ADMIN_KEY", "ADMIN_KEY_FILE")
@@ -97,76 +97,21 @@ def configure_gnupg() -> None:
 
 
 def configure_oidc() -> None:
-    """Configure OIDC authentication if enabled."""
+    """Database-side settings for OIDC; the plugin config itself is in config.php."""
     if env("OIDC_ENABLE") != "true":
         return
-
-    log.info("enabling OIDC authentication")
-    cake.set_setting("Plugin.CustomAuth_enable", "true")
-    cake.set_setting("Plugin.CustomAuth_name", "OpenIDConnect")
-    cake.set_setting("Plugin.CustomAuth_custom_password_reset", f"{env('OIDC_PROVIDER_URL')}/account")
-
-    _apply_optional_settings({
-        "OIDC_PROVIDER_URL": "OidcAuth.provider_url",
-        "OIDC_ISSUER": "OidcAuth.issuer",
-        "OIDC_CLIENT_ID": "OidcAuth.client_id",
-        "OIDC_CLIENT_SECRET": "OidcAuth.client_secret",
-        "OIDC_ROLES_PROPERTY": "OidcAuth.roles_property",
-        "OIDC_ROLES_MAPPING": "OidcAuth.role_mapper",
-        "OIDC_DEFAULT_ORG": "OidcAuth.default_org",
-        "OIDC_REDIRECT_URI": "OidcAuth.redirect_uri",
-        "OIDC_SCOPES": "OidcAuth.scopes",
-        "OIDC_LOGOUT_URL": "OidcAuth.logout_url",
-    })
-    _apply_settings_with_defaults({
-        "OidcAuth.code_challenge_method": ("OIDC_CODE_CHALLENGE_METHOD", "S256"),
-        "OidcAuth.unblock": ("OIDC_MIXEDAUTH", "false"),
-        "OidcAuth.authentication_method": ("OIDC_AUTH_METHOD", "client_secret_post"),
-        "OidcAuth.disable_request_object": ("OIDC_DISABLE_REQUEST_OBJECT", "false"),
-        "OidcAuth.skip_proxy": ("OIDC_SKIP_PROXY", "true"),
-    })
+    log.info("OIDC authentication enabled (OidcAuth in config.php)")
+    logout_url = env("OIDC_LOGOUT_URL")
+    if logout_url:
+        cake.set_setting("Plugin.CustomAuth_custom_logout", logout_url)
 
 
 def configure_ldap() -> None:
-    """Configure LDAP authentication if enabled."""
-    if not any(env(k) == "true" for k in ("LDAP_ENABLE", "LDAPAUTH_ENABLE", "APACHESECUREAUTH_LDAP_ENABLE")):
-        return
-
-    log.info("enabling LDAP authentication")
-
+    """The LDAP and Apache auth plugins read config.php; nothing to set in the database."""
     if env("LDAPAUTH_ENABLE") == "true":
-        _apply_optional_settings({
-            "LDAPAUTH_LDAPSERVER": "LdapAuth.ldapServer",
-            "LDAPAUTH_LDAPDN": "LdapAuth.ldapDn",
-            "LDAPAUTH_LDAPREADERUSER": "LdapAuth.ldapReaderUser",
-            "LDAPAUTH_LDAPREADERPASSWORD": "LdapAuth.ldapReaderPassword",
-            "LDAPAUTH_LDAPSEARCHFILTER": "LdapAuth.ldapSearchFilter",
-            "LDAPAUTH_LDAPSEARCHATTRIBUTE": "LdapAuth.ldapSearchAttribute",
-            "LDAPAUTH_LDAPEMAILFIELD": "LdapAuth.ldapEmailField",
-            "LDAPAUTH_LDAPDEFAULTORGID": "LdapAuth.ldapDefaultOrgId",
-            "LDAPAUTH_LDAPDEFAULTROLEID": "LdapAuth.ldapDefaultRoleId",
-        })
-        _apply_settings_with_defaults({
-            "LdapAuth.starttls": ("LDAPAUTH_STARTTLS", "false"),
-            "LdapAuth.mixedAuth": ("LDAPAUTH_MIXEDAUTH", "true"),
-            "LdapAuth.updateUser": ("LDAPAUTH_UPDATEUSER", "true"),
-            "LdapAuth.debug": ("LDAPAUTH_DEBUG", "false"),
-        })
-
+        log.info("LDAP authentication enabled (LdapAuth in config.php)")
     if env("APACHESECUREAUTH_LDAP_ENABLE") == "true":
-        cake.set_setting("ApacheSecureAuth.apacheEnv", env("APACHESECUREAUTH_LDAP_APACHE_ENV"))
-        _apply_optional_settings({
-            "APACHESECUREAUTH_LDAP_SERVER": "ApacheSecureAuth.ldapServer",
-            "APACHESECUREAUTH_LDAP_READER_USER": "ApacheSecureAuth.ldapReaderUser",
-            "APACHESECUREAUTH_LDAP_READER_PASSWORD": "ApacheSecureAuth.ldapReaderPassword",
-            "APACHESECUREAUTH_LDAP_DN": "ApacheSecureAuth.ldapDN",
-            "APACHESECUREAUTH_LDAP_SEARCH_ATTRIBUTE": "ApacheSecureAuth.ldapSearchAttribute",
-            "APACHESECUREAUTH_LDAP_FILTER": "ApacheSecureAuth.ldapFilter",
-            "APACHESECUREAUTH_LDAP_DEFAULT_ROLE_ID": "ApacheSecureAuth.ldapDefaultRoleId",
-            "APACHESECUREAUTH_LDAP_DEFAULT_ORG": "ApacheSecureAuth.ldapDefaultOrg",
-            "APACHESECUREAUTH_LDAP_EMAIL_FIELD": "ApacheSecureAuth.ldapEmailField",
-        })
-        cake.set_setting("ApacheSecureAuth.starttls", env("APACHESECUREAUTH_LDAP_STARTTLS"))
+        log.info("Apache header authentication enabled (ApacheSecureAuth in config.php)")
 
 
 def configure_custom_auth() -> None:
@@ -228,7 +173,7 @@ def _configure_admin_org(admin_org: str) -> None:
             db.query(
                 f"INSERT INTO organisations (name, uuid, local, date_created, date_modified, "
                 f"description, type, nationality, sector, created_by) "
-                f"VALUES ('{safe_org}', '{org_uuid}', 1, NOW(), NOW(), '', '', '', '', 0);"
+                f"VALUES ('{safe_org}', '{org_uuid}', {db.bool_lit(True)}, NOW(), NOW(), '', '', '', '', 0);"
             )
             org_id = db.query(f"SELECT id FROM organisations WHERE uuid='{org_uuid}';").strip()
 
@@ -260,7 +205,7 @@ def _set_admin_authkey(email: str, api_key: str) -> None:
     count = db.query(
         f"SELECT COUNT(*) FROM auth_keys WHERE user_id=1 "
         f"AND authkey_start='{key_start}' AND authkey_end='{key_end}' "
-        f"AND (expiration = 0 OR expiration > UNIX_TIMESTAMP());"
+        f"AND (expiration = 0 OR expiration > {db.now_epoch()});"
     ).strip()
     if count == "0" or not count:
         log.info("setting admin API key")

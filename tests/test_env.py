@@ -56,3 +56,51 @@ class TestApplyDefaults:
         with patch.dict(os.environ, {"NUM_WORKERS_DEFAULT": "3"}, clear=False):
             apply_defaults()
             assert os.environ["NUM_WORKERS_DEFAULT"] == "3"
+
+
+class TestDerivedDefaults:
+    """Secondary settings inherit from the primary env var unless set."""
+
+    def test_redis_mirrors_inherit(self):
+        env = {"MISP_REDIS_HOST": "cache", "MISP_REDIS_PORT": "6380", "MISP_REDIS_PASSWORD": "pw"}
+        with patch.dict(os.environ, env, clear=False):
+            for key in ("SIMPLEBACKGROUNDJOBS_REDIS_HOST", "SIMPLEBACKGROUNDJOBS_REDIS_PASSWORD",
+                        "PLUGIN_ZEROMQ_REDIS_PORT"):
+                os.environ.pop(key, None)
+            apply_defaults()
+            assert os.environ["SIMPLEBACKGROUNDJOBS_REDIS_HOST"] == "cache"
+            assert os.environ["SIMPLEBACKGROUNDJOBS_REDIS_PASSWORD"] == "pw"
+            assert os.environ["PLUGIN_ZEROMQ_REDIS_PORT"] == "6380"
+
+    def test_explicit_value_wins(self):
+        env = {"MISP_REDIS_HOST": "cache", "SIMPLEBACKGROUNDJOBS_REDIS_HOST": "jobs-cache"}
+        with patch.dict(os.environ, env, clear=False):
+            apply_defaults()
+            assert os.environ["SIMPLEBACKGROUNDJOBS_REDIS_HOST"] == "jobs-cache"
+
+    def test_email_and_baseurl_inherit(self):
+        env = {"MISP_BASEURL": "https://m", "ADMIN_EMAIL": "a@x"}
+        with patch.dict(os.environ, env, clear=False):
+            for key in ("MISP_EXTERNAL_BASEURL", "MISP_CONTACT", "GNUPG_EMAIL", "MISP_EMAIL"):
+                os.environ.pop(key, None)
+            apply_defaults()
+            assert os.environ["MISP_EXTERNAL_BASEURL"] == "https://m"
+            assert os.environ["MISP_CONTACT"] == "a@x"
+            assert os.environ["GNUPG_EMAIL"] == "a@x"
+
+
+class TestAuthAliases:
+    def test_documented_oidc_names_feed_derived_ones(self):
+        env = {"OIDC_PROVIDER_URL": "https://idp", "OIDC_ROLES_MAPPING": '{"a": 1}', "OIDC_MIXEDAUTH": "true"}
+        with patch.dict(os.environ, env, clear=False):
+            for key in ("OIDCAUTH_PROVIDER_URL", "OIDCAUTH_ROLE_MAPPER", "OIDCAUTH_MIXEDAUTH"):
+                os.environ.pop(key, None)
+            apply_defaults()
+            assert os.environ["OIDCAUTH_PROVIDER_URL"] == "https://idp"
+            assert os.environ["OIDCAUTH_ROLE_MAPPER"] == '{"a": 1}'
+            assert os.environ["OIDCAUTH_MIXEDAUTH"] == "true"
+
+    def test_derived_name_wins_over_alias(self):
+        with patch.dict(os.environ, {"OIDC_CLIENT_ID": "short", "OIDCAUTH_CLIENT_ID": "derived"}):
+            apply_defaults()
+            assert os.environ["OIDCAUTH_CLIENT_ID"] == "derived"

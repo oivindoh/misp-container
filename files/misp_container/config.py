@@ -52,6 +52,10 @@ class SettingSpec:
     blank_protection: bool = False
     since: str = ""
     sensitive: bool = False
+    kind: str = "str"
+    # Known to the engine for env overrides and coverage, but its default is
+    # never written: MISP keeps its own default until an env var sets it.
+    track_only: bool = False
 
     @property
     def env_var(self) -> str:
@@ -90,14 +94,48 @@ class SettingSpec:
         """Backward compat for code that checks setting_type."""
         return "envar" if self.is_envar else "default"
 
+    @property
+    def typed_value(self):
+        """The effective value cast to the type the YAML default has.
+
+        Env values arrive as strings; MISP reads config.php with PHP types,
+        and a string "false" is truthy there.
+        """
+        value = self.effective_value
+        if self.kind == "bool":
+            return value.strip().lower() in ("1", "true", "yes", "on")
+        if self.kind == "int":
+            try:
+                return int(value)
+            except ValueError:
+                return value
+        if self.kind in ("list", "dict"):
+            stripped = value.strip()
+            if not stripped:
+                return [] if self.kind == "list" else {}
+            if stripped[0] in "[{":
+                return json.loads(stripped)
+            # a bare comma-separated list is the same as a JSON list of strings
+            return [item.strip() for item in stripped.split(",") if item.strip()]
+        return value
+
     @classmethod
     def from_dict(cls, name: str, spec: dict) -> SettingSpec:
         """Create from a raw YAML dict entry."""
         raw_value = spec.get("value", "")
         if isinstance(raw_value, bool):
             value = "true" if raw_value else "false"
+            kind = "bool"
+        elif isinstance(raw_value, int):
+            value = str(raw_value)
+            kind = "int"
+        elif isinstance(raw_value, (list, dict)):
+            # Plugin config (scopes, role_mapper); env overrides are JSON
+            value = json.dumps(raw_value)
+            kind = "list" if isinstance(raw_value, list) else "dict"
         else:
             value = str(raw_value)
+            kind = "str"
         return cls(
             name=name,
             default_value=value,
@@ -105,6 +143,8 @@ class SettingSpec:
             blank_protection=bool(spec.get("blank_protection")),
             since=spec.get("since", ""),
             sensitive=bool(spec.get("sensitive")),
+            kind=kind,
+            track_only=bool(spec.get("track_only")),
         )
 
 
@@ -163,10 +203,7 @@ class SettingsCache:
         image_version = _read_file(DIST_VERSION_FILE, "unknown")
         if self.last_defaults_version != image_version:
             log.info("saving defaults version: %s", image_version)
-            db.query(
-                f"REPLACE INTO system_settings (setting, value) "
-                f"VALUES ('misp_docker.defaults_version', '\"{image_version}\"');"
-            )
+            db.set_system_setting("misp_docker.defaults_version", image_version)
 
     def get(self, key: str) -> str | None:
         """Get a setting value, or None if not present."""
@@ -217,7 +254,12 @@ class SettingsCache:
 
         for spec in specs:
             # Env vars always take precedence
-            if spec.name in self.enforced:
+            if spec.name in self.enforced or spec.track_only:
+                skipped += 1
+                continue
+
+            # A blank default with blank_protection leaves MISP's own default in place
+            if spec.blank_protection and not spec.effective_value:
                 skipped += 1
                 continue
 
@@ -243,8 +285,14 @@ class SettingsCache:
             log.info("%s defaults: %d new, %d upgraded, %d existing", group, applied, upgraded, skipped)
 
 
+# Generated catalogue of every MISP setting the curated file does not name
+# (scripts/update-settings.sh). Its entries are track_only.
+UPSTREAM_GROUP = "upstream"
+UPSTREAM_FILE = "settings-upstream.yaml"
+
+
 def load_settings_yaml(path: str | None = None) -> dict[str, list[SettingSpec]]:
-    """Load settings.yaml and return specs grouped by group name.
+    """Load settings.yaml, plus the upstream catalogue next to it, grouped by group name.
 
     settings.yaml has a top-level 'settings' key with groups as levels.
     Each setting has a 'value' (default) and optional 'force', 'blank_protection', 'since'.
@@ -261,8 +309,24 @@ def load_settings_yaml(path: str | None = None) -> dict[str, list[SettingSpec]]:
         raw = yaml.safe_load(f) or {}
 
     group_data = raw.get("settings", raw)
+    groups = _parse_settings(group_data)
 
-    return _parse_settings(group_data)
+    upstream_path = os.path.join(os.path.dirname(path), UPSTREAM_FILE)
+    if os.path.exists(upstream_path):
+        with open(upstream_path) as f:
+            upstream = yaml.safe_load(f) or {}
+        curated = {spec.name for specs in groups.values() for spec in specs}
+        specs = []
+        for name, raw_spec in (upstream.get("settings") or {}).items():
+            if name in curated or not isinstance(raw_spec, dict):
+                continue
+            spec = SettingSpec.from_dict(name, raw_spec)
+            spec.track_only = True
+            specs.append(spec)
+        if specs:
+            groups[UPSTREAM_GROUP] = specs
+
+    return groups
 
 
 def _parse_settings(group_data: dict) -> dict[str, list[SettingSpec]]:
@@ -295,21 +359,82 @@ def apply_settings_fast(group: str, cache: SettingsCache, all_specs: dict[str, l
         cache.apply_defaults(defaults, group)
 
 
-def needs_minimum_config_write(cache: SettingsCache, all_specs: dict[str, list[SettingSpec]] | None = None) -> bool:
-    """Check if minimum_config has any changes that need writing."""
-    if all_specs is None:
-        all_specs = load_settings_yaml()
+# Groups that MISP must read from config.php before the database is available.
+# MISP ignores the database for SystemSetting::BLOCKED_SETTINGS (salt,
+# encryption key, python_bin, attachments_dir, system_setting_db and others),
+# so every pod renders these from settings.yaml and env at start.
+CONFIG_PHP_GROUPS = ("minimum_config", "db_enable")
 
-    for spec in all_specs.get("minimum_config", []):
-        if spec.is_envar:
-            db_value = cache.normalise(cache.get(spec.name)) if cache.has(spec.name) else "__UNSET__"
-            if db_value != spec.effective_value:
-                return True
+
+def php_literal(value) -> str:
+    """Render a Python value as a PHP literal, escaping single-quoted strings."""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, list):
+        return "array(" + ", ".join(php_literal(v) for v in value) + ")"
+    if isinstance(value, dict):
+        return "array(" + ", ".join(f"{php_literal(str(k))} => {php_literal(v)}" for k, v in value.items()) + ")"
+    escaped = str(value).replace("\\", "\\\\").replace("'", "\\'")
+    return f"'{escaped}'"
+
+
+def render_config_php(specs: list[SettingSpec]) -> str:
+    """Render config.php from SettingSpecs.
+
+    Setting names split on the first dot into section and key; a name without
+    a dot is a top-level key. Blank values with blank_protection are left out
+    so MISP applies its own default (for example an auto-generated salt).
+    """
+    tree: dict = {}
+    for spec in specs:
+        if spec.blank_protection and not spec.effective_value:
+            continue
+        section, _, key = spec.name.partition(".")
+        value = spec.typed_value
+        if key:
+            current = tree.setdefault(section, {}).get(key)
+            # Security.auth collects one entry per enabled auth plugin
+            if isinstance(current, list) and isinstance(value, list):
+                value = current + [v for v in value if v not in current]
+            tree[section][key] = value
         else:
-            if not cache.has(spec.name):
-                return True
+            tree[section] = value
 
-    return False
+    lines = ["<?php", "$config = array("]
+    for section, value in tree.items():
+        if isinstance(value, dict):
+            lines.append(f"    '{section}' => array(")
+            for key, val in value.items():
+                lines.append(f"        '{key}' => {php_literal(val)},")
+            lines.append("    ),")
+        else:
+            lines.append(f"    '{section}' => {php_literal(value)},")
+    lines.append(");")
+    return "\n".join(lines) + "\n"
+
+
+# Groups rendered into config.php only when their switch is "true": the auth
+# plugins read their config from config.php, never from the database.
+CONDITIONAL_CONFIG_PHP_GROUPS = (
+    ("oidc", "OIDC_ENABLE"),
+    ("ldap", "LDAPAUTH_ENABLE"),
+    ("apache_auth", "APACHESECUREAUTH_LDAP_ENABLE"),
+)
+
+
+def config_php_specs(all_specs: dict[str, list[SettingSpec]]) -> list[SettingSpec]:
+    """The specs that belong in config.php: bootstrap groups, S3 and the enabled auth plugins."""
+    specs: list[SettingSpec] = []
+    for group in CONFIG_PHP_GROUPS:
+        specs.extend(all_specs.get(group, []))
+    if os.environ.get("PLUGIN_S3_BUCKET_NAME"):
+        specs.extend(all_specs.get("s3", []))
+    for group, switch in CONDITIONAL_CONFIG_PHP_GROUPS:
+        if os.environ.get(switch, "").lower() == "true":
+            specs.extend(all_specs.get(group, []))
+    return specs
 
 
 def _version_newer(version: str, reference: str) -> bool:

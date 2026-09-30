@@ -309,3 +309,42 @@ class TestReadFile:
     def test_missing_file_returns_empty_by_default(self):
         """Missing file with no default returns empty string."""
         assert _read_file("/nonexistent/path") == ""
+
+
+class TestTrackOnly:
+    """Catalogue entries are never applied as defaults but honour env overrides."""
+
+    def test_default_not_applied(self):
+        from unittest.mock import patch as _patch
+        spec = SettingSpec(name="MISP.catalogued", default_value="x", track_only=True)
+        cache = SettingsCache()
+        with _patch("misp_container.config.cake.set_setting") as set_setting:
+            cache.apply_defaults([spec], "upstream")
+        set_setting.assert_not_called()
+
+    def test_env_override_enforced(self):
+        from unittest.mock import patch as _patch
+        spec = SettingSpec(name="MISP.catalogued", default_value="x", track_only=True)
+        cache = SettingsCache()
+        with patch.dict(os.environ, {"MISP_CATALOGUED": "y"}), \
+                _patch("misp_container.config.cake.set_setting") as set_setting:
+            cache.enforce_envars([spec], "upstream")
+        set_setting.assert_called_once_with("MISP.catalogued", "y", force=False)
+
+
+class TestBlankProtectedDefault:
+    def test_blank_default_not_applied(self):
+        from unittest.mock import patch as _patch
+        spec = SettingSpec(name="SMIME.password", default_value="", blank_protection=True)
+        cache = SettingsCache()
+        with _patch("misp_container.config.cake.set_setting") as set_setting:
+            cache.apply_defaults([spec], "gpg")
+        set_setting.assert_not_called()
+
+    def test_non_blank_default_applied(self):
+        from unittest.mock import patch as _patch
+        spec = SettingSpec(name="SMIME.password", default_value="x", blank_protection=True)
+        cache = SettingsCache()
+        with _patch("misp_container.config.cake.set_setting") as set_setting:
+            cache.apply_defaults([spec], "gpg")
+        set_setting.assert_called_once()

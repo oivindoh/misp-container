@@ -1,0 +1,7 @@
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+
+# PodDisruptionBudgets for web and worker (maxUnavailable: 1). Useful once an
+# overlay runs more than one replica.
+resources:
+  - pdb.yaml

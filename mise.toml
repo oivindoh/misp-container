@@ -1,6 +1,10 @@
 [tools]
 python = "3.13"
 uv = "latest"
+# Kubernetes checks; CI downloads the same versions (.github/workflows/ci.yaml)
+kustomize = "5.8.1"
+kubeconform = "0.8.0"
+kind = "0.33.0"
 
 [env]
 VIRTUAL_ENV = "{{config_root}}/.venv"
@@ -12,19 +16,43 @@ run = "test -d .venv || uv sync --python 3.13"
 
 [tasks.test]
 description = "Run unit tests"
-run = "python -m pytest tests/ -v"
+run = "python -m pytest tests/ -v --ignore=tests/e2e"
 
 [tasks.test-integration]
-description = "Run integration tests (requires Docker)"
-run = "tests/run-integration-tests.sh"
+description = "Run the upstream guard and the integration tests (requires podman)"
+run = "python -m pytest tests/e2e/test_upstream.py tests/e2e/test_integration.py -v"
+
+[tasks.test-upstream]
+description = "Check the MISP in the image against what this repository patches or depends on"
+run = "python -m pytest tests/e2e/test_upstream.py -v"
 
 [tasks.test-sync]
 description = "Run hub-spoke sync test (3 MISP instances)"
-run = "tests/run-sync-test.sh"
+run = "python -m pytest tests/e2e/test_sync.py -v"
+
+[tasks.test-migration]
+description = "Run the migration suite (MariaDB to MariaDB and to PostgreSQL)"
+run = "python -m pytest tests/e2e/test_migration.py -v"
+
+[tasks.test-kustomize]
+description = "Render the Kustomize base with each component and validate against the schemas"
+run = "scripts/check-kustomize.sh"
+
+[tasks.test-kind]
+description = "Apply the Kustomize base to a kind cluster and run the smoke test (build the images first)"
+run = "tests/run-kind-test.sh ${@}"
+
+[tasks.agents-md]
+description = "Regenerate AGENTS.md from the tree"
+run = "python scripts/generate_agents_md.py"
+
+[tasks.docs]
+description = "Regenerate the generated regions of the docs and AGENTS.md from the code"
+run = ["python scripts/generate_docs.py", "python scripts/generate_agents_md.py"]
 
 [tasks.test-all]
-description = "Run unit + integration + sync tests"
-depends = ["test", "test-integration", "test-sync"]
+description = "Run unit + integration + sync + migration tests"
+depends = ["test", "test-integration", "test-sync", "test-migration"]
 
 [tasks.smoketest]
 description = "Run smoke test against a live MISP instance"
@@ -32,16 +60,24 @@ run = """
 #!/usr/bin/env bash
 URL="${1:?Usage: mise run smoketest <url>}"
 read -rsp "API key: " KEY; echo
-tests/smoketest.sh "$URL" "$KEY"
+python -m pytest tests/e2e/test_smoke.py -v --url "$URL" --key "$KEY"
 """
 
 [tasks.logs]
 description = "Follow integration test compose logs"
-run = "docker compose -f deploy/docker-compose.yml -f tests/docker-compose.test.yml logs -f"
+run = "${COMPOSE_CMD:-podman compose} -f deploy/docker-compose.yml -f tests/docker-compose.test.yml logs -f"
 
 [tasks.logs-sync]
 description = "Follow sync test compose logs"
-run = "docker compose -f tests/docker-compose.sync-test.yml logs -f"
+run = "${COMPOSE_CMD:-podman compose} -f tests/docker-compose.sync-test.yml logs -f"
+
+[tasks.settings-update]
+description = "Regenerate files/misp-config/settings-upstream.yaml from a live MISP (builds and runs the test stack)"
+run = "scripts/update-settings.sh ${@}"
+
+[tasks.composer-lock]
+description = "Resolve MISP's PHP dependencies for the current CORE_TAG into files/composer.lock"
+run = "scripts/update-composer-lock.sh"
 
 [tasks.release]
 description = "Prepare a release: bump MISP version (optional), update image tags, create git tag"

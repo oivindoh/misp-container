@@ -10,6 +10,15 @@ labels:
 resources:
   - ../../base
 
+components:
+  - ../../components/mariadb
+  - ../../components/redis
+  - ../../components/ingress-haproxy
+  - ../../components/netpol-cilium
+  - ../../components/cronjobs
+  - ../../components/housekeeping
+  - ../../components/pdb
+
 # Secrets: KSOPS decrypts and generates a Secret with behavior:merge
 # annotation so it merges with the base secretGenerator output.
 # Encrypt with: sops -e -i secrets.sops.yaml

@@ -1,3 +1,5 @@
+# misp-modules: the enrichment, import, export and action modules MISP calls over
+# HTTP on port 6666. A distroless image without a shell, as UID 65532.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -35,7 +37,8 @@ spec:
       containers:
         - name: modules
           image: ghcr.io/oivindoh/misp-container-modules
-          args: ["-l", "::"]
+          # An empty address listens on IPv4 and IPv6; "::" alone is IPv6 only
+          args: ["-l", ""]
           ports:
             - name: http
               containerPort: 6666
@@ -49,10 +52,10 @@ spec:
           resources:
             requests:
               cpu: 10m
-              memory: 128Mi
+              memory: 256Mi
             limits:
               cpu: 1000m
-              memory: 512Mi
+              memory: 1Gi
           startupProbe:
             httpGet:
               path: /healthcheck

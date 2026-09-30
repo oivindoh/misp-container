@@ -20,13 +20,18 @@ def run(*args, quiet=True, check=False):
 
 
 def set_setting(setting, value, force=False):
-    """Set a MISP setting via cake Admin setSetting."""
+    """Set a MISP setting via cake Admin setSetting. Logs and returns False on failure."""
     args = ["Admin", "setSetting", "-q"]
     if force:
         args.append("-f")
     args.extend([setting, str(value)])
     result = subprocess.run([CAKE] + args, capture_output=True, text=True)
-    return result.returncode == 0
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout).strip().splitlines()
+        log.warning("cake setSetting %s failed (rc=%d): %s", setting, result.returncode,
+                    detail[-1] if detail else "no output")
+        return False
+    return True
 
 
 def get_setting(setting):

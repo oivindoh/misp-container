@@ -1,0 +1,16 @@
+# Attachments and malware samples. Web and worker pods on different nodes
+# write here, so the storage class must support ReadWriteMany.
+# Set PLUGIN_S3_BUCKET_NAME to store attachments in S3 instead, and remove
+# this claim in the overlay.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: attachments
+  labels:
+    app.kubernetes.io/name: web
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 20Gi

@@ -2,7 +2,7 @@
 
 Loads YAML config (local file + optional remote source), diffs against
 current MISP state via REST API, and applies changes. Designed to be
-fast on warm runs (nothing changed → reads only, no writes).
+fast on warm runs: with nothing changed, it only reads.
 """
 
 import json
@@ -567,7 +567,8 @@ def _set_user_authkey(user_id: int, authkey: str):
     """
     try:
         import bcrypt
-        import pymysql
+        import uuid as uuid_mod
+        from . import db
 
         # Use $2y$ prefix (PHP bcrypt) instead of Python's $2b$ for compatibility
         # with PHP's password_verify() used by MISP
@@ -576,28 +577,14 @@ def _set_user_authkey(user_id: int, authkey: str):
         authkey_start = authkey[:4]
         authkey_end = authkey[-4:]
 
-        conn = pymysql.connect(
-            host=env("MYSQL_HOST"),
-            port=int(env("MYSQL_PORT")),
-            user=env("MYSQL_USER"),
-            password=env("MYSQL_PASSWORD"),
-            database=env("MYSQL_DATABASE"),
+        # Delete existing keys for this user, then insert the configured one
+        db.execute("DELETE FROM auth_keys WHERE user_id = %s", (user_id,))
+        db.execute(
+            "INSERT INTO auth_keys (uuid, authkey, authkey_start, authkey_end, "
+            f"created, user_id, expiration) VALUES (%s, %s, %s, %s, {db.now_epoch()}, %s, 0)",
+            (str(uuid_mod.uuid4()), authkey_hash, authkey_start, authkey_end, user_id),
         )
-        try:
-            import uuid as uuid_mod
-            with conn.cursor() as cur:
-                # Delete existing keys for this user, then insert the configured one
-                cur.execute("DELETE FROM auth_keys WHERE user_id = %s", (user_id,))
-                cur.execute(
-                    "INSERT INTO auth_keys (uuid, authkey, authkey_start, authkey_end, "
-                    "created, user_id, expiration) "
-                    "VALUES (%s, %s, %s, %s, UNIX_TIMESTAMP(), %s, 0)",
-                    (str(uuid_mod.uuid4()), authkey_hash, authkey_start, authkey_end, user_id),
-                )
-            conn.commit()
-            log.info("set authkey for user id=%s (start=%s)", user_id, authkey_start)
-        finally:
-            conn.close()
+        log.info("set authkey for user id=%s (start=%s)", user_id, authkey_start)
     except Exception as e:
         log.warning("failed to set authkey for user id=%s: %s", user_id, e)
 

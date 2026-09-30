@@ -61,22 +61,44 @@ echo "Next release tag: ${NEXT_TAG}"
 echo "Image tag:        ${IMAGE_TAG}"
 echo ""
 
-# --- Update kustomization.yaml image tags ---
-echo "Updating deploy/base/kustomization.yaml..."
-sed -i '' "/name: ghcr.io\/oivindoh\/misp-container/{n;s/newTag: .*/newTag: ${IMAGE_TAG}/;}" \
-    deploy/base/kustomization.yaml
+# --- Update kustomization.yaml image tags (the base, and components that pin their own images) ---
+for kust in deploy/base/kustomization.yaml deploy/components/*/kustomization.yaml; do
+    if grep -q "name: ghcr.io/oivindoh/misp-container" "$kust"; then
+        echo "Updating ${kust}..."
+        sed -i '' "/name: ghcr.io\/oivindoh\/misp-container/{n;s/newTag: .*/newTag: ${IMAGE_TAG}/;}" "$kust"
+    fi
+done
+
+# --- The components that run our image carry the tag in the image itself ---
+for manifest in deploy/components/*/*.yaml; do
+    if grep -q "image: ghcr.io/oivindoh/misp-container:" "$manifest"; then
+        echo "Updating ${manifest}..."
+        sed -i '' "s|image: ghcr.io/oivindoh/misp-container:.*|image: ghcr.io/oivindoh/misp-container:${IMAGE_TAG}|" "$manifest"
+    fi
+done
 
 # --- Update docker-compose.yml image tags ---
 echo "Updating deploy/docker-compose.yml..."
-python3 -c "
-import re, glob
-tag = '$IMAGE_TAG'
-for path in ['deploy/docker-compose.yml'] + glob.glob('tests/docker-compose*.yml'):
+IMAGE_TAG="$IMAGE_TAG" python3 - <<'PYEOF'
+import glob, os, re
+tag = os.environ["IMAGE_TAG"]
+for path in ["deploy/docker-compose.yml"] + glob.glob("tests/docker-compose*.yml"):
     text = open(path).read()
-    text = re.sub(r'(ghcr\.io/oivindoh/misp-container(?:-[a-z]+)?):[^\s]+', rf'\1:{tag}', text)
-    open(path, 'w').write(text)
-    print(f'  {path}')
-"
+    # image: ghcr.io/oivindoh/misp-container-caddy:${MISP_IMAGE_TAG:-2.5.37}
+    text = re.sub(r"(ghcr\.io/oivindoh/misp-container(?:-[a-z]+)?):\$\{MISP_IMAGE_TAG:-[^}]+\}",
+                  lambda m: f"{m.group(1)}:${{MISP_IMAGE_TAG:-{tag}}}", text)
+    open(path, "w").write(text)
+    print(f"  {path}")
+PYEOF
+
+# --- ArgoCD overlay: pin the remote base and components to this release ---
+# The overlay is a local, untracked copy of the deployment repo's; edit it in
+# place and leave it out of the commit.
+ARGOCD_OVERLAY="argocd/overlay/kustomization.yaml"
+if [ -f "$ARGOCD_OVERLAY" ]; then
+    echo "Updating ${ARGOCD_OVERLAY} refs to ${NEXT_TAG} (not committed)..."
+    sed -i '' "s#\(misp-container\.git//[^?]*?ref=\)[^ ]*#\1${NEXT_TAG}#" "$ARGOCD_OVERLAY"
+fi
 
 # --- Verify ---
 echo ""
@@ -93,7 +115,7 @@ if [ "$CONFIRM" != "y" ] && [ "$CONFIRM" != "Y" ]; then
 fi
 
 # --- Commit and tag ---
-git add Dockerfile deploy/base/kustomization.yaml deploy/docker-compose.yml tests/docker-compose*.yml
+git add Dockerfile deploy/base/kustomization.yaml deploy/components/*/kustomization.yaml deploy/components/*/*.yaml deploy/docker-compose.yml tests/docker-compose*.yml
 git commit -m "(chore) release ${NEXT_TAG}"
 git tag "${NEXT_TAG}"
 

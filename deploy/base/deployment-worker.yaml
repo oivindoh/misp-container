@@ -1,6 +1,6 @@
 # Scalable job workers -- safe to run multiple replicas.
-# The MISP scheduler is disabled because periodic tasks are handled
-# by Kubernetes CronJobs (cronjobs.yaml) instead.
+# MISP's own scheduler never runs: periodic tasks are Kubernetes CronJobs
+# (the cronjobs component).
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -8,6 +8,9 @@ metadata:
   labels:
     app: worker
     app.kubernetes.io/name: worker
+  annotations:
+    # After the configure Job (wave 1)
+    argocd.argoproj.io/sync-wave: "2"
 spec:
   replicas: 1
   selector:
@@ -20,6 +23,8 @@ spec:
         app: worker
         app.kubernetes.io/name: worker
     spec:
+      # Long enough for supervisord to let a running job finish (WORKER_STOP_GRACE)
+      terminationGracePeriodSeconds: 330
       securityContext:
         runAsUser: 1000
         runAsGroup: 1000
@@ -28,69 +33,49 @@ spec:
         seccompProfile:
           type: RuntimeDefault
 
-      initContainers:
-        - name: init-misp-files
-          image: ghcr.io/oivindoh/misp-container
-          command: ["/usr/bin/tini", "--", "python3", "/entrypoint-init.py"]
-          envFrom:
-            - configMapRef:
-                name: misp-env
-            - secretRef:
-                name: misp-secrets
-          volumeMounts:
-            - name: misp-files
-              mountPath: /var/www/MISP/app/files
-            - name: misp-config
-              mountPath: /var/www/MISP/app/Config
-            - name: misp-tmp
-              mountPath: /var/www/MISP/app/tmp
-            - name: misp-gnupg
-              mountPath: /var/www/MISP/.gnupg
-            - name: init-tmp
-              mountPath: /tmp
-          resources:
-            requests:
-              cpu: 50m
-              memory: 128Mi
-            limits:
-              cpu: 500m
-              memory: 512Mi
-          securityContext:
-            allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: true
-            capabilities:
-              drop: [ALL]
-
       containers:
         - name: worker
           image: ghcr.io/oivindoh/misp-container
           command: ["/usr/bin/tini", "--", "python3", "/entrypoint-worker.py"]
-          env:
-            - name: ENABLE_SCHEDULER
-              value: "false"
           envFrom:
             - configMapRef:
                 name: misp-env
             - secretRef:
-                name: misp-secrets
+                name: misp-db
+            - secretRef:
+                name: misp-app
           volumeMounts:
-            - name: misp-files
-              mountPath: /var/www/MISP/app/files
+            - name: files-scripts-tmp
+              mountPath: /var/www/MISP/app/files/scripts/tmp
+            - name: files-certs
+              mountPath: /var/www/MISP/app/files/certs
+            - name: files-terms
+              mountPath: /var/www/MISP/app/files/terms
+            - name: files-img-orgs
+              mountPath: /var/www/MISP/app/files/img/orgs
             - name: misp-config
               mountPath: /var/www/MISP/app/Config
             - name: misp-tmp
               mountPath: /var/www/MISP/app/tmp
             - name: misp-gnupg
               mountPath: /var/www/MISP/.gnupg
+            - name: gnupg-key
+              mountPath: /etc/misp-docker/gnupg
+              readOnly: true
+            - name: certs
+              mountPath: /etc/misp-docker/certs
+              readOnly: true
+            - name: attachments
+              mountPath: /var/www/MISP/app/attachments
             - name: worker-tmp
               mountPath: /tmp
           resources:
             requests:
               cpu: 10m
-              memory: 128Mi
+              memory: 512Mi
             limits:
-              cpu: 500m
-              memory: 1Gi
+              cpu: 1000m
+              memory: 2Gi
           startupProbe:
             exec:
               command: ["test", "-S", "/tmp/supervisor.sock"]
@@ -111,9 +96,18 @@ spec:
               drop: [ALL]
 
       volumes:
-        - name: misp-files
+        - name: files-scripts-tmp
           emptyDir:
-            sizeLimit: 2Gi
+            sizeLimit: 500Mi
+        - name: files-certs
+          emptyDir:
+            sizeLimit: 10Mi
+        - name: files-terms
+          emptyDir:
+            sizeLimit: 10Mi
+        - name: files-img-orgs
+          emptyDir:
+            sizeLimit: 100Mi
         - name: misp-config
           emptyDir:
             sizeLimit: 10Mi
@@ -126,6 +120,14 @@ spec:
         - name: worker-tmp
           emptyDir:
             sizeLimit: 100Mi
-        - name: init-tmp
-          emptyDir:
-            sizeLimit: 500Mi
+        - name: gnupg-key
+          secret:
+            secretName: misp-gnupg
+            optional: true
+        - name: attachments
+          persistentVolumeClaim:
+            claimName: attachments
+        - name: certs
+          secret:
+            secretName: misp-certs
+            optional: true

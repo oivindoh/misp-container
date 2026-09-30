@@ -1,0 +1,834 @@
+# MISP periodic tasks, run by the task runner in the main image:
+#   python3 -m misp_container.task <task>
+# API tasks (app.kubernetes.io/component: misp-task) call the MISP API.
+# ADMIN_KEY must be set in misp-admin; the runner exits 1 with a clear
+# message when it is empty. A run dispatches nothing while the queue holds
+# TASK_MAX_QUEUED jobs or more (read from the metrics exporter).
+# Console tasks (misp-console-task) have no API: the pod renders app/Config
+# and runs MISP's console, with the configure Job's volumes and Secrets.
+# -- Cache all configured feeds --
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: cache-feeds
+  labels:
+    app.kubernetes.io/name: cache-feeds
+    app.kubernetes.io/component: misp-task
+spec:
+  schedule: "20 2 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 1200
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: cache-feeds
+            app.kubernetes.io/component: misp-task
+        spec:
+          restartPolicy: OnFailure
+          securityContext:
+            runAsUser: 1000
+            runAsGroup: 1000
+            runAsNonRoot: true
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: task
+              image: ghcr.io/oivindoh/misp-container:2.5.37
+              command: ["/usr/bin/tini", "--", "python3", "-m", "misp_container.task", "cache-feeds"]
+              env:
+                - name: SYNC_BASE_URL
+                  value: http://web:8080
+                - name: TASK_METRICS_URL
+                  value: http://metrics:9191/metrics
+                - name: TASK_MAX_QUEUED
+                  value: "200"
+                - name: ADMIN_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: misp-admin
+                      key: ADMIN_KEY
+                      optional: true
+              resources:
+                requests:
+                  cpu: 5m
+                  memory: 32Mi
+                limits:
+                  cpu: 200m
+                  memory: 128Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: [ALL]
+---
+# -- Fetch data from all configured feeds --
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: fetch-feeds
+  labels:
+    app.kubernetes.io/name: fetch-feeds
+    app.kubernetes.io/component: misp-task
+spec:
+  schedule: "30 2 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 1200
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: fetch-feeds
+            app.kubernetes.io/component: misp-task
+        spec:
+          restartPolicy: OnFailure
+          securityContext:
+            runAsUser: 1000
+            runAsGroup: 1000
+            runAsNonRoot: true
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: task
+              image: ghcr.io/oivindoh/misp-container:2.5.37
+              command: ["/usr/bin/tini", "--", "python3", "-m", "misp_container.task", "fetch-feeds"]
+              env:
+                - name: SYNC_BASE_URL
+                  value: http://web:8080
+                - name: TASK_METRICS_URL
+                  value: http://metrics:9191/metrics
+                - name: TASK_MAX_QUEUED
+                  value: "200"
+                - name: ADMIN_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: misp-admin
+                      key: ADMIN_KEY
+                      optional: true
+              resources:
+                requests:
+                  cpu: 5m
+                  memory: 32Mi
+                limits:
+                  cpu: 200m
+                  memory: 128Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: [ALL]
+---
+# -- Pull from every sync server with pull enabled --
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: pull-servers
+  labels:
+    app.kubernetes.io/name: pull-servers
+    app.kubernetes.io/component: misp-task
+spec:
+  schedule: "*/5 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 1200
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: pull-servers
+            app.kubernetes.io/component: misp-task
+        spec:
+          restartPolicy: OnFailure
+          securityContext:
+            runAsUser: 1000
+            runAsGroup: 1000
+            runAsNonRoot: true
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: task
+              image: ghcr.io/oivindoh/misp-container:2.5.37
+              command: ["/usr/bin/tini", "--", "python3", "-m", "misp_container.task", "pull-servers"]
+              env:
+                - name: SYNC_BASE_URL
+                  value: http://web:8080
+                - name: TASK_METRICS_URL
+                  value: http://metrics:9191/metrics
+                - name: TASK_MAX_QUEUED
+                  value: "200"
+                - name: ADMIN_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: misp-admin
+                      key: ADMIN_KEY
+                      optional: true
+              resources:
+                requests:
+                  cpu: 5m
+                  memory: 32Mi
+                limits:
+                  cpu: 200m
+                  memory: 128Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: [ALL]
+---
+# -- Push to every sync server with push enabled --
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: push-servers
+  labels:
+    app.kubernetes.io/name: push-servers
+    app.kubernetes.io/component: misp-task
+spec:
+  schedule: "*/15 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 1200
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: push-servers
+            app.kubernetes.io/component: misp-task
+        spec:
+          restartPolicy: OnFailure
+          securityContext:
+            runAsUser: 1000
+            runAsGroup: 1000
+            runAsNonRoot: true
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: task
+              image: ghcr.io/oivindoh/misp-container:2.5.37
+              command: ["/usr/bin/tini", "--", "python3", "-m", "misp_container.task", "push-servers"]
+              env:
+                - name: SYNC_BASE_URL
+                  value: http://web:8080
+                - name: TASK_METRICS_URL
+                  value: http://metrics:9191/metrics
+                - name: TASK_MAX_QUEUED
+                  value: "200"
+                - name: ADMIN_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: misp-admin
+                      key: ADMIN_KEY
+                      optional: true
+              resources:
+                requests:
+                  cpu: 5m
+                  memory: 32Mi
+                limits:
+                  cpu: 200m
+                  memory: 128Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: [ALL]
+---
+# -- Update galaxies --
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: update-galaxies
+  labels:
+    app.kubernetes.io/name: update-galaxies
+    app.kubernetes.io/component: misp-task
+spec:
+  schedule: "0 3 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 1200
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: update-galaxies
+            app.kubernetes.io/component: misp-task
+        spec:
+          restartPolicy: OnFailure
+          securityContext:
+            runAsUser: 1000
+            runAsGroup: 1000
+            runAsNonRoot: true
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: task
+              image: ghcr.io/oivindoh/misp-container:2.5.37
+              command: ["/usr/bin/tini", "--", "python3", "-m", "misp_container.task", "update-galaxies"]
+              env:
+                - name: SYNC_BASE_URL
+                  value: http://web:8080
+                - name: TASK_METRICS_URL
+                  value: http://metrics:9191/metrics
+                - name: TASK_MAX_QUEUED
+                  value: "200"
+                - name: ADMIN_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: misp-admin
+                      key: ADMIN_KEY
+                      optional: true
+              resources:
+                requests:
+                  cpu: 5m
+                  memory: 32Mi
+                limits:
+                  cpu: 200m
+                  memory: 128Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: [ALL]
+---
+# -- Update taxonomies --
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: update-taxonomies
+  labels:
+    app.kubernetes.io/name: update-taxonomies
+    app.kubernetes.io/component: misp-task
+spec:
+  schedule: "10 3 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 1200
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: update-taxonomies
+            app.kubernetes.io/component: misp-task
+        spec:
+          restartPolicy: OnFailure
+          securityContext:
+            runAsUser: 1000
+            runAsGroup: 1000
+            runAsNonRoot: true
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: task
+              image: ghcr.io/oivindoh/misp-container:2.5.37
+              command: ["/usr/bin/tini", "--", "python3", "-m", "misp_container.task", "update-taxonomies"]
+              env:
+                - name: SYNC_BASE_URL
+                  value: http://web:8080
+                - name: TASK_METRICS_URL
+                  value: http://metrics:9191/metrics
+                - name: TASK_MAX_QUEUED
+                  value: "200"
+                - name: ADMIN_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: misp-admin
+                      key: ADMIN_KEY
+                      optional: true
+              resources:
+                requests:
+                  cpu: 5m
+                  memory: 32Mi
+                limits:
+                  cpu: 200m
+                  memory: 128Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: [ALL]
+---
+# -- Update warninglists --
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: update-warninglists
+  labels:
+    app.kubernetes.io/name: update-warninglists
+    app.kubernetes.io/component: misp-task
+spec:
+  schedule: "20 3 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 1200
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: update-warninglists
+            app.kubernetes.io/component: misp-task
+        spec:
+          restartPolicy: OnFailure
+          securityContext:
+            runAsUser: 1000
+            runAsGroup: 1000
+            runAsNonRoot: true
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: task
+              image: ghcr.io/oivindoh/misp-container:2.5.37
+              command: ["/usr/bin/tini", "--", "python3", "-m", "misp_container.task", "update-warninglists"]
+              env:
+                - name: SYNC_BASE_URL
+                  value: http://web:8080
+                - name: TASK_METRICS_URL
+                  value: http://metrics:9191/metrics
+                - name: TASK_MAX_QUEUED
+                  value: "200"
+                - name: ADMIN_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: misp-admin
+                      key: ADMIN_KEY
+                      optional: true
+              resources:
+                requests:
+                  cpu: 5m
+                  memory: 32Mi
+                limits:
+                  cpu: 200m
+                  memory: 128Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: [ALL]
+---
+# -- Update noticelists --
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: update-noticelists
+  labels:
+    app.kubernetes.io/name: update-noticelists
+    app.kubernetes.io/component: misp-task
+spec:
+  schedule: "30 3 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 1200
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: update-noticelists
+            app.kubernetes.io/component: misp-task
+        spec:
+          restartPolicy: OnFailure
+          securityContext:
+            runAsUser: 1000
+            runAsGroup: 1000
+            runAsNonRoot: true
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: task
+              image: ghcr.io/oivindoh/misp-container:2.5.37
+              command: ["/usr/bin/tini", "--", "python3", "-m", "misp_container.task", "update-noticelists"]
+              env:
+                - name: SYNC_BASE_URL
+                  value: http://web:8080
+                - name: TASK_METRICS_URL
+                  value: http://metrics:9191/metrics
+                - name: TASK_MAX_QUEUED
+                  value: "200"
+                - name: ADMIN_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: misp-admin
+                      key: ADMIN_KEY
+                      optional: true
+              resources:
+                requests:
+                  cpu: 5m
+                  memory: 32Mi
+                limits:
+                  cpu: 200m
+                  memory: 128Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: [ALL]
+---
+# -- Cache the events of every sync server for quick lookups --
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: cache-servers
+  labels:
+    app.kubernetes.io/name: cache-servers
+    app.kubernetes.io/component: misp-task
+spec:
+  schedule: "40 2 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 1200
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: cache-servers
+            app.kubernetes.io/component: misp-task
+        spec:
+          restartPolicy: OnFailure
+          securityContext:
+            runAsUser: 1000
+            runAsGroup: 1000
+            runAsNonRoot: true
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: task
+              image: ghcr.io/oivindoh/misp-container:2.5.37
+              command: ["/usr/bin/tini", "--", "python3", "-m", "misp_container.task", "cache-servers"]
+              env:
+                - name: SYNC_BASE_URL
+                  value: http://web:8080
+                - name: TASK_METRICS_URL
+                  value: http://metrics:9191/metrics
+                - name: TASK_MAX_QUEUED
+                  value: "200"
+                - name: ADMIN_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: misp-admin
+                      key: ADMIN_KEY
+                      optional: true
+              resources:
+                requests:
+                  cpu: 5m
+                  memory: 32Mi
+                limits:
+                  cpu: 200m
+                  memory: 128Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: [ALL]
+---
+# -- Update object templates --
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: update-object-templates
+  labels:
+    app.kubernetes.io/name: update-object-templates
+    app.kubernetes.io/component: misp-task
+spec:
+  schedule: "40 3 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 1200
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: update-object-templates
+            app.kubernetes.io/component: misp-task
+        spec:
+          restartPolicy: OnFailure
+          securityContext:
+            runAsUser: 1000
+            runAsGroup: 1000
+            runAsNonRoot: true
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: task
+              image: ghcr.io/oivindoh/misp-container:2.5.37
+              command: ["/usr/bin/tini", "--", "python3", "-m", "misp_container.task", "update-object-templates"]
+              env:
+                - name: SYNC_BASE_URL
+                  value: http://web:8080
+                - name: TASK_METRICS_URL
+                  value: http://metrics:9191/metrics
+                - name: TASK_MAX_QUEUED
+                  value: "200"
+                - name: ADMIN_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: misp-admin
+                      key: ADMIN_KEY
+                      optional: true
+              resources:
+                requests:
+                  cpu: 5m
+                  memory: 32Mi
+                limits:
+                  cpu: 200m
+                  memory: 128Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: [ALL]
+---
+# -- Push to every enabled TAXII server --
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: push-taxii
+  labels:
+    app.kubernetes.io/name: push-taxii
+    app.kubernetes.io/component: misp-task
+spec:
+  schedule: "7 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 1200
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: push-taxii
+            app.kubernetes.io/component: misp-task
+        spec:
+          restartPolicy: OnFailure
+          securityContext:
+            runAsUser: 1000
+            runAsGroup: 1000
+            runAsNonRoot: true
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: task
+              image: ghcr.io/oivindoh/misp-container:2.5.37
+              command: ["/usr/bin/tini", "--", "python3", "-m", "misp_container.task", "push-taxii"]
+              env:
+                - name: SYNC_BASE_URL
+                  value: http://web:8080
+                - name: TASK_METRICS_URL
+                  value: http://metrics:9191/metrics
+                - name: TASK_MAX_QUEUED
+                  value: "200"
+                - name: ADMIN_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: misp-admin
+                      key: ADMIN_KEY
+                      optional: true
+              resources:
+                requests:
+                  cpu: 5m
+                  memory: 32Mi
+                limits:
+                  cpu: 200m
+                  memory: 128Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: [ALL]
+---
+# -- Apply the sharing group blueprints --
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: sharing-group-blueprints
+  labels:
+    app.kubernetes.io/name: sharing-group-blueprints
+    app.kubernetes.io/component: misp-task
+spec:
+  schedule: "37 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 1200
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: sharing-group-blueprints
+            app.kubernetes.io/component: misp-task
+        spec:
+          restartPolicy: OnFailure
+          securityContext:
+            runAsUser: 1000
+            runAsGroup: 1000
+            runAsNonRoot: true
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: task
+              image: ghcr.io/oivindoh/misp-container:2.5.37
+              command: ["/usr/bin/tini", "--", "python3", "-m", "misp_container.task", "sharing-group-blueprints"]
+              env:
+                - name: SYNC_BASE_URL
+                  value: http://web:8080
+                - name: TASK_METRICS_URL
+                  value: http://metrics:9191/metrics
+                - name: TASK_MAX_QUEUED
+                  value: "200"
+                - name: ADMIN_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: misp-admin
+                      key: ADMIN_KEY
+                      optional: true
+              resources:
+                requests:
+                  cpu: 5m
+                  memory: 32Mi
+                limits:
+                  cpu: 200m
+                  memory: 128Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: [ALL]
+---
+# -- Send the periodic summaries that users subscribed to (MISP console) --
+# One run a day: MISP sends the daily summaries every day, the weekly ones on
+# Mondays and the monthly ones on the first of the month. A failed run is not
+# retried, so no summary goes out twice.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: periodic-summary
+  labels:
+    app.kubernetes.io/name: periodic-summary
+    app.kubernetes.io/component: misp-console-task
+spec:
+  schedule: "0 6 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      activeDeadlineSeconds: 3600
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: periodic-summary
+            app.kubernetes.io/component: misp-console-task
+        spec:
+          restartPolicy: Never
+          securityContext:
+            runAsUser: 1000
+            runAsGroup: 1000
+            fsGroup: 1000
+            runAsNonRoot: true
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: task
+              image: ghcr.io/oivindoh/misp-container:2.5.37
+              command: ["/usr/bin/tini", "--", "python3", "-m", "misp_container.task", "periodic-summary"]
+              envFrom:
+                - configMapRef:
+                    name: misp-env
+                - secretRef:
+                    name: misp-db
+                - secretRef:
+                    name: misp-app
+              volumeMounts:
+                - name: files-scripts-tmp
+                  mountPath: /var/www/MISP/app/files/scripts/tmp
+                - name: files-certs
+                  mountPath: /var/www/MISP/app/files/certs
+                - name: files-terms
+                  mountPath: /var/www/MISP/app/files/terms
+                - name: files-img-orgs
+                  mountPath: /var/www/MISP/app/files/img/orgs
+                - name: misp-config
+                  mountPath: /var/www/MISP/app/Config
+                - name: misp-tmp
+                  mountPath: /var/www/MISP/app/tmp
+                - name: misp-gnupg
+                  mountPath: /var/www/MISP/.gnupg
+                - name: gnupg-key
+                  mountPath: /etc/misp-docker/gnupg
+                  readOnly: true
+                - name: task-tmp
+                  mountPath: /tmp
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 256Mi
+                limits:
+                  cpu: 1000m
+                  memory: 1Gi
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: [ALL]
+          volumes:
+            - name: files-scripts-tmp
+              emptyDir:
+                sizeLimit: 100Mi
+            - name: files-certs
+              emptyDir:
+                sizeLimit: 10Mi
+            - name: files-terms
+              emptyDir:
+                sizeLimit: 10Mi
+            - name: files-img-orgs
+              emptyDir:
+                sizeLimit: 10Mi
+            - name: misp-config
+              emptyDir:
+                sizeLimit: 10Mi
+            - name: misp-tmp
+              emptyDir:
+                sizeLimit: 500Mi
+            - name: misp-gnupg
+              emptyDir:
+                sizeLimit: 10Mi
+            - name: task-tmp
+              emptyDir:
+                sizeLimit: 100Mi
+            - name: gnupg-key
+              secret:
+                secretName: misp-gnupg
+                optional: true

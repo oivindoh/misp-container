@@ -1,0 +1,29 @@
+# Second overlay for the PostgreSQL run of the suite: switches every MISP
+# container to the postgres service (tests/postgres.env). The mysql service
+# still starts; MISP does not use it.
+x-postgres-env: &postgres-env
+  env_file:
+    - base/base.env
+    - base/secrets-db.env
+    - base/secrets-app.env
+    - base/secrets-admin.env
+    - compose.env
+    - compose-secrets.env
+    - ../tests/test-compose.env
+    - ../tests/test-compose-secrets.env
+    - ../tests/postgres.env
+
+services:
+  configure:
+    <<: *postgres-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+  web:
+    <<: *postgres-env
+  worker:
+    <<: *postgres-env
+  sync:
+    <<: *postgres-env
+  metrics:
+    <<: *postgres-env

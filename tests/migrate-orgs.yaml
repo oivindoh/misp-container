@@ -1,0 +1,28 @@
+# Seed content for the migration suite: an org with a user, a sync user with
+# a known authkey, an org tag and a sync server.
+tags:
+  - name: "migrate-test:global-tag"
+    colour: "#123456"
+
+teams:
+  - uuid: "7c2f4a9e-3d5b-4e8a-9f10-6b7c8d9e0f11"
+    name: "Migrate Test Org"
+    description: "Created by the migration suite"
+    sector: "government"
+    users:
+      - email: migrate-user@example.com
+        role: User
+    sync_users:
+      - email: migrate-inbound@example.com
+        role: Sync user
+        authkey: migrateinbound00000000000000000000000000
+    tags:
+      - name: "migrate-test:org-tag"
+        colour: "#654321"
+    servers:
+      - name: "Migrate Test Server"
+        url: "https://migrate-test.example.com"
+        authkey: migrateoutbound0000000000000000000000000
+        pull: true
+        push: false
+        internal: false

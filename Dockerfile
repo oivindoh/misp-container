@@ -3,12 +3,13 @@
 # Non-root MISP 2.5 Docker image
 #
 # Build targets:
-#   docker build --target final -t misp .          # PHP-FPM + workers
-#   docker build --target caddy -t misp-caddy .    # Static files + reverse proxy (~64MB)
+#   final    PHP-FPM, workers, configure, org sync, metrics (one image, entrypoint per role)
+#   caddy    static files + FastCGI reverse proxy (scratch)
+#   modules  misp-modules (distroless)
+# Build through compose: podman compose build
 #
 
-ARG DOCKER_HUB_PROXY=""
-ARG CORE_TAG=v2.5.37
+ARG CORE_TAG=v2.5.47
 ARG CORE_COMMIT
 ARG PHP_VER=20240924
 
@@ -16,10 +17,12 @@ ARG PHP_VER=20240924
 # Stage 1: php-base - Common runtime packages
 # =============================================================================
 # debian:trixie-20260505-slim
-FROM "${DOCKER_HUB_PROXY}debian:trixie-slim@sha256:109e2c65005bf160609e4ba6acf7783752f8502ad218e298253428690b9eaa4b" AS php-base
+FROM debian:trixie-slim@sha256:b6e2a152f22a40ff69d92cb397223c906017e1391a73c952b588e51af8883bf8 AS php-base
 ENV DEBIAN_FRONTEND=noninteractive
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
+    rm -f /etc/apt/apt.conf.d/docker-clean && apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
         tini \
         gettext \
@@ -36,6 +39,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         php8.4-bcmath \
         php8.4-mbstring \
         php8.4-mysql \
+        php8.4-pgsql \
         php8.4-redis \
         php8.4-gd \
         php8.4-fpm \
@@ -55,30 +59,49 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         uuid-runtime \
         jq \
         python3-minimal \
-    && apt-get autoremove -y && apt-get clean -y && rm -rf /var/lib/apt/lists/*
+    && apt-get autoremove -y
 
 # =============================================================================
-# Stage 2: composer-build - PHP dependencies via Composer
+# Stage 2: composer - PHP dependencies, pinned by files/composer.lock
 # =============================================================================
-FROM php-base AS composer-build
+# composer-prep downloads upstream composer.json and adds our extra packages.
+# composer-lock resolves it (scripts/update-composer-lock.sh writes the result
+# to files/composer.lock). composer-build installs exactly the lock; an
+# out-of-date lock fails the build.
+FROM php-base AS composer-prep
 ARG CORE_TAG
 ARG CORE_COMMIT
 ENV COMPOSER_ALLOW_SUPERUSER=1
 
 WORKDIR /tmp
 RUN curl -o /tmp/composer.json https://raw.githubusercontent.com/MISP/MISP/${CORE_COMMIT:-${CORE_TAG}}/app/composer.json
-RUN sed -i '/cake-resque/d' /tmp/composer.json && \
-    sed -i 's/authentication",/authentication"/' /tmp/composer.json
+# SimpleBackgroundJobs replaces CakeResque; MISP loads the plugin only without
+# it (scripts/check_upstream.py, check cakeresque)
+RUN if ! jq -e '.require["iglocska/cake-resque"]' /tmp/composer.json >/dev/null; then \
+        echo "MISP's app/composer.json no longer requires iglocska/cake-resque: delete this RUN" >&2; exit 1; \
+    fi && \
+    jq 'del(.require["iglocska/cake-resque"], .suggest["iglocska/cake-resque"])' /tmp/composer.json > /tmp/composer.edited && \
+    mv /tmp/composer.edited /tmp/composer.json
 
 # composer:2.9.8
 COPY --from=composer:2@sha256:1364b5b9132ab4c42ea3be53e894572c32fe75a512cb3b1c3903fcc9bce53dcc /usr/bin/composer /usr/bin/composer
 RUN composer config --no-interaction allow-plugins.composer/installers true && \
-    composer install && \
-    composer require --with-all-dependencies --no-interaction \
-        elasticsearch/elasticsearch:^8.7.0 \
-        jakub-onderka/openid-connect-php:^1.0.0 \
+    composer require --no-update --no-interaction \
+        elasticsearch/elasticsearch:8.19.0 \
+        jakub-onderka/openid-connect-php:1.5.0 \
         certmichelin/openid-connect-php:1.3.0 \
-        aws/aws-sdk-php
+        aws/aws-sdk-php:3.398.1
+
+FROM composer-prep AS composer-lock
+RUN --mount=type=cache,target=/root/.composer/cache \
+    composer update --no-install --no-interaction --with-all-dependencies
+
+FROM composer-prep AS composer-build
+COPY files/composer.lock /tmp/composer.lock
+# The composer download cache survives across builds (buildah and BuildKit)
+RUN --mount=type=cache,target=/root/.composer/cache \
+    composer validate --no-check-all --no-check-publish --no-interaction && \
+    composer install --no-interaction
 
 # =============================================================================
 # Stage 3: php-build - Native PHP PECL extensions
@@ -87,10 +110,12 @@ FROM php-base AS php-build
 ARG PHP_VER
 ENV TZ=Etc/UTC
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
+    rm -f /etc/apt/apt.conf.d/docker-clean && apt-get update && apt-get install -y --no-install-recommends \
         gcc g++ git make php8.4-dev php-pear \
         libbrotli-dev libfuzzy-dev librdkafka-dev libsimdjson-dev libzstd-dev \
-    && apt-get autoremove -y && apt-get clean -y && rm -rf /var/lib/apt/lists/*
+    && apt-get autoremove -y
 
 RUN update-alternatives --set php /usr/bin/php8.4 && \
     update-alternatives --set php-config /usr/bin/php-config8.4 && \
@@ -98,11 +123,12 @@ RUN update-alternatives --set php /usr/bin/php8.4 && \
 
 RUN pecl channel-update pecl.php.net && \
     cp "/usr/lib/$(gcc -dumpmachine)"/libfuzzy.* /usr/lib && \
-    pecl install rdkafka && \
-    pecl install simdjson && \
-    pecl install zstd && \
-    pecl install brotli && \
-    git clone --recursive --depth=1 https://github.com/JakubOnderka/pecl-text-ssdeep.git /tmp/pecl-text-ssdeep && \
+    pecl install rdkafka-6.0.5 && \
+    pecl install simdjson-4.0.0 && \
+    pecl install zstd-0.18.0 && \
+    pecl install brotli-0.21.0 && \
+    git clone --recursive https://github.com/JakubOnderka/pecl-text-ssdeep.git /tmp/pecl-text-ssdeep && \
+    git -C /tmp/pecl-text-ssdeep checkout aa7ea7045a294548aedc3ccdfbb3936e1716bebd && \
     cd /tmp/pecl-text-ssdeep && phpize && ./configure && make && make install && \
     tar -czf /pecl_libs.tar.gz \
         /usr/lib/php/${PHP_VER}/ssdeep.so \
@@ -112,7 +138,7 @@ RUN pecl channel-update pecl.php.net && \
         /usr/lib/php/${PHP_VER}/zstd.so
 
 # =============================================================================
-# Stage 4: misp-source - Clone MISP, set permissions, create dist tarball
+# Stage 4: misp-source - Clone MISP, set permissions
 # =============================================================================
 # debian:trixie-20260505-slim
 FROM debian:trixie-slim@sha256:b6e2a152f22a40ff69d92cb397223c906017e1391a73c952b588e51af8883bf8 AS misp-source
@@ -121,19 +147,41 @@ ARG CORE_COMMIT
 ARG MISP_UID=1000
 ARG MISP_GID=1000
 
-RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates \
-    && apt-get clean -y && rm -rf /var/lib/apt/lists/*
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
+    rm -f /etc/apt/apt.conf.d/docker-clean && apt-get update && apt-get install -y --no-install-recommends git ca-certificates
 
+# Initialise only the submodules the image ships: PyMISP and the STIX helpers
+# under app/files/scripts are removed below, so they are never fetched.
 RUN if [ -n "${CORE_COMMIT}" ]; then \
         git clone https://github.com/MISP/MISP.git /var/www/MISP && cd /var/www/MISP && git checkout "${CORE_COMMIT}"; \
     else \
         git clone --branch "${CORE_TAG}" --depth 1 https://github.com/MISP/MISP.git /var/www/MISP; \
     fi && \
-    cd /var/www/MISP && git submodule update --init --recursive .
+    cd /var/www/MISP && \
+    git config --file .gitmodules --get-regexp path | awk '{print $2}' \
+        | grep -v -E '^(PyMISP|app/files/scripts/(cti-python-stix2|misp-stix|mixbox|python-cybox|python-maec|python-stix))$' \
+        | xargs git submodule update --init --recursive --depth 1 --
 
-# Clean, set permissions, and create dist tarball - all in one layer
-RUN find /var/www/MISP/INSTALL/* ! -name 'MYSQL.sql' -type f -exec rm {} + && \
-    find /var/www/MISP/INSTALL/* ! -name 'MYSQL.sql' -type l -exec rm {} + && \
+# CakePHP's Postgres::describe() reuses the $seq match of an earlier column
+# for every column with a NULL default, so the sequence map points each
+# column of a table at the id sequence and an INSERT into a table keyed on
+# a varchar (system_settings) fails in setval(). Reset the match per column.
+# The build fails, naming the file, when upstream changes the loop.
+# Reported upstream: https://github.com/MISP/MISP/issues/11172
+RUN CAKE_PG=/var/www/MISP/app/Lib/cakephp/lib/Cake/Model/Datasource/Database/Postgres.php && \
+    T="$(printf '\t')" && \
+    if ! grep -q "^${T}${T}${T}foreach (\$cols as \$c) {\$" "$CAKE_PG"; then \
+        echo "$CAKE_PG changed upstream: the describe() loop that the \$seq reset patches is gone. Check whether CakePHP fixed the bug, then delete or adapt this RUN" >&2; exit 1; \
+    fi && \
+    sed -i "s|^\(${T}${T}${T}\)foreach (\$cols as \$c) {\$|\1foreach (\$cols as \$c) {\n\1${T}\$seq = null;|" "$CAKE_PG" && \
+    if ! grep -q "^${T}${T}${T}${T}\$seq = null;\$" "$CAKE_PG"; then \
+        echo "$CAKE_PG: the \$seq reset did not apply" >&2; exit 1; \
+    fi
+
+# Clean and set permissions - all in one layer
+RUN find /var/www/MISP/INSTALL/* ! -name 'MYSQL.sql' ! -name 'POSTGRESQL.sql' -type f -exec rm {} + && \
+    find /var/www/MISP/INSTALL/* ! -name 'MYSQL.sql' ! -name 'POSTGRESQL.sql' -type l -exec rm {} + && \
     find /var/www/MISP/.git/* ! -name HEAD -exec rm -rf {} + 2>/dev/null || true && \
     rm -rf /var/www/MISP/PyMISP \
            /var/www/MISP/app/files/scripts/cti-python-stix2 \
@@ -142,14 +190,13 @@ RUN find /var/www/MISP/INSTALL/* ! -name 'MYSQL.sql' -type f -exec rm {} + && \
            /var/www/MISP/app/files/scripts/python-cybox \
            /var/www/MISP/app/files/scripts/python-maec \
            /var/www/MISP/app/files/scripts/python-stix && \
-    # Create dist tarball BEFORE setting restrictive permissions,
-    # so extracted files have normal 0644/0755 perms and can be freely managed.
     echo "${CORE_COMMIT:-${CORE_TAG}}" > /tmp/misp-dist-version && \
-    tar czf /srv/misp-dist.tar.gz -C /var/www/MISP/app files Config && \
-    chown ${MISP_UID}:${MISP_GID} /srv/misp-dist.tar.gz /tmp/misp-dist-version && \
-    # Strip app/files/ and app/Config/ from the image - the init container populates
-    # these from the tarball at runtime. Saves ~191 MB from the image layer.
-    rm -rf /var/www/MISP/app/files/* /var/www/MISP/app/Config/* && \
+    # app/Config is a per-pod volume rendered at start from these defaults
+    mkdir -p /srv/misp-config && \
+    cp /var/www/MISP/app/Config/core.default.php /var/www/MISP/app/Config/bootstrap.default.php \
+       /var/www/MISP/app/Config/routes.php /srv/misp-config/ && \
+    rm -rf /var/www/MISP/app/Config/* && \
+    chown -R ${MISP_UID}:${MISP_GID} /srv/misp-config /tmp/misp-dist-version && \
     # Now set restrictive permissions for the runtime image
     find /var/www/MISP -type f -exec chmod 0440 {} + && \
     find /var/www/MISP -type d -exec chmod 0550 {} + && \
@@ -158,7 +205,7 @@ RUN find /var/www/MISP/INSTALL/* ! -name 'MYSQL.sql' -type f -exec rm {} + && \
     chown -R ${MISP_UID}:${MISP_GID} /var/www/MISP
 
 # =============================================================================
-# Stage 5: uv - Python package installer (pinned, used by final + sync stages)
+# Stage 5: uv - Python package installer (pinned)
 # =============================================================================
 # uv 0.11.14
 FROM ghcr.io/astral-sh/uv:latest@sha256:b46b03ddfcfbf8f547af7e9eaefdf8a39c8cebcba7c98858d3162bd28cf536f6 AS uv
@@ -171,7 +218,7 @@ FROM ghcr.io/astral-sh/uv:latest@sha256:b46b03ddfcfbf8f547af7e9eaefdf8a39c8cebcb
 # that are only needed by build stages (phpize, adduser). Starting fresh and
 # installing only runtime packages saves ~75 MB.
 # debian:trixie-20260505-slim
-FROM "${DOCKER_HUB_PROXY}debian:trixie-slim@sha256:109e2c65005bf160609e4ba6acf7783752f8502ad218e298253428690b9eaa4b" AS final
+FROM debian:trixie-slim@sha256:b6e2a152f22a40ff69d92cb397223c906017e1391a73c952b588e51af8883bf8 AS final
 ENV DEBIAN_FRONTEND=noninteractive
 
 ARG CORE_TAG
@@ -184,7 +231,9 @@ ARG MISP_GID=1000
 # - perl: pulled in by adduser/debconf, only needed during apt install
 # - gconv: libc6 charset converters, not needed by PHP/MISP
 # - systemd libs, python test suite, docs/man pages
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
+    rm -f /etc/apt/apt.conf.d/docker-clean && apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
         tini \
         gettext \
@@ -200,6 +249,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         php8.4-bcmath \
         php8.4-mbstring \
         php8.4-mysql \
+        php8.4-pgsql \
         php8.4-redis \
         php8.4-gd \
         php8.4-fpm \
@@ -220,8 +270,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         jq \
         python3-minimal \
         libpython3.13-stdlib \
-    && apt-get autoremove -y && apt-get clean -y \
-    && rm -rf /var/lib/apt/lists/* /root/.cache \
+    && apt-get autoremove -y \
+    && rm -rf /root/.cache \
               /usr/lib/*/gconv \
               /usr/lib/*/perl \
               /usr/lib/*/perl-base \
@@ -232,11 +282,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
               /usr/share/doc \
               /usr/share/man
 
-# Install pinned Python packages via uv (no pip in final image)
-COPY --from=uv /uv /tmp/uv
+# Install pinned Python packages via uv (no pip in final image). The bind
+# mount keeps the uv binary out of every layer.
 COPY files/requirements-final.txt /tmp/requirements.txt
-RUN /tmp/uv pip install --system --break-system-packages --no-cache -r /tmp/requirements.txt \
-    && rm /tmp/requirements.txt /tmp/uv
+RUN --mount=type=bind,from=uv,source=/uv,target=/tmp/uv \
+    /tmp/uv pip install --system --break-system-packages --no-cache -r /tmp/requirements.txt \
+    && rm /tmp/requirements.txt
 
 # Create non-root user
 RUN groupadd -g ${MISP_GID} misp && \
@@ -252,7 +303,13 @@ RUN tar -xzf /pecl_libs.tar.gz && rm /pecl_libs.tar.gz && \
             echo "extension=${mod}.so" > "${dir}mods-available/${mod}.ini"; \
         done; \
         phpenmod "${mod}"; \
-    done && phpenmod redis
+    done && phpenmod redis && \
+    # The console (workers, the configure Job, console tasks) starts a session in
+    # some commands; the root is read-only, /tmp is a volume in every such pod.
+    # PHP-FPM keeps its sessions in Redis (php.ini.template).
+    for dir in /etc/php/*/cli/conf.d; do \
+        printf 'session.save_path = "/tmp"\n' > "${dir}/99-misp-cli-sessions.ini"; \
+    done
 
 # Copy MISP source (permissions already set in misp-source stage)
 COPY --from=misp-source --chown=${MISP_UID}:${MISP_GID} /var/www/MISP /var/www/MISP
@@ -260,13 +317,14 @@ COPY --from=composer-build --chown=${MISP_UID}:${MISP_GID} /tmp/composer.lock /v
 COPY --from=composer-build --chown=${MISP_UID}:${MISP_GID} /tmp/Vendor /var/www/MISP/app/Vendor
 COPY --from=composer-build --chown=${MISP_UID}:${MISP_GID} /tmp/Plugin /var/www/MISP/app/Plugin
 
-# Copy the compressed dist tarball (used by init container to populate volumes)
-# This replaces the old .src directory copy (~63MB tarball vs ~191MB directory duplication)
-COPY --from=misp-source --chown=${MISP_UID}:${MISP_GID} /srv/misp-dist.tar.gz /srv/misp-dist.tar.gz
+# app/Config defaults (rendered into the per-pod Config volume at start) and the version marker
+COPY --from=misp-source --chown=${MISP_UID}:${MISP_GID} /srv/misp-config /srv/misp-config
 COPY --from=misp-source --chown=${MISP_UID}:${MISP_GID} /tmp/misp-dist-version /srv/misp-dist-version
 
-# Prepare writable directories (overlaid by emptyDir volumes in K8s / named volumes in Compose)
-RUN for dir in app/files app/attachments app/tmp app/tmp/cache app/tmp/cache/models \
+# Prepare writable directories (overlaid by emptyDir volumes in K8s / named volumes in Compose).
+# app/files ships in the image; MISP writes only to these four subdirectories of it.
+RUN for dir in app/files/scripts/tmp app/files/certs app/files/terms app/files/img/orgs \
+               app/attachments app/tmp app/tmp/cache app/tmp/cache/models \
                app/tmp/cache/persistent app/tmp/cache/views app/tmp/logs \
                app/Config app/webroot/img/orgs app/webroot/img/custom .gnupg; do \
         mkdir -p /var/www/MISP/$dir && chown ${MISP_UID}:${MISP_GID} /var/www/MISP/$dir && chmod 0770 /var/www/MISP/$dir; \
@@ -274,14 +332,16 @@ RUN for dir in app/files app/attachments app/tmp app/tmp/cache app/tmp/cache/mod
 
 # Copy Python entrypoint package and scripts
 COPY --chown=${MISP_UID}:${MISP_GID} files/misp_container/ /opt/misp_container/
-COPY --chown=${MISP_UID}:${MISP_GID} --chmod=0550 files/entrypoint-init.py /entrypoint-init.py
+COPY --chown=${MISP_UID}:${MISP_GID} --chmod=0550 files/entrypoint-configure.py /entrypoint-configure.py
 COPY --chown=${MISP_UID}:${MISP_GID} --chmod=0550 files/entrypoint-web.py /entrypoint-web.py
 COPY --chown=${MISP_UID}:${MISP_GID} --chmod=0550 files/entrypoint-worker.py /entrypoint-worker.py
+COPY --chown=${MISP_UID}:${MISP_GID} --chmod=0550 files/entrypoint-sync.py /entrypoint-sync.py
+COPY --chown=${MISP_UID}:${MISP_GID} --chmod=0550 files/entrypoint-metrics.py /entrypoint-metrics.py
 
 # Config templates and settings
 COPY --chown=${MISP_UID}:${MISP_GID} files/php-fpm-pool.conf.template /etc/misp-docker/php-fpm-pool.conf.template
 COPY --chown=${MISP_UID}:${MISP_GID} files/php.ini.template /etc/misp-docker/php.ini.template
-COPY --chown=${MISP_UID}:${MISP_GID} files/misp-config/settings.yaml /etc/misp-docker/settings.yaml
+COPY --chown=${MISP_UID}:${MISP_GID} files/misp-config/ /etc/misp-docker/
 RUN find /etc/misp-docker -type f -exec chmod 0440 {} + && \
     find /etc/misp-docker -type d -exec chmod 0550 {} +
 
@@ -296,7 +356,7 @@ ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["python3", "/entrypoint-web.py"]
 
 # =============================================================================
-# Stage 6: caddy - Static files + FastCGI reverse proxy (scratch image)
+# Stage 7: caddy - Static files + FastCGI reverse proxy (scratch image)
 # =============================================================================
 # Build with: docker build --target caddy -t misp-caddy .
 # caddy:2.11.3
@@ -336,79 +396,7 @@ EXPOSE 443
 CMD ["caddy", "run", "--config", "/etc/caddy/Caddyfile"]
 
 # =============================================================================
-# Stage 7: sync - Lightweight org/team sync tool
-# =============================================================================
-# Build with: docker build --target sync -t misp-sync .
-# Only Python + pyyaml + our sync code. No PHP, no MISP source.
-# debian:trixie-20260505-slim
-FROM "${DOCKER_HUB_PROXY}debian:trixie-slim@sha256:109e2c65005bf160609e4ba6acf7783752f8502ad218e298253428690b9eaa4b" AS sync
-ENV DEBIAN_FRONTEND=noninteractive
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        python3-minimal libpython3.13-stdlib ca-certificates tini \
-    && apt-get autoremove -y && apt-get clean -y && rm -rf /var/lib/apt/lists/* \
-              /usr/share/doc /usr/share/man
-
-COPY --from=uv /uv /tmp/uv
-COPY files/requirements-sync.txt /tmp/requirements.txt
-RUN /tmp/uv pip install --system --break-system-packages --no-cache -r /tmp/requirements.txt \
-    && rm /tmp/requirements.txt /tmp/uv
-
-ARG MISP_UID=1000
-ARG MISP_GID=1000
-
-RUN groupadd -g ${MISP_GID} misp && \
-    useradd -u ${MISP_UID} -g ${MISP_GID} -s /bin/false misp
-
-COPY --chown=${MISP_UID}:${MISP_GID} files/misp_container/ /opt/misp_container/
-COPY --chown=${MISP_UID}:${MISP_GID} --chmod=0550 files/entrypoint-sync.py /entrypoint-sync.py
-
-ENV PYTHONPATH=/opt PYTHONUNBUFFERED=1
-
-USER ${MISP_UID}
-
-ENTRYPOINT ["/usr/bin/tini", "--"]
-CMD ["python3", "/entrypoint-sync.py"]
-
-# =============================================================================
-# Stage 8: metrics - Prometheus metrics exporter
-# =============================================================================
-# Build with: docker build --target metrics -t misp-metrics .
-# Lightweight HTTP server exposing /metrics on port 9191.
-# debian:trixie-20260505-slim
-FROM "${DOCKER_HUB_PROXY}debian:trixie-slim@sha256:109e2c65005bf160609e4ba6acf7783752f8502ad218e298253428690b9eaa4b" AS metrics
-ENV DEBIAN_FRONTEND=noninteractive
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        python3-minimal libpython3.13-stdlib ca-certificates tini \
-    && apt-get autoremove -y && apt-get clean -y && rm -rf /var/lib/apt/lists/* \
-              /usr/share/doc /usr/share/man
-
-COPY --from=uv /uv /tmp/uv
-COPY files/requirements-metrics.txt /tmp/requirements.txt
-RUN /tmp/uv pip install --system --break-system-packages --no-cache -r /tmp/requirements.txt \
-    && rm /tmp/requirements.txt /tmp/uv
-
-ARG MISP_UID=1000
-ARG MISP_GID=1000
-
-RUN groupadd -g ${MISP_GID} misp && \
-    useradd -u ${MISP_UID} -g ${MISP_GID} -s /bin/false misp
-
-COPY --chown=${MISP_UID}:${MISP_GID} files/misp_container/ /opt/misp_container/
-COPY --chown=${MISP_UID}:${MISP_GID} --chmod=0550 files/entrypoint-metrics.py /entrypoint-metrics.py
-
-ENV PYTHONPATH=/opt PYTHONUNBUFFERED=1
-
-EXPOSE 9191
-
-USER ${MISP_UID}
-
-ENTRYPOINT ["/usr/bin/tini", "--"]
-CMD ["python3", "/entrypoint-metrics.py"]
-
-# =============================================================================
-# Stage 9: modules - MISP enrichment/import/export/action modules
+# Stage 8: modules - MISP enrichment/import/export/action modules
 # =============================================================================
 # Build with: docker build --target modules -t misp-modules .
 # Distroless Python on Debian 13 (trixie). No shell, no package manager.
@@ -418,12 +406,13 @@ CMD ["python3", "/entrypoint-metrics.py"]
 #   misp-modules[all]==3.0.7      -- everything including numpy, pandas, opencv
 #   misp-modules==3.0.7           -- core only (~89 modules, 106 MB)
 
-FROM "${DOCKER_HUB_PROXY}debian:trixie-slim@sha256:109e2c65005bf160609e4ba6acf7783752f8502ad218e298253428690b9eaa4b" AS modules-build
+FROM debian:trixie-slim@sha256:b6e2a152f22a40ff69d92cb397223c906017e1391a73c952b588e51af8883bf8 AS modules-build
 ENV DEBIAN_FRONTEND=noninteractive
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        python3-minimal libpython3.13-stdlib python3-dev gcc g++ \
-    && rm -rf /var/lib/apt/lists/*
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
+    rm -f /etc/apt/apt.conf.d/docker-clean && apt-get update && apt-get install -y --no-install-recommends \
+        python3-minimal libpython3.13-stdlib python3-dev gcc g++
 
 COPY --from=uv /uv /tmp/uv
 COPY files/requirements-modules.txt /tmp/requirements.txt
@@ -437,4 +426,6 @@ COPY --from=modules-build /usr/local/lib/python3.13/dist-packages /usr/local/lib
 EXPOSE 6666
 
 ENTRYPOINT ["python3", "-m", "misp_modules"]
-CMD ["-l", "0.0.0.0"]
+# An empty address listens on IPv4 and IPv6; "::" alone is IPv6 only (Tornado
+# sets IPV6_V6ONLY), "0.0.0.0" IPv4 only
+CMD ["-l", ""]

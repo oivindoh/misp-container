@@ -4,4 +4,10 @@ version = "0.1.0"
 requires-python = ">=3.12"
 
 [dependency-groups]
-dev = ["pytest", "pyyaml"]
+dev = [
+    # The database drivers at the versions files/requirements-final.txt pins in the image
+    "pg8000==1.31.5",
+    "pymysql==1.1.3",
+    "pytest",
+    "pyyaml",
+]

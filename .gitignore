@@ -19,5 +19,5 @@ docker-compose.override.yml
 *.pyc
 __pycache__/
 .venv/
-.pytest_cache/TODO.md
+.pytest_cache/
 TODO.md

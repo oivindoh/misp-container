@@ -1,0 +1,5 @@
+# The namespace the kind test deploys into.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: misp
