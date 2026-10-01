@@ -1,0 +1,230 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "title": "misp chart values",
+  "description": "Every key of values.yaml; a key the chart does not know fails the render instead of doing nothing.",
+  "type": "object",
+  "additionalProperties": false,
+  "definitions": {
+    "quantities": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "cpu": {"type": ["string", "number"]},
+        "memory": {"type": ["string", "number"]}
+      }
+    },
+    "resources": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "requests": {"$ref": "#/definitions/quantities"},
+        "limits": {"$ref": "#/definitions/quantities"}
+      }
+    },
+    "scalars": {
+      "type": "object",
+      "additionalProperties": {"type": ["string", "number", "boolean", "null"]}
+    },
+    "database": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "image": {"type": "string"},
+        "size": {"type": "string"},
+        "storageClass": {"type": "string"},
+        "args": {"type": "array", "items": {"type": "string"}},
+        "resources": {"$ref": "#/definitions/resources"}
+      }
+    },
+    "networkPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "ingressNamespace": {"type": "string"},
+        "monitoringNamespace": {"type": "string"}
+      }
+    }
+  },
+  "properties": {
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "misp": {"type": "string"},
+        "caddy": {"type": "string"},
+        "modules": {"type": "string"},
+        "tag": {"type": ["string", "number"]},
+        "pullPolicy": {"type": "string", "enum": ["Always", "IfNotPresent", "Never"]}
+      }
+    },
+    "imagePullSecrets": {"type": "array", "items": {"type": "string"}},
+    "nodeSelector": {"type": "object"},
+    "tolerations": {"type": "array"},
+    "affinity": {"type": "object"},
+    "env": {"$ref": "#/definitions/scalars"},
+    "secrets": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "create": {"type": "boolean"},
+        "db": {"$ref": "#/definitions/scalars"},
+        "app": {"$ref": "#/definitions/scalars"},
+        "admin": {"$ref": "#/definitions/scalars"}
+      }
+    },
+    "configure": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {"resources": {"$ref": "#/definitions/resources"}}
+    },
+    "web": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "replicas": {"type": "integer", "minimum": 0},
+        "resources": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "phpFpm": {"$ref": "#/definitions/resources"},
+            "caddy": {"$ref": "#/definitions/resources"}
+          }
+        }
+      }
+    },
+    "worker": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "replicas": {"type": "integer", "minimum": 0},
+        "resources": {"$ref": "#/definitions/resources"}
+      }
+    },
+    "metrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {"resources": {"$ref": "#/definitions/resources"}}
+    },
+    "modules": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "replicas": {"type": "integer", "minimum": 0},
+        "resources": {"$ref": "#/definitions/resources"}
+      }
+    },
+    "orgSync": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "orgs": {"type": "object"},
+        "resources": {"$ref": "#/definitions/resources"}
+      }
+    },
+    "attachments": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "claim": {"type": "boolean"},
+        "size": {"type": "string"},
+        "accessMode": {"type": "string", "enum": ["ReadWriteMany", "ReadWriteOnce", "ReadWriteOncePod"]},
+        "storageClass": {"type": "string"}
+      }
+    },
+    "mariadb": {"$ref": "#/definitions/database"},
+    "postgres": {"$ref": "#/definitions/database"},
+    "redis": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "image": {"type": "string"},
+        "resources": {"$ref": "#/definitions/resources"}
+      }
+    },
+    "ingress": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "className": {"type": "string"},
+        "host": {"type": "string"},
+        "tlsSecret": {"type": "string"},
+        "annotations": {"type": "object", "additionalProperties": {"type": "string"}}
+      }
+    },
+    "httpRoute": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "parentRefs": {"type": "array", "items": {"type": "object"}},
+        "hostnames": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "ciliumNetworkPolicy": {"$ref": "#/definitions/networkPolicy"},
+    "networkPolicy": {"$ref": "#/definitions/networkPolicy"},
+    "pdb": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {"enabled": {"type": "boolean"}}
+    },
+    "cronjobs": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "maxQueued": {"type": "integer", "minimum": 0},
+        "tasks": {"type": "object", "additionalProperties": {"type": "string"}},
+        "workflows": {"type": "object", "additionalProperties": {"type": "string"}},
+        "resources": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "api": {"$ref": "#/definitions/resources"},
+            "console": {"$ref": "#/definitions/resources"}
+          }
+        }
+      }
+    },
+    "userValidity": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "schedule": {"type": "string"},
+        "task": {"type": "string", "enum": ["check-user-validity", "block-invalid-users"]}
+      }
+    },
+    "housekeeping": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "schedules": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "jobs": {"type": "string"},
+            "logs": {"type": "string"},
+            "audit_logs": {"type": "string"}
+          }
+        },
+        "resources": {"$ref": "#/definitions/resources"}
+      }
+    },
+    "migrate": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "secret": {"$ref": "#/definitions/scalars"},
+        "volumes": {"type": "array", "items": {"type": "object"}},
+        "volumeMounts": {"type": "array", "items": {"type": "object"}},
+        "resources": {"$ref": "#/definitions/resources"}
+      }
+    }
+  }
+}

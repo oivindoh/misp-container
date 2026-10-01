@@ -11,6 +11,7 @@ sys.path.insert(0, str(REPO / "files"))
 sys.path.insert(0, str(REPO / "scripts"))
 
 import chart  # noqa: E402
+import release  # noqa: E402
 from misp_container import task  # noqa: E402
 
 # Pods that run MISP and read misp-env
@@ -63,8 +64,9 @@ def test_a_workflow_cronjob_passes_its_id():
 
 def test_the_app_version_is_the_image_tag_the_compose_files_default_to():
     meta = yaml.safe_load((chart.CHART / "Chart.yaml").read_text())
-    compose_tag = re.search(r"misp-container:\$\{MISP_IMAGE_TAG:-([^}]+)\}", (REPO / "deploy/docker-compose.yml").read_text()).group(1)
-    assert meta["appVersion"] == compose_tag
+    for path in release.COMPOSE_FILES:
+        tags = set(re.findall(r"misp-container[a-z-]*:\$\{MISP_IMAGE_TAG:-([^}]+)\}", path.read_text()))
+        assert tags <= {meta["appVersion"]}, f"{path.relative_to(REPO)} defaults to {sorted(tags)}, the chart's appVersion is {meta['appVersion']}"
 
 
 def test_the_chart_version_is_a_release_semver():
@@ -145,6 +147,22 @@ def test_every_component_renders_and_the_default_renders_none():
     default = {(d["kind"], d["metadata"]["name"]) for d in chart.objects()}
     for component in chart.components():
         added = {(d["kind"], d["metadata"]["name"]) for d in chart.objects(f"{component}.enabled=true")} - default
-        assert added or component == "migrate", f"{component}.enabled=true renders nothing more"
+        assert added, f"{component}.enabled=true renders nothing more"
     assert not any(d["kind"] in ("StatefulSet", "CronJob", "Ingress", "HTTPRoute", "PodDisruptionBudget", "CiliumNetworkPolicy")
                    for d in chart.objects())
+
+
+def test_the_chart_pins_the_images_the_compose_stack_pins():
+    """dependabot bumps the Compose files; values.yaml follows by hand, and this fails until it does."""
+    values = yaml.safe_load((chart.CHART / "values.yaml").read_text())
+    compose = (REPO / "deploy/docker-compose.yml").read_text()
+    for component, service in (("mariadb", "mysql"), ("postgres", "postgres"), ("redis", "redis")):
+        image = values[component]["image"]
+        assert f"image: {image}\n" in compose, f"{component}.image is {image}, deploy/docker-compose.yml has another for {service}"
+
+
+def test_a_misspelt_value_is_refused():
+    """values.schema.json: a key the chart does not know fails the render instead of doing nothing."""
+    import pytest
+    with pytest.raises(RuntimeError, match="replica"):
+        chart.objects("web.replica=2")

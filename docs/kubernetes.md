@@ -50,7 +50,7 @@ env:
   MISP_UUID: 06732f0d-87e3-4ede-8767-4e0e9879414c
 secrets:
   db: {DB_PASSWORD: ..., MYSQL_ROOT_PASSWORD: ...}
-  app: {MISP_REDIS_PASSWORD: ..., GNUPG_PASSWORD: ..., SECURITY_SALT: ...}
+  app: {MISP_REDIS_PASSWORD: ..., GNUPG_PASSWORD: ..., SIMPLEBACKGROUNDJOBS_SUPERVISOR_PASSWORD: ..., SECURITY_SALT: ...}
   admin: {ADMIN_PASSWORD: ..., ADMIN_KEY: ...}
 mariadb: {enabled: true}
 redis: {enabled: true}
@@ -83,6 +83,17 @@ below come from them.
 | `attachments` | Attachments, org logos and custom images on the claim attachments. Web and worker pods on different nodes write there, so the storage class must offer ReadWriteMany. For attachments in S3, set PLUGIN_S3_BUCKET_NAME in env and claim: false; org logos and custom images then stay in each pod. |
 <!-- end generated -->
 
+### Upgrading from chart 1.x
+
+Chart 2.0 selects every pod on `app.kubernetes.io/name` alone. A selector is immutable, so
+`helm upgrade` from a 1.x release refuses the Deployments and StatefulSets. Delete them
+first; the claims, the Secrets and the ConfigMap stay, and the upgrade recreates the rest:
+
+```bash
+kubectl -n misp delete deployment,statefulset -l app.kubernetes.io/part-of=misp
+helm upgrade misp oci://ghcr.io/oivindoh/charts/misp --version 2.0.0 --namespace misp -f values.yaml
+```
+
 ## Components
 
 Each component is off by default:
@@ -96,6 +107,7 @@ Each component is off by default:
 | `ingress` | An Ingress to the web Service. The default annotation makes the haproxy ingress replace X-Forwarded-For with the address it sees (docs/kubernetes.md, Client addresses). |
 | `httpRoute` | An HTTPRoute for a Gateway API implementation, in place of the ingress. The Gateway must allow routes from this namespace; set TRUSTED_PROXY_CIDR in env to its proxy pods. |
 | `ciliumNetworkPolicy` | CiliumNetworkPolicies for every pod: the paths MISP needs, DNS, HTTPS out and SMTP out. ingressNamespace holds the ingress or Gateway proxies, monitoringNamespace Prometheus. |
+| `networkPolicy` | NetworkPolicies with the same flows as ciliumNetworkPolicy, in the Kubernetes API, for a cluster whose CNI enforces NetworkPolicy but is not Cilium. ingressNamespace holds the ingress or Gateway proxies, monitoringNamespace Prometheus. |
 | `pdb` | PodDisruptionBudgets for web and worker (maxUnavailable: 1). |
 | `cronjobs` | The periodic tasks as CronJobs: tasks maps a task to its schedule, workflows a workflow ID to its schedule. API tasks need ADMIN_KEY in secrets.admin and dispatch nothing while maxQueued jobs or more wait. |
 | `userValidity` | A daily check of every account against the OIDC or LDAP provider, through MISP's console. Needs the oidc or ldap group. check-user-validity reports; block-invalid-users disables the accounts the provider no longer backs. |
@@ -131,7 +143,7 @@ workload gets a whole Secret, or only the keys the table names:
 | Secret | File | Keys | Read by |
 |---|---|---|---|
 | `misp-db` | `deploy/chart/files/secrets-db.env` | `DB_USER`, `DB_PASSWORD`, `MYSQL_ROOT_PASSWORD` | configure, cronjobs, housekeeping, mariadb (`DB_PASSWORD`, `DB_USER`, `MYSQL_ROOT_PASSWORD`), metrics (`DB_PASSWORD`, `DB_USER`), migrate, org-sync, postgres (`DB_PASSWORD`, `DB_USER`), userValidity, web, worker |
-| `misp-app` | `deploy/chart/files/secrets-app.env` | `MISP_REDIS_PASSWORD`, `GNUPG_PASSWORD`, `SECURITY_ENCRYPTION_KEY`, `SECURITY_SALT` | configure, cronjobs, metrics (`MISP_REDIS_PASSWORD`), migrate, redis (`MISP_REDIS_PASSWORD`), userValidity, web, worker |
+| `misp-app` | `deploy/chart/files/secrets-app.env` | `MISP_REDIS_PASSWORD`, `GNUPG_PASSWORD`, `SIMPLEBACKGROUNDJOBS_SUPERVISOR_PASSWORD`, `SECURITY_ENCRYPTION_KEY`, `SECURITY_SALT` | configure, cronjobs, metrics (`MISP_REDIS_PASSWORD`), migrate, redis (`MISP_REDIS_PASSWORD`), userValidity, web, worker |
 | `misp-admin` | `deploy/chart/files/secrets-admin.env` | `ADMIN_PASSWORD`, `ADMIN_KEY` | configure, cronjobs (`ADMIN_KEY`), misp-test (`ADMIN_KEY`), org-sync |
 | `misp-migrate` | `deploy/chart/files/secrets-migrate.env` | `MIGRATE_SOURCE_HOST`, `MIGRATE_SOURCE_USER`, `MIGRATE_SOURCE_PASSWORD`, `MIGRATE_FORCE`, `MIGRATE_REPLACE_COPY`, `MIGRATE_SOURCE_FILES`, `MIGRATE_SOURCE_S3_BUCKET`, `MIGRATE_SOURCE_S3_ENDPOINT`, `MIGRATE_SOURCE_S3_REGION`, `MIGRATE_SOURCE_S3_ACCESS_KEY`, `MIGRATE_SOURCE_S3_SECRET_KEY` | migrate |
 <!-- end generated -->
@@ -173,12 +185,30 @@ on one replica only; use the `misp-certs` Secret.
 
 The `ciliumNetworkPolicy` component allows only the paths in the diagram in
 [architecture.md](architecture.md) plus DNS, HTTPS to the outside for web, worker, modules,
-metrics and the console tasks, and SMTP (ports 25, 465 and 587, in or outside the cluster)
-for web, worker and the console tasks. A mail relay on another port needs a change to the
-template. `ciliumNetworkPolicy.ingressNamespace` (default `haproxy-controller`) and
+metrics and the console tasks, SMTP (ports 25, 465 and 587, in or outside the cluster)
+for web, worker and the console tasks, and LDAP (ports 389 and 636, in or outside the
+cluster) for web and the console tasks. A mail relay or an LDAP server on another port
+needs a change to the template. `ciliumNetworkPolicy.ingressNamespace` (default `haproxy-controller`) and
 `ciliumNetworkPolicy.monitoringNamespace` (default `monitoring`) name the namespaces of the
 ingress and of Prometheus. The header of `deploy/chart/templates/ciliumnetworkpolicy.yaml`
 lists every flow.
+
+The `networkPolicy` component renders the same flows as Kubernetes `NetworkPolicy` objects,
+with the same two namespace values, for a cluster whose CNI enforces that API but is not
+Cilium. A cluster whose CNI enforces neither leaves every pod open to the namespace and,
+without a default-deny elsewhere, to the cluster.
+
+## Sizing
+
+PHP's `memory_limit` is a ceiling per process, not a reservation: a request or a job takes
+what it needs and fails once it passes the ceiling. The pod limits in `values.yaml` hold the
+usual load, and the ceiling decides what happens under an unusual one.
+
+| Pod | PHP processes | Ceiling per process | The pod limit must hold |
+|-----|---------------|---------------------|-------------------------|
+| web | `PHP_FCGI_CHILDREN` php-fpm children | `PHP_MEMORY_LIMIT` | the children at their usual size, plus each heavy request at the ceiling. The default limit holds two heavy requests at once; for more, raise `web.resources.phpFpm.limits.memory` or lower the ceiling |
+| worker | the sum of `NUM_WORKERS_*` workers | `WORKER_MEMORY_LIMIT`, or `PHP_MEMORY_LIMIT` when unset | the idle workers (see [architecture.md](architecture.md#startup-and-footprint)) plus each heavy job at the ceiling. A job past the ceiling fails alone; without one (Debian's CLI default) it would grow until the kubelet killed the pod with every worker in it |
+| configure, console tasks | one `cake` process | none | `configure.resources` and `cronjobs.resources.console` bound a schema update or a summary run |
 
 ## Periodic tasks
 

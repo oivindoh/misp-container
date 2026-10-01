@@ -24,6 +24,7 @@ secrets:
   app:
     MISP_REDIS_PASSWORD: kind-redis-5e2b9a44
     GNUPG_PASSWORD: kind-gpg-7a4c0d93
+    SIMPLEBACKGROUNDJOBS_SUPERVISOR_PASSWORD: kind-supervisor-2c8e1f50
     SECURITY_SALT: 0f3a9c2e7b5d18466a1c3e5f7092b4d6e8f0a1c3e5b7d9f2a4c6e8b0d2f4a6c8
   admin:
     ADMIN_PASSWORD: Kind-Str0ng!Pass#2026-x

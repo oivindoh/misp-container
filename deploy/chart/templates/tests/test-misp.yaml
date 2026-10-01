@@ -54,6 +54,7 @@ spec:
           assert not idle, f"no worker runs the queues {idle}"
           print(f"ok: workers run the queues {', '.join(WORKER_QUEUES)}")
       env:
+        {{- include "misp.logEnv" . | nindent 8 }}
         - name: ADMIN_KEY
           valueFrom:
             secretKeyRef:

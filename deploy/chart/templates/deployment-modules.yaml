@@ -6,17 +6,14 @@ metadata:
   name: modules
   labels:
     {{- include "misp.labels" (dict "root" . "name" "modules") | nindent 4 }}
-    app: modules
 spec:
   replicas: {{ .Values.modules.replicas }}
   selector:
     matchLabels:
-      app: modules
       app.kubernetes.io/name: modules
   template:
     metadata:
       labels:
-        app: modules
         app.kubernetes.io/name: modules
     spec:
       securityContext:
@@ -37,8 +34,6 @@ spec:
         - name: modules
           image: {{ .Values.image.modules }}:{{ include "misp.tag" . }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
-          # An empty address listens on IPv4 and IPv6; "::" alone is IPv6 only
-          args: ["-l", ""]
           ports:
             - name: http
               containerPort: 6666

@@ -99,7 +99,7 @@ change; the upgrade removes the Job of the previous revision.
 | Event | What happens |
 |-------|--------------|
 | First install | The Job imports the schema and configures MISP. Web and worker pods wait (up to 6 minutes, then restart and wait again). |
-| Later rollouts | Pods of the old version keep serving. Pods of the new version wait for the new Job to record their version, then serve. |
+| Later rollouts | Pods of the old version keep serving while the Job runs MISP's schema updates, as MISP's own updater does on a live instance. Pods of the new version wait for the new Job to record their version, then serve. |
 | The Job fails | New pods keep waiting and restarting; old pods keep serving. Read the Job's log, fix the cause, upgrade again. |
 | Nothing changed | The Job runs, finds nothing to do, and exits 0 in seconds. |
 | Rollback | `helm rollback` runs the Job of the previous revision again: it records its version and the pods of that version serve. A `kubectl rollout undo` alone leaves the pods waiting. |
@@ -116,4 +116,4 @@ change; the upgrade removes the Job of the previous revision.
 | Deployment | Replicas | Notes |
 |------------|----------|-------|
 | web | any | Sessions live in Redis; org logos and attachments are on a shared claim |
-| worker | any | Redis `BRPOP` gives each job to one worker. A stopping worker gets `WORKER_STOP_GRACE` seconds (default 300) to finish; a job on a worker that dies is lost |
+| worker | any | Redis `BRPOP` gives each job to one worker. A stopping worker gets `WORKER_STOP_GRACE` seconds (default 300) to finish, and the pod's termination grace period is 30 s more (Compose: `stop_grace_period` 330 s); a job on a worker that dies is lost |

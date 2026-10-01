@@ -158,6 +158,14 @@ ciliumNetworkPolicy:
   ingressNamespace: haproxy-controller
   monitoringNamespace: monitoring
 
+# NetworkPolicies with the same flows as ciliumNetworkPolicy, in the Kubernetes API, for a
+# cluster whose CNI enforces NetworkPolicy but is not Cilium. ingressNamespace holds the ingress
+# or Gateway proxies, monitoringNamespace Prometheus.
+networkPolicy:
+  enabled: false
+  ingressNamespace: haproxy-controller
+  monitoringNamespace: monitoring
+
 # PodDisruptionBudgets for web and worker (maxUnavailable: 1).
 pdb:
   enabled: false
