@@ -650,44 +650,6 @@ settings:
     type: string
     level: 1
     track_only: true
-  Plugin.CustomAuth_custom_logout:
-    value: ''
-    description: Provide a custom logout URL for your users that will log them out using the authentication system you use.
-    type: string
-    level: 2
-    track_only: true
-  Plugin.CustomAuth_custom_password_reset:
-    value: ''
-    description: Provide your custom authentication users with an external URL to the authentication system to reset their passwords.
-    type: string
-    level: 2
-    file_only: true
-    sensitive: true
-    track_only: true
-  Plugin.CustomAuth_disable_logout:
-    value: false
-    description: Disable the logout button for users authenticate with the external auth mechanism.
-    type: boolean
-    level: 2
-    track_only: true
-  Plugin.CustomAuth_enable:
-    value: false
-    description: Enable this functionality if you would like to handle the authentication via an external tool and authenticate with MISP using a custom header.
-    type: boolean
-    level: 2
-    track_only: true
-  Plugin.CustomAuth_only_allow_source:
-    value: ''
-    description: If you are using an external tool to authenticate with MISP and would like to only allow the tool's url as a valid point of entry then set this field.
-    type: string
-    level: 2
-    track_only: true
-  Plugin.CustomAuth_required:
-    value: false
-    description: If this setting is enabled then the only way to authenticate will be using the custom header. Alternatively, you can run in mixed mode that will log users in via the header if found, otherwise users will be redirected to the normal login page.
-    type: boolean
-    level: 2
-    track_only: true
   Plugin.CyCat_enable:
     value: false
     description: Enable lookups for additional relations via CyCat.
