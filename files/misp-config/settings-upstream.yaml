@@ -650,44 +650,6 @@ settings:
     type: string
     level: 1
     track_only: true
-  Plugin.CustomAuth_custom_logout:
-    value: ''
-    description: Provide a custom logout URL for your users that will log them out using the authentication system you use.
-    type: string
-    level: 2
-    track_only: true
-  Plugin.CustomAuth_custom_password_reset:
-    value: ''
-    description: Provide your custom authentication users with an external URL to the authentication system to reset their passwords.
-    type: string
-    level: 2
-    file_only: true
-    sensitive: true
-    track_only: true
-  Plugin.CustomAuth_disable_logout:
-    value: false
-    description: Disable the logout button for users authenticate with the external auth mechanism.
-    type: boolean
-    level: 2
-    track_only: true
-  Plugin.CustomAuth_enable:
-    value: false
-    description: Enable this functionality if you would like to handle the authentication via an external tool and authenticate with MISP using a custom header.
-    type: boolean
-    level: 2
-    track_only: true
-  Plugin.CustomAuth_only_allow_source:
-    value: ''
-    description: If you are using an external tool to authenticate with MISP and would like to only allow the tool's url as a valid point of entry then set this field.
-    type: string
-    level: 2
-    track_only: true
-  Plugin.CustomAuth_required:
-    value: false
-    description: If this setting is enabled then the only way to authenticate will be using the custom header. Alternatively, you can run in mixed mode that will log users in via the header if found, otherwise users will be redirected to the normal login page.
-    type: boolean
-    level: 2
-    track_only: true
   Plugin.CyCat_enable:
     value: false
     description: Enable lookups for additional relations via CyCat.
@@ -773,143 +735,59 @@ settings:
     type: string
     level: 1
     track_only: true
-  Plugin.Enrichment_anyrun_sandbox_submit_api_key:
+  Plugin.Enrichment_apifreaks_apikey:
     value: ''
     description: Set this required module specific setting.
     type: string
     level: 1
     file_only: true
     track_only: true
-  Plugin.Enrichment_anyrun_sandbox_submit_enabled:
+  Plugin.Enrichment_apifreaks_do_availability:
+    value: ''
+    description: Set this required module specific setting.
+    type: string
+    level: 1
+    track_only: true
+  Plugin.Enrichment_apifreaks_do_dns:
+    value: ''
+    description: Set this required module specific setting.
+    type: string
+    level: 1
+    track_only: true
+  Plugin.Enrichment_apifreaks_do_history:
+    value: ''
+    description: Set this required module specific setting.
+    type: string
+    level: 1
+    track_only: true
+  Plugin.Enrichment_apifreaks_do_reverse_dns:
+    value: ''
+    description: Set this required module specific setting.
+    type: string
+    level: 1
+    track_only: true
+  Plugin.Enrichment_apifreaks_do_subdomains:
+    value: ''
+    description: Set this required module specific setting.
+    type: string
+    level: 1
+    track_only: true
+  Plugin.Enrichment_apifreaks_do_whois:
+    value: ''
+    description: Set this required module specific setting.
+    type: string
+    level: 1
+    track_only: true
+  Plugin.Enrichment_apifreaks_enabled:
     value: false
-    description: '[<span class="bold">Enable or disable the anyrun_sandbox_submit module.</span>] A module designed to submit URLs or files to the ANY.RUN Sandbox for analysis and return the unique analysis link and ID.'
+    description: '[<span class="bold">Enable or disable the apifreaks module.</span>] An expansion module for https://apifreaks.com/ that provides an enriched analysis of a domain, hostname, IP address, ASN or email address, including WHOIS, DNS, subdomains and domain-availability information.'
     type: boolean
     level: 1
     track_only: true
-  Plugin.Enrichment_anyrun_sandbox_submit_env_bitness:
-    value: ''
-    description: Set this required module specific setting.
-    type: string
-    level: 1
-    track_only: true
-  Plugin.Enrichment_anyrun_sandbox_submit_env_locale:
-    value: ''
-    description: Set this required module specific setting.
-    type: string
-    level: 1
-    track_only: true
-  Plugin.Enrichment_anyrun_sandbox_submit_env_type:
-    value: ''
-    description: Set this required module specific setting.
-    type: string
-    level: 1
-    track_only: true
-  Plugin.Enrichment_anyrun_sandbox_submit_env_version:
-    value: ''
-    description: Set this required module specific setting.
-    type: string
-    level: 1
-    track_only: true
-  Plugin.Enrichment_anyrun_sandbox_submit_obj_ext_browser:
-    value: ''
-    description: Set this required module specific setting.
-    type: string
-    level: 1
-    track_only: true
-  Plugin.Enrichment_anyrun_sandbox_submit_obj_ext_cmd:
-    value: ''
-    description: Set this required module specific setting.
-    type: string
-    level: 1
-    track_only: true
-  Plugin.Enrichment_anyrun_sandbox_submit_obj_ext_extension:
-    value: ''
-    description: Set this required module specific setting.
-    type: string
-    level: 1
-    track_only: true
-  Plugin.Enrichment_anyrun_sandbox_submit_obj_ext_startfolder:
-    value: ''
-    description: Set this required module specific setting.
-    type: string
-    level: 1
-    track_only: true
-  Plugin.Enrichment_anyrun_sandbox_submit_obj_force_elevation:
-    value: ''
-    description: Set this required module specific setting.
-    type: string
-    level: 1
-    track_only: true
-  Plugin.Enrichment_anyrun_sandbox_submit_opt_network_connect:
-    value: ''
-    description: Set this required module specific setting.
-    type: string
-    level: 1
-    track_only: true
-  Plugin.Enrichment_anyrun_sandbox_submit_opt_network_fakenet:
-    value: ''
-    description: Set this required module specific setting.
-    type: string
-    level: 1
-    track_only: true
-  Plugin.Enrichment_anyrun_sandbox_submit_opt_network_geo:
-    value: ''
-    description: Set this required module specific setting.
-    type: string
-    level: 1
-    track_only: true
-  Plugin.Enrichment_anyrun_sandbox_submit_opt_network_mitm:
-    value: ''
-    description: Set this required module specific setting.
-    type: string
-    level: 1
-    track_only: true
-  Plugin.Enrichment_anyrun_sandbox_submit_opt_network_residential_proxy:
-    value: ''
-    description: Set this required module specific setting.
-    type: string
-    level: 1
-    track_only: true
-  Plugin.Enrichment_anyrun_sandbox_submit_opt_network_residential_proxy_geo:
-    value: ''
-    description: Set this required module specific setting.
-    type: string
-    level: 1
-    track_only: true
-  Plugin.Enrichment_anyrun_sandbox_submit_opt_network_tor:
-    value: ''
-    description: Set this required module specific setting.
-    type: string
-    level: 1
-    track_only: true
-  Plugin.Enrichment_anyrun_sandbox_submit_opt_privacy_type:
-    value: ''
-    description: Set this required module specific setting.
-    type: string
-    level: 1
-    track_only: true
-  Plugin.Enrichment_anyrun_sandbox_submit_opt_timeout:
-    value: ''
-    description: Set this required module specific setting.
-    type: string
-    level: 1
-    track_only: true
-  Plugin.Enrichment_anyrun_sandbox_submit_os_type:
-    value: ''
-    description: Set this required module specific setting.
-    type: string
-    level: 1
-    track_only: true
-  Plugin.Enrichment_anyrun_sandbox_submit_restrict:
+  Plugin.Enrichment_apifreaks_restrict:
     value: 0
-    description: Restrict the anyrun_sandbox_submit module to the given organisation.
+    description: Restrict the apifreaks module to the given organisation.
     type: numeric
-    level: 1
-    track_only: true
-  Plugin.Enrichment_anyrun_sandbox_submit_run_as_root:
-    value: ''
-    description: Set this required module specific setting.
-    type: string
     level: 1
     track_only: true
   Plugin.Enrichment_apivoid_apikey:
@@ -1503,6 +1381,18 @@ settings:
     type: string
     level: 1
     track_only: true
+  Plugin.Enrichment_email_security_check_enabled:
+    value: false
+    description: '[<span class="bold">Enable or disable the email_security_check module.</span>] Check email security posture (SPF, DKIM, DMARC, MTA-STS) for a domain.'
+    type: boolean
+    level: 1
+    track_only: true
+  Plugin.Enrichment_email_security_check_restrict:
+    value: 0
+    description: Restrict the email_security_check module to the given organisation.
+    type: numeric
+    level: 1
+    track_only: true
   Plugin.Enrichment_eql_enabled:
     value: false
     description: '[<span class="bold">Enable or disable the eql module.</span>] EQL query generation for a MISP attribute.'
@@ -1587,6 +1477,31 @@ settings:
     value: ''
     description: Set this required module specific setting.
     type: string
+    level: 1
+    track_only: true
+  Plugin.Enrichment_flowtriq_api_key:
+    value: ''
+    description: Set this required module specific setting.
+    type: string
+    level: 1
+    file_only: true
+    track_only: true
+  Plugin.Enrichment_flowtriq_api_url:
+    value: ''
+    description: Set this required module specific setting.
+    type: string
+    level: 1
+    track_only: true
+  Plugin.Enrichment_flowtriq_enabled:
+    value: false
+    description: '[<span class="bold">Enable or disable the flowtriq module.</span>] Query Flowtriq for DDoS attack intelligence on IP addresses'
+    type: boolean
+    level: 1
+    track_only: true
+  Plugin.Enrichment_flowtriq_restrict:
+    value: 0
+    description: Restrict the flowtriq module to the given organisation.
+    type: numeric
     level: 1
     track_only: true
   Plugin.Enrichment_geoip_asn_enabled:
@@ -1719,12 +1634,6 @@ settings:
     type: string
     level: 1
     file_only: true
-    track_only: true
-  Plugin.Enrichment_greynoise_api_type:
-    value: ''
-    description: Set this required module specific setting.
-    type: string
-    level: 1
     track_only: true
   Plugin.Enrichment_greynoise_enabled:
     value: false
@@ -1946,6 +1855,31 @@ settings:
     type: numeric
     level: 1
     track_only: true
+  Plugin.Enrichment_ismalicious_api_key:
+    value: ''
+    description: Set this required module specific setting.
+    type: string
+    level: 1
+    file_only: true
+    track_only: true
+  Plugin.Enrichment_ismalicious_api_url:
+    value: ''
+    description: Set this required module specific setting.
+    type: string
+    level: 1
+    track_only: true
+  Plugin.Enrichment_ismalicious_enabled:
+    value: false
+    description: '[<span class="bold">Enable or disable the ismalicious module.</span>] Query isMalicious for IP, domain, hostname, and URL reputation.'
+    type: boolean
+    level: 1
+    track_only: true
+  Plugin.Enrichment_ismalicious_restrict:
+    value: 0
+    description: Restrict the ismalicious module to the given organisation.
+    type: numeric
+    level: 1
+    track_only: true
   Plugin.Enrichment_jinja_template_rendering_enabled:
     value: false
     description: '[<span class="bold">Enable or disable the jinja_template_rendering module.</span>] Render the template with the data passed'
@@ -2125,6 +2059,25 @@ settings:
     type: numeric
     level: 1
     track_only: true
+  Plugin.Enrichment_macadress_com_api_key:
+    value: ''
+    description: Set this required module specific setting.
+    type: string
+    level: 1
+    file_only: true
+    track_only: true
+  Plugin.Enrichment_macadress_com_enabled:
+    value: false
+    description: '[<span class="bold">Enable or disable the macadress_com module.</span>] Module to access macadress.com API.'
+    type: boolean
+    level: 1
+    track_only: true
+  Plugin.Enrichment_macadress_com_restrict:
+    value: 0
+    description: Restrict the macadress_com module to the given organisation.
+    type: numeric
+    level: 1
+    track_only: true
   Plugin.Enrichment_macvendors_enabled:
     value: false
     description: '[<span class="bold">Enable or disable the macvendors module.</span>] Module to access Macvendors API.'
@@ -2242,6 +2195,18 @@ settings:
     type: numeric
     level: 1
     track_only: true
+  Plugin.Enrichment_odt_enrich_enabled:
+    value: false
+    description: '[<span class="bold">Enable or disable the odt_enrich module.</span>] Module to extract freetext from a .odt document.'
+    type: boolean
+    level: 1
+    track_only: true
+  Plugin.Enrichment_odt_enrich_restrict:
+    value: 0
+    description: Restrict the odt_enrich module to the given organisation.
+    type: numeric
+    level: 1
+    track_only: true
   Plugin.Enrichment_onion_lookup_enabled:
     value: false
     description: '[<span class="bold">Enable or disable the onion_lookup module.</span>] MISP module using the MISP standard. Uses the onion-lookup service to get information about an onion.'
@@ -2278,6 +2243,12 @@ settings:
     value: false
     description: '[<span class="bold">Enable or disable the onyphe_full module.</span>] Module to process a full query on Onyphe.'
     type: boolean
+    level: 1
+    track_only: true
+  Plugin.Enrichment_onyphe_full_limit:
+    value: ''
+    description: Set this required module specific setting.
+    type: string
     level: 1
     track_only: true
   Plugin.Enrichment_onyphe_full_restrict:
@@ -2409,6 +2380,18 @@ settings:
     type: numeric
     level: 1
     track_only: true
+  Plugin.Enrichment_ransomlook_enabled:
+    value: false
+    description: '[<span class="bold">Enable or disable the ransomlook module.</span>] Query the RansomLook API and return matching ransomware leak-site posts as MISP objects.'
+    type: boolean
+    level: 1
+    track_only: true
+  Plugin.Enrichment_ransomlook_restrict:
+    value: 0
+    description: Restrict the ransomlook module to the given organisation.
+    type: numeric
+    level: 1
+    track_only: true
   Plugin.Enrichment_rapid7_attackerkb_api_key:
     value: ''
     description: Set this required module specific setting.
@@ -2444,6 +2427,18 @@ settings:
     value: ''
     description: Set this required module specific setting.
     type: string
+    level: 1
+    track_only: true
+  Plugin.Enrichment_rdap_enabled:
+    value: false
+    description: '[<span class="bold">Enable or disable the rdap module.</span>] An expansion module to query the public RDAP bootstrap (rdap.org) for registration data of a domain, hostname, IP address or URL. RDAP (Registration Data Access Protocol, RFC 9082/9083) is the free, unauthenticated and structured successor to WHOIS.'
+    type: boolean
+    level: 1
+    track_only: true
+  Plugin.Enrichment_rdap_restrict:
+    value: 0
+    description: Restrict the rdap module to the given organisation.
+    type: numeric
     level: 1
     track_only: true
   Plugin.Enrichment_recordedfuture_enabled:
@@ -2538,6 +2533,332 @@ settings:
     type: string
     level: 1
     track_only: true
+  Plugin.Enrichment_rst_cs_beacon_api_key:
+    value: ''
+    description: Set this required module specific setting.
+    type: string
+    level: 1
+    file_only: true
+    track_only: true
+  Plugin.Enrichment_rst_cs_beacon_base_url:
+    value: ''
+    description: Set this required module specific setting.
+    type: string
+    level: 1
+    track_only: true
+  Plugin.Enrichment_rst_cs_beacon_enabled:
+    value: false
+    description: '[<span class="bold">Enable or disable the rst_cs_beacon module.</span>] Scan a target IP[:port] for a Cobalt Strike beacon configuration via RST Scan API.'
+    type: boolean
+    level: 1
+    track_only: true
+  Plugin.Enrichment_rst_cs_beacon_port:
+    value: ''
+    description: Set this required module specific setting.
+    type: string
+    level: 1
+    track_only: true
+  Plugin.Enrichment_rst_cs_beacon_restrict:
+    value: 0
+    description: Restrict the rst_cs_beacon module to the given organisation.
+    type: numeric
+    level: 1
+    track_only: true
+  Plugin.Enrichment_rst_cs_beacon_timeout:
+    value: ''
+    description: Set this required module specific setting.
+    type: string
+    level: 1
+    track_only: true
+  Plugin.Enrichment_rst_favicon_api_key:
+    value: ''
+    description: Set this required module specific setting.
+    type: string
+    level: 1
+    file_only: true
+    track_only: true
+  Plugin.Enrichment_rst_favicon_base_url:
+    value: ''
+    description: Set this required module specific setting.
+    type: string
+    level: 1
+    track_only: true
+  Plugin.Enrichment_rst_favicon_enabled:
+    value: false
+    description: '[<span class="bold">Enable or disable the rst_favicon module.</span>] Fetch a target''s favicon (image + all hashes for Shodan/Netlas/Censys pivoting) via RST Scan API.'
+    type: boolean
+    level: 1
+    track_only: true
+  Plugin.Enrichment_rst_favicon_restrict:
+    value: 0
+    description: Restrict the rst_favicon module to the given organisation.
+    type: numeric
+    level: 1
+    track_only: true
+  Plugin.Enrichment_rst_favicon_timeout:
+    value: ''
+    description: Set this required module specific setting.
+    type: string
+    level: 1
+    track_only: true
+  Plugin.Enrichment_rst_html_api_key:
+    value: ''
+    description: Set this required module specific setting.
+    type: string
+    level: 1
+    file_only: true
+    track_only: true
+  Plugin.Enrichment_rst_html_base_url:
+    value: ''
+    description: Set this required module specific setting.
+    type: string
+    level: 1
+    track_only: true
+  Plugin.Enrichment_rst_html_enabled:
+    value: false
+    description: '[<span class="bold">Enable or disable the rst_html module.</span>] Fetch rendered HTML body or extracted JavaScript for a URL/IP target via RST Scan API.'
+    type: boolean
+    level: 1
+    track_only: true
+  Plugin.Enrichment_rst_html_mode:
+    value: ''
+    description: Set this required module specific setting.
+    type: string
+    level: 1
+    track_only: true
+  Plugin.Enrichment_rst_html_port:
+    value: ''
+    description: Set this required module specific setting.
+    type: string
+    level: 1
+    track_only: true
+  Plugin.Enrichment_rst_html_restrict:
+    value: 0
+    description: Restrict the rst_html module to the given organisation.
+    type: numeric
+    level: 1
+    track_only: true
+  Plugin.Enrichment_rst_html_timeout:
+    value: ''
+    description: Set this required module specific setting.
+    type: string
+    level: 1
+    track_only: true
+  Plugin.Enrichment_rst_ioc_api_key:
+    value: ''
+    description: Set this required module specific setting.
+    type: string
+    level: 1
+    file_only: true
+    track_only: true
+  Plugin.Enrichment_rst_ioc_base_url:
+    value: ''
+    description: Set this required module specific setting.
+    type: string
+    level: 1
+    track_only: true
+  Plugin.Enrichment_rst_ioc_enabled:
+    value: false
+    description: '[<span class="bold">Enable or disable the rst_ioc module.</span>] Enrich indicators with RST Cloud threat intelligence. Returns an rst-ioc object (score, attribution, geo/ASN for IPs, DNS/WHOIS for domains, parsed components for URLs, related hashes for file hashes) linked back to the enriched attribute.'
+    type: boolean
+    level: 1
+    track_only: true
+  Plugin.Enrichment_rst_ioc_misp_key:
+    value: ''
+    description: Set this required module specific setting.
+    type: string
+    level: 1
+    track_only: true
+  Plugin.Enrichment_rst_ioc_misp_url:
+    value: ''
+    description: Set this required module specific setting.
+    type: string
+    level: 1
+    track_only: true
+  Plugin.Enrichment_rst_ioc_misp_verifycert:
+    value: ''
+    description: Set this required module specific setting.
+    type: string
+    level: 1
+    track_only: true
+  Plugin.Enrichment_rst_ioc_restrict:
+    value: 0
+    description: Restrict the rst_ioc module to the given organisation.
+    type: numeric
+    level: 1
+    track_only: true
+  Plugin.Enrichment_rst_noise_control_api_key:
+    value: ''
+    description: Set this required module specific setting.
+    type: string
+    level: 1
+    file_only: true
+    track_only: true
+  Plugin.Enrichment_rst_noise_control_base_url:
+    value: ''
+    description: Set this required module specific setting.
+    type: string
+    level: 1
+    track_only: true
+  Plugin.Enrichment_rst_noise_control_enabled:
+    value: false
+    description: '[<span class="bold">Enable or disable the rst_noise_control module.</span>] Check whether a value (IP, domain, URL or hash) is known-good / noise via RST Noise Control. Returns an rst-noise object (verdict, category) linked back to the enriched attribute.'
+    type: boolean
+    level: 1
+    track_only: true
+  Plugin.Enrichment_rst_noise_control_misp_key:
+    value: ''
+    description: Set this required module specific setting.
+    type: string
+    level: 1
+    track_only: true
+  Plugin.Enrichment_rst_noise_control_misp_url:
+    value: ''
+    description: Set this required module specific setting.
+    type: string
+    level: 1
+    track_only: true
+  Plugin.Enrichment_rst_noise_control_misp_verifycert:
+    value: ''
+    description: Set this required module specific setting.
+    type: string
+    level: 1
+    track_only: true
+  Plugin.Enrichment_rst_noise_control_restrict:
+    value: 0
+    description: Restrict the rst_noise_control module to the given organisation.
+    type: numeric
+    level: 1
+    track_only: true
+  Plugin.Enrichment_rst_screenshot_api_key:
+    value: ''
+    description: Set this required module specific setting.
+    type: string
+    level: 1
+    file_only: true
+    track_only: true
+  Plugin.Enrichment_rst_screenshot_base_url:
+    value: ''
+    description: Set this required module specific setting.
+    type: string
+    level: 1
+    track_only: true
+  Plugin.Enrichment_rst_screenshot_enabled:
+    value: false
+    description: '[<span class="bold">Enable or disable the rst_screenshot module.</span>] Capture a page screenshot (first/full/last frame) of a URL/IP target via RST Scan API.'
+    type: boolean
+    level: 1
+    track_only: true
+  Plugin.Enrichment_rst_screenshot_frame:
+    value: ''
+    description: Set this required module specific setting.
+    type: string
+    level: 1
+    track_only: true
+  Plugin.Enrichment_rst_screenshot_port:
+    value: ''
+    description: Set this required module specific setting.
+    type: string
+    level: 1
+    track_only: true
+  Plugin.Enrichment_rst_screenshot_restrict:
+    value: 0
+    description: Restrict the rst_screenshot module to the given organisation.
+    type: numeric
+    level: 1
+    track_only: true
+  Plugin.Enrichment_rst_screenshot_timeout:
+    value: ''
+    description: Set this required module specific setting.
+    type: string
+    level: 1
+    track_only: true
+  Plugin.Enrichment_rst_ssl_api_key:
+    value: ''
+    description: Set this required module specific setting.
+    type: string
+    level: 1
+    file_only: true
+    track_only: true
+  Plugin.Enrichment_rst_ssl_base_url:
+    value: ''
+    description: Set this required module specific setting.
+    type: string
+    level: 1
+    track_only: true
+  Plugin.Enrichment_rst_ssl_enabled:
+    value: false
+    description: '[<span class="bold">Enable or disable the rst_ssl module.</span>] Fetch the SSL certificate for an IP[:port] as an x509 object via RST Scan API.'
+    type: boolean
+    level: 1
+    track_only: true
+  Plugin.Enrichment_rst_ssl_port:
+    value: ''
+    description: Set this required module specific setting.
+    type: string
+    level: 1
+    track_only: true
+  Plugin.Enrichment_rst_ssl_restrict:
+    value: 0
+    description: Restrict the rst_ssl module to the given organisation.
+    type: numeric
+    level: 1
+    track_only: true
+  Plugin.Enrichment_rst_ssl_timeout:
+    value: ''
+    description: Set this required module specific setting.
+    type: string
+    level: 1
+    track_only: true
+  Plugin.Enrichment_rst_whois_api_key:
+    value: ''
+    description: Set this required module specific setting.
+    type: string
+    level: 1
+    file_only: true
+    track_only: true
+  Plugin.Enrichment_rst_whois_base_url:
+    value: ''
+    description: Set this required module specific setting.
+    type: string
+    level: 1
+    track_only: true
+  Plugin.Enrichment_rst_whois_enabled:
+    value: false
+    description: '[<span class="bold">Enable or disable the rst_whois module.</span>] Retrieve parsed WHOIS information for a domain via RST Cloud.'
+    type: boolean
+    level: 1
+    track_only: true
+  Plugin.Enrichment_rst_whois_restrict:
+    value: 0
+    description: Restrict the rst_whois module to the given organisation.
+    type: numeric
+    level: 1
+    track_only: true
+  Plugin.Enrichment_scanmalware_api_url:
+    value: ''
+    description: Set this required module specific setting.
+    type: string
+    level: 1
+    track_only: true
+  Plugin.Enrichment_scanmalware_enabled:
+    value: false
+    description: '[<span class="bold">Enable or disable the scanmalware module.</span>] Query ScanMalware for subdomains, browser-observed hosts and sandbox scan results.'
+    type: boolean
+    level: 1
+    track_only: true
+  Plugin.Enrichment_scanmalware_max_results:
+    value: ''
+    description: Set this required module specific setting.
+    type: string
+    level: 1
+    track_only: true
+  Plugin.Enrichment_scanmalware_restrict:
+    value: 0
+    description: Restrict the scanmalware module to the given organisation.
+    type: numeric
+    level: 1
+    track_only: true
   Plugin.Enrichment_securitytrails_apikey:
     value: ''
     description: Set this required module specific setting.
@@ -2567,6 +2888,43 @@ settings:
     value: 0
     description: Restrict the socialscan module to the given organisation.
     type: numeric
+    level: 1
+    track_only: true
+  Plugin.Enrichment_socradar_lookup_enabled:
+    value: false
+    description: '[<span class="bold">Enable or disable the socradar_lookup module.</span>] Enrich MISP attributes with SOCRadar threat intelligence. Queries SOCRadar IoC Enrichment API for categorization, malware families, threat actors, confidence scores, feed source history, and geographic attribution.'
+    type: boolean
+    level: 1
+    track_only: true
+  Plugin.Enrichment_socradar_lookup_restrict:
+    value: 0
+    description: Restrict the socradar_lookup module to the given organisation.
+    type: numeric
+    level: 1
+    track_only: true
+  Plugin.Enrichment_socradar_lookup_socradar_ai_insight:
+    value: ''
+    description: Set this required module specific setting.
+    type: string
+    level: 1
+    track_only: true
+  Plugin.Enrichment_socradar_lookup_socradar_api_key:
+    value: ''
+    description: Set this required module specific setting.
+    type: string
+    level: 1
+    file_only: true
+    track_only: true
+  Plugin.Enrichment_socradar_lookup_socradar_api_url:
+    value: ''
+    description: Set this required module specific setting.
+    type: string
+    level: 1
+    track_only: true
+  Plugin.Enrichment_socradar_lookup_socradar_mode:
+    value: ''
+    description: Set this required module specific setting.
+    type: string
     level: 1
     track_only: true
   Plugin.Enrichment_sophoslabs_intelix_client_id:
@@ -2615,6 +2973,18 @@ settings:
   Plugin.Enrichment_sourcecache_restrict:
     value: 0
     description: Restrict the sourcecache module to the given organisation.
+    type: numeric
+    level: 1
+    track_only: true
+  Plugin.Enrichment_ssh_fingerprint_enabled:
+    value: false
+    description: '[<span class="bold">Enable or disable the ssh_fingerprint module.</span>] Grab SSH server fingerprint from an IP and return as passive-ssh MISP object.'
+    type: boolean
+    level: 1
+    track_only: true
+  Plugin.Enrichment_ssh_fingerprint_restrict:
+    value: 0
+    description: Restrict the ssh_fingerprint module to the given organisation.
     type: numeric
     level: 1
     track_only: true
@@ -2679,6 +3049,18 @@ settings:
     type: numeric
     level: 1
     track_only: true
+  Plugin.Enrichment_tls_certificate_check_enabled:
+    value: false
+    description: '[<span class="bold">Enable or disable the tls_certificate_check module.</span>] Extract TLS certificate details from a domain and return as x509 MISP object.'
+    type: boolean
+    level: 1
+    track_only: true
+  Plugin.Enrichment_tls_certificate_check_restrict:
+    value: 0
+    description: Restrict the tls_certificate_check module to the given organisation.
+    type: numeric
+    level: 1
+    track_only: true
   Plugin.Enrichment_triage_submit_apikey:
     value: ''
     description: Set this required module specific setting.
@@ -2702,6 +3084,18 @@ settings:
     value: ''
     description: Set this required module specific setting.
     type: string
+    level: 1
+    track_only: true
+  Plugin.Enrichment_tweetfeed_enabled:
+    value: false
+    description: '[<span class="bold">Enable or disable the tweetfeed module.</span>] Look up an IOC in TweetFeed (tweetfeed.live), the free CC0 feed of URLs, domains, IPs and hashes shared by the infosec community on X/Twitter: who reported it and when, the source tweets and hashtags, cross-feed corroboration, AI-generated context and campaign membership.'
+    type: boolean
+    level: 1
+    track_only: true
+  Plugin.Enrichment_tweetfeed_restrict:
+    value: 0
+    description: Restrict the tweetfeed module to the given organisation.
+    type: numeric
     level: 1
     track_only: true
   Plugin.Enrichment_urlhaus_auth_key:
@@ -3041,6 +3435,94 @@ settings:
     type: numeric
     level: 1
     track_only: true
+  Plugin.Enrichment_vysion_apikey:
+    value: ''
+    description: Set this required module specific setting.
+    type: string
+    level: 1
+    file_only: true
+    track_only: true
+  Plugin.Enrichment_vysion_enabled:
+    value: false
+    description: '[<span class="bold">Enable or disable the vysion module.</span>] Module to enrich the information by making use of the Vysion API.'
+    type: boolean
+    level: 1
+    track_only: true
+  Plugin.Enrichment_vysion_event_limit:
+    value: ''
+    description: Set this required module specific setting.
+    type: string
+    level: 1
+    track_only: true
+  Plugin.Enrichment_vysion_proxy_host:
+    value: ''
+    description: Set this required module specific setting.
+    type: string
+    level: 1
+    track_only: true
+  Plugin.Enrichment_vysion_proxy_password:
+    value: ''
+    description: Set this required module specific setting.
+    type: string
+    level: 1
+    file_only: true
+    sensitive: true
+    track_only: true
+  Plugin.Enrichment_vysion_proxy_port:
+    value: ''
+    description: Set this required module specific setting.
+    type: string
+    level: 1
+    track_only: true
+  Plugin.Enrichment_vysion_proxy_username:
+    value: ''
+    description: Set this required module specific setting.
+    type: string
+    level: 1
+    track_only: true
+  Plugin.Enrichment_vysion_restrict:
+    value: 0
+    description: Restrict the vysion module to the given organisation.
+    type: numeric
+    level: 1
+    track_only: true
+  Plugin.Enrichment_whisper_api_key:
+    value: ''
+    description: Set this required module specific setting.
+    type: string
+    level: 1
+    file_only: true
+    track_only: true
+  Plugin.Enrichment_whisper_api_url:
+    value: ''
+    description: Set this required module specific setting.
+    type: string
+    level: 1
+    track_only: true
+  Plugin.Enrichment_whisper_enabled:
+    value: false
+    description: '[<span class="bold">Enable or disable the whisper module.</span>] Enrich IPs, domains, and ASNs with threat intelligence and infrastructure context from the Whisper graph.'
+    type: boolean
+    level: 1
+    track_only: true
+  Plugin.Enrichment_whisper_max_tlp:
+    value: ''
+    description: Set this required module specific setting.
+    type: string
+    level: 1
+    track_only: true
+  Plugin.Enrichment_whisper_restrict:
+    value: 0
+    description: Restrict the whisper module to the given organisation.
+    type: numeric
+    level: 1
+    track_only: true
+  Plugin.Enrichment_whisper_timeout:
+    value: ''
+    description: Set this required module specific setting.
+    type: string
+    level: 1
+    track_only: true
   Plugin.Enrichment_whois_enabled:
     value: false
     description: '[<span class="bold">Enable or disable the whois module.</span>] Module to query a local instance of uwhois (https://github.com/rafiot/uwhoisd).'
@@ -3074,7 +3556,7 @@ settings:
     track_only: true
   Plugin.Enrichment_whoisfreaks_enabled:
     value: false
-    description: '[<span class="bold">Enable or disable the whoisfreaks module.</span>] An expansion module for https://whoisfreaks.com/ that will provide an enriched analysis of the provided domain, including WHOIS and DNS information.'
+    description: '[<span class="bold">Enable or disable the whoisfreaks module.</span>] An expansion module for https://whoisfreaks.com/ that enriches a domain or an IP address. For a domain it queries the WHOIS, DNS and Domain Reputation APIs; for an IP address it queries the IP WHOIS, Geolocation and IP Security APIs. All lookups for a given attribute are executed in parallel.'
     type: boolean
     level: 1
     track_only: true
@@ -3108,6 +3590,25 @@ settings:
   Plugin.Enrichment_xforceexchange_restrict:
     value: 0
     description: Restrict the xforceexchange module to the given organisation.
+    type: numeric
+    level: 1
+    track_only: true
+  Plugin.Enrichment_xposedornot_api_key:
+    value: ''
+    description: Set this required module specific setting.
+    type: string
+    level: 1
+    file_only: true
+    track_only: true
+  Plugin.Enrichment_xposedornot_enabled:
+    value: false
+    description: '[<span class="bold">Enable or disable the xposedornot module.</span>] Query the XposedOrNot API to check whether an email address appears in known data breaches.'
+    type: boolean
+    level: 1
+    track_only: true
+  Plugin.Enrichment_xposedornot_restrict:
+    value: 0
+    description: Restrict the xposedornot module to the given organisation.
     type: numeric
     level: 1
     track_only: true
@@ -3506,25 +4007,6 @@ settings:
     type: boolean
     level: 1
     track_only: true
-  Plugin.Import_anyrun_sandbox_import_api_key:
-    value: ''
-    description: Set this required module specific setting.
-    type: string
-    level: 1
-    file_only: true
-    track_only: true
-  Plugin.Import_anyrun_sandbox_import_enabled:
-    value: false
-    description: '[<span class="bold">Enable or disable the anyrun_sandbox_import module.</span>] A module designed to retrieve an analysis report from the ANY.RUN Sandbox by its unique ID and extract results (such as verdict, malware tags, and IOCs), converting them into MISP attributes within your event.'
-    type: boolean
-    level: 1
-    track_only: true
-  Plugin.Import_anyrun_sandbox_import_restrict:
-    value: 0
-    description: Restrict the anyrun_sandbox_import module to the given organisation.
-    type: numeric
-    level: 1
-    track_only: true
   Plugin.Import_cof2misp_enabled:
     value: false
     description: '[<span class="bold">Enable or disable the cof2misp module.</span>] Passive DNS Common Output Format (COF) MISP importer'
@@ -3666,6 +4148,44 @@ settings:
     value: 0
     description: Restrict the openiocimport module to the given organisation.
     type: numeric
+    level: 1
+    track_only: true
+  Plugin.Import_socradar_taxii_feed_enabled:
+    value: false
+    description: '[<span class="bold">Enable or disable the socradar_taxii_feed module.</span>] Import threat indicators from SOCRadar TAXII 2.1 feed with MITRE ATT&CK, malware family, confidence, and geo tagging. Leave collection_id empty and type ''list'' to discover available collections.'
+    type: boolean
+    level: 1
+    track_only: true
+  Plugin.Import_socradar_taxii_feed_restrict:
+    value: 0
+    description: Restrict the socradar_taxii_feed module to the given organisation.
+    type: numeric
+    level: 1
+    track_only: true
+  Plugin.Import_socradar_taxii_feed_socradar_api_root:
+    value: ''
+    description: Set this required module specific setting.
+    type: string
+    level: 1
+    track_only: true
+  Plugin.Import_socradar_taxii_feed_socradar_password:
+    value: ''
+    description: Set this required module specific setting.
+    type: string
+    level: 1
+    file_only: true
+    sensitive: true
+    track_only: true
+  Plugin.Import_socradar_taxii_feed_socradar_taxii_url:
+    value: ''
+    description: Set this required module specific setting.
+    type: string
+    level: 1
+    track_only: true
+  Plugin.Import_socradar_taxii_feed_socradar_username:
+    value: ''
+    description: Set this required module specific setting.
+    type: string
     level: 1
     track_only: true
   Plugin.Import_testimport_enabled:
