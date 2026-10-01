@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import socket
 import ssl
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -16,15 +17,15 @@ import urllib.request
 
 from functools import lru_cache
 
-from . import WORKER_QUEUES
+from . import WORKER_QUEUES, db
 from .env import env
 from .log import get as getlog
 
 log = getlog("metrics")
 
-# Network check cache -- avoid hammering remote servers on every scrape
-_NET_TTL = 300
-_net_cache: dict = {"output": "", "ts": 0}
+# The partner checks run in a thread of their own on this cadence; a scrape
+# reads the last result, so a partner that drops packets never holds a scrape
+NET_INTERVAL = 300
 
 
 # ---------------------------------------------------------------------------
@@ -54,58 +55,9 @@ def _metric(name: str, help_text: str, mtype: str, samples: list) -> str:
     return "\n".join(lines)
 
 
-# ---------------------------------------------------------------------------
-# Database connection (DictCursor for structured results)
-# ---------------------------------------------------------------------------
-
-
 def _connect():
-    """A connection whose cursor returns dict rows on either engine."""
-    from . import db
-    return _DictConnection(db._connect())
-
-
-class _DictConnection:
-    """DB-API connection wrapper: cursors yield dicts keyed by column name."""
-
-    def __init__(self, conn):
-        self._conn = conn
-
-    def cursor(self):
-        return _DictCursor(self._conn.cursor())
-
-    def commit(self):
-        self._conn.commit()
-
-    def close(self):
-        self._conn.close()
-
-
-class _DictCursor:
-    def __init__(self, cur):
-        self._cur = cur
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *exc):
-        self._cur.close()
-        return False
-
-    def execute(self, sql, params=None):
-        return self._cur.execute(sql, params or ())
-
-    def _names(self):
-        return [d[0] for d in (self._cur.description or [])]
-
-    def _row(self, row):
-        return None if row is None else {n: v for n, v in zip(self._names(), row)}
-
-    def fetchone(self):
-        return self._row(self._cur.fetchone())
-
-    def fetchall(self):
-        return [self._row(r) for r in self._cur.fetchall()]
+    """A connection to MISP's database; the tests replace it."""
+    return db._connect()
 
 
 # ---------------------------------------------------------------------------
@@ -219,30 +171,31 @@ def _collect_queue_metrics() -> str:
 # ---------------------------------------------------------------------------
 
 
-def _collect_db_metrics() -> tuple[str, list[dict]]:
+def _collect_db_metrics() -> tuple[str, int]:
     """Collect metrics from the MISP database.
 
-    Returns (prometheus_text, server_list) where server_list is used
-    by the network checker. Fresh on every call -- queries are cheap.
+    Returns (prometheus_text, errors): a collector that fails is logged and
+    counted, and the other collectors still run. Fresh on every call --
+    queries are cheap.
     """
     blocks: list[str] = []
-    servers: list[dict] = []
+    errors = 0
 
     try:
         conn = _connect()
     except Exception as e:
-        log.warning("cannot connect to MySQL: %s", e)
+        log.warning("cannot connect to the database: %s", e)
         blocks.append(
             _metric("misp_up", "Whether the MISP database is reachable", "gauge", [({}, 0)])
         )
-        return "\n\n".join(blocks), []
+        return "\n\n".join(blocks), 1
 
     try:
         blocks.append(
             _metric("misp_up", "Whether the MISP database is reachable", "gauge", [({}, 1)])
         )
 
-        with conn.cursor() as cur:
+        with db.dict_cursor(conn) as cur:
             # Instance info
             info = {}
             try:
@@ -258,7 +211,8 @@ def _collect_db_metrics() -> tuple[str, list[dict]]:
                         v = str(v).strip('"')
                     info[r["setting"]] = v or ""
             except Exception as e:
-                log.debug("instance info: %s", e)
+                log.warning("instance info: %s", e)
+                errors += 1
             blocks.append(
                 _metric(
                     "misp_instance_info",
@@ -280,8 +234,7 @@ def _collect_db_metrics() -> tuple[str, list[dict]]:
             # tables (attributes, shadow_attributes) to avoid full index scans.
             # Small tables (orgs, users, tags) use exact COUNT(*).
             try:
-                from . import db as dbmod
-                if dbmod.is_postgres():
+                if db.is_postgres():
                     cur.execute(
                         'SELECT relname AS "TABLE_NAME", GREATEST(n_live_tup, 0) AS "TABLE_ROWS" '
                         "FROM pg_stat_user_tables "
@@ -297,8 +250,7 @@ def _collect_db_metrics() -> tuple[str, list[dict]]:
                 approx = {r["TABLE_NAME"]: int(r["TABLE_ROWS"] or 0) for r in cur.fetchall()}
 
                 # Small tables: exact counts are cheap
-                from . import db as dbmod
-                t, f = dbmod.bool_lit(True), dbmod.bool_lit(False)
+                t, f = db.bool_lit(True), db.bool_lit(False)
                 cur.execute(
                     f"""
                     SELECT
@@ -330,12 +282,13 @@ def _collect_db_metrics() -> tuple[str, list[dict]]:
                 blocks.append(_metric("misp_sharing_groups", "Total number of sharing groups", "gauge", [({}, c["sharing_groups"])]))
                 blocks.append(_metric("misp_tags", "Total number of tags", "gauge", [({}, c["tags"])]))
             except Exception as e:
-                log.debug("content counts: %s", e)
+                log.warning("content counts: %s", e)
+                errors += 1
 
             # Sync servers
             try:
                 cur.execute(
-                    "SELECT id, name, url, authkey, pull, push, "
+                    "SELECT id, name, url, pull, push, "
                     "lastpulledid, lastpushedid FROM servers"
                 )
                 servers = list(cur.fetchall())
@@ -366,7 +319,8 @@ def _collect_db_metrics() -> tuple[str, list[dict]]:
                     if last_push:
                         blocks.append(_metric("misp_server_last_push_event_id", "Last event ID pushed to server", "gauge", last_push))
             except Exception as e:
-                log.debug("servers: %s", e)
+                log.warning("servers: %s", e)
+                errors += 1
 
             # -- Jobs ----------------------------------------------------------
             # Job totals are counters (monotonic until MISP prunes the table --
@@ -379,8 +333,7 @@ def _collect_db_metrics() -> tuple[str, list[dict]]:
 
                 # All jobs in one query -- LEFT JOIN to servers for pull/push,
                 # split into server vs non-server in Python.
-                from . import db as dbmod
-                if dbmod.is_postgres():
+                if db.is_postgres():
                     server_id_expr = "NULLIF(regexp_replace(j.job_input, '^.*: ', ''), '')::bigint"
                 else:
                     server_id_expr = "CAST(SUBSTRING_INDEX(j.job_input, ': ', -1) AS UNSIGNED)"
@@ -445,15 +398,15 @@ def _collect_db_metrics() -> tuple[str, list[dict]]:
                         )
                     )
             except Exception as e:
-                log.debug("jobs: %s", e)
+                log.warning("jobs: %s", e)
+                errors += 1
 
             # Tasks under MISP's Scheduled tasks page: no scheduler_worker
             # runs in this deployment, so an enabled one never runs
             try:
-                from . import db as dbmod
                 cur.execute(
                     "SELECT type, COUNT(*) AS cnt FROM scheduled_tasks "
-                    f"WHERE enabled = {dbmod.bool_lit(True)} GROUP BY type"
+                    f"WHERE enabled = {db.bool_lit(True)} GROUP BY type"
                 )
                 rows = cur.fetchall()
                 blocks.append(
@@ -465,18 +418,18 @@ def _collect_db_metrics() -> tuple[str, list[dict]]:
                     )
                 )
             except Exception as e:
-                log.debug("scheduled tasks: %s", e)
+                log.warning("scheduled tasks: %s", e)
+                errors += 1
 
             # Sync container log (our custom table)
             try:
-                from . import db as dbmod
                 cur.execute(
                     "SELECT operation, status, "
                     "  COUNT(*) AS runs, "
                     "  MAX(timestamp) AS last_run, "
                     "  AVG(duration_seconds) AS avg_duration "
                     "FROM misp_container_sync_log "
-                    f"WHERE timestamp > {dbmod.ago(24, 'HOUR')} "
+                    f"WHERE timestamp > {db.ago(24, 'HOUR')} "
                     "GROUP BY operation, status"
                 )
                 rows = cur.fetchall()
@@ -496,7 +449,7 @@ def _collect_db_metrics() -> tuple[str, list[dict]]:
 
                 # Last successful run per operation (org-sync, configure)
                 cur.execute(
-                    f"SELECT operation, {dbmod.epoch('MAX(timestamp)')} AS ts "
+                    f"SELECT operation, {db.epoch('MAX(timestamp)')} AS ts "
                     "FROM misp_container_sync_log WHERE status = 'success' GROUP BY operation"
                 )
                 last = [({"operation": r["operation"]}, int(r["ts"])) for r in cur.fetchall() if r.get("ts")]
@@ -510,15 +463,17 @@ def _collect_db_metrics() -> tuple[str, list[dict]]:
                         )
                     )
             except Exception:
-                # Table may not exist yet (sync hasn't run)
+                # The table exists once the org sync, the configure step or the
+                # migrate Job has run
                 pass
 
     except Exception as e:
         log.warning("error collecting DB metrics: %s", e)
+        errors += 1
     finally:
         conn.close()
 
-    return "\n\n".join(blocks), servers
+    return "\n\n".join(blocks), errors
 
 
 # ---------------------------------------------------------------------------
@@ -569,13 +524,8 @@ def _check_server_auth(url: str, authkey: str, timeout: int = 5) -> bool:
 
 
 def _collect_network_metrics(servers: list[dict]) -> str:
-    """Check reachability and TLS cert status of configured sync servers."""
-    now = time.monotonic()
-    if now - _net_cache["ts"] < _NET_TTL:
-        return _net_cache["output"]
-
+    """Check reachability and TLS cert status of the sync servers given."""
     if not servers:
-        _net_cache.update(output="", ts=now)
         return ""
 
     blocks: list[str] = []
@@ -590,7 +540,7 @@ def _collect_network_metrics(servers: list[dict]) -> str:
 
         lbl = {"id": str(s["id"]), "name": s.get("name") or "", "url": url}
 
-        # Auth check (HEAD with authkey)
+        # A GET of /servers/getVersion with the authkey
         ok = _check_server_auth(url, authkey)
         reachable_samples.append((lbl, 1 if ok else 0))
 
@@ -621,9 +571,46 @@ def _collect_network_metrics(servers: list[dict]) -> str:
             )
         )
 
-    out = "\n\n".join(blocks)
-    _net_cache.update(output=out, ts=now)
-    return out
+    return "\n\n".join(blocks)
+
+
+# The last partner check block, written by the check thread and read by the scrape
+_net_lock = threading.Lock()
+_net_output = ""
+
+
+def _partner_servers() -> list[dict]:
+    conn = _connect()
+    try:
+        with db.dict_cursor(conn) as cur:
+            cur.execute("SELECT id, name, url, authkey FROM servers")
+            return list(cur.fetchall())
+    finally:
+        conn.close()
+
+
+def refresh_network_metrics() -> None:
+    """One round of the partner checks; the scrape serves the result until the next."""
+    global _net_output
+    try:
+        output = _collect_network_metrics(_partner_servers())
+    except Exception as e:
+        log.warning("partner checks failed: %s", e)
+        return
+    with _net_lock:
+        _net_output = output
+
+
+def network_metrics() -> str:
+    with _net_lock:
+        return _net_output
+
+
+def run_network_checks(interval: float = NET_INTERVAL) -> None:
+    """Refresh the partner checks every interval seconds; the exporter runs this in a daemon thread."""
+    while True:
+        refresh_network_metrics()
+        time.sleep(interval)
 
 
 # ---------------------------------------------------------------------------
@@ -637,11 +624,10 @@ def collect_all() -> str:
     errors = 0
 
     try:
-        db_output, servers = _collect_db_metrics()
+        db_output, errors = _collect_db_metrics()
     except Exception as e:
         log.error("DB metrics collection failed: %s", e)
         db_output = _metric("misp_up", "Whether the MISP database is reachable", "gauge", [({}, 0)])
-        servers = []
         errors += 1
 
     try:
@@ -651,12 +637,7 @@ def collect_all() -> str:
         queue_output = ""
         errors += 1
 
-    try:
-        net_output = _collect_network_metrics(servers)
-    except Exception as e:
-        log.error("network metrics collection failed: %s", e)
-        net_output = ""
-        errors += 1
+    net_output = network_metrics()
 
     duration = time.monotonic() - start
 
@@ -688,9 +669,8 @@ def init_sync_log_table() -> None:
     """
     conn = _connect()
     try:
-        with conn.cursor() as cur:
-            from . import db as dbmod
-            if dbmod.is_postgres():
+        with db._cursor(conn) as cur:
+            if db.is_postgres():
                 ddl = """
                 CREATE TABLE IF NOT EXISTS misp_container_sync_log (
                     id SERIAL PRIMARY KEY,
@@ -717,7 +697,7 @@ def init_sync_log_table() -> None:
             cur.execute(ddl)
             # Prune entries older than 30 days. The migrate Job's rows stay: it reads
             # them to refuse dropping a copy it made (migrate.py)
-            cur.execute(f"DELETE FROM misp_container_sync_log WHERE timestamp < {dbmod.ago(30, 'DAY')} "
+            cur.execute(f"DELETE FROM misp_container_sync_log WHERE timestamp < {db.ago(30, 'DAY')} "
                         "AND operation <> 'migrate'")
         conn.commit()
     finally:
@@ -734,7 +714,7 @@ def log_sync_result(
     """Write a sync operation result to the log table."""
     conn = _connect()
     try:
-        with conn.cursor() as cur:
+        with db._cursor(conn) as cur:
             cur.execute(
                 "INSERT INTO misp_container_sync_log "
                 "(operation, status, summary, duration_seconds, error_message) "
