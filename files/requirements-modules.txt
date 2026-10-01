@@ -1,1 +1,1 @@
-misp-modules[minimal]==3.0.7
+misp-modules[minimal]==3.0.10
