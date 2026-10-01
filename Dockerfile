@@ -199,9 +199,13 @@ ARG RUNTIME_PACKAGES
 ARG MISP_UID=1000
 ARG MISP_GID=1000
 
+# The upgrade takes the security pocket's fixes for the base image's packages
+# (perl-base and the like, which no stage removes): the scan job fails a release
+# on a fixable CRITICAL finding
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
     rm -f /etc/apt/apt.conf.d/docker-clean && apt-get update && \
+    apt-get upgrade -y --no-install-recommends && \
     apt-get install -y --no-install-recommends $RUNTIME_PACKAGES \
     && apt-get autoremove -y \
     && rm -rf /root/.cache \
