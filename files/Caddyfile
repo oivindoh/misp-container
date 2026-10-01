@@ -60,9 +60,10 @@
 	@probes path_regexp \.(php\.bak|php~|sql|tar\.gz|zip)$
 	respond @probes 404
 
-	# Static assets caching
+	# Static assets caching. Not immutable: the URLs do not change between MISP
+	# versions, so a browser must revalidate after an upgrade
 	@static path_regexp \.(css|js|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot)$
-	header @static Cache-Control "public, max-age=3600, immutable"
+	header @static Cache-Control "public, max-age=3600"
 
 	log {
 		output stdout

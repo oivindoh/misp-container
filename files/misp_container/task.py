@@ -128,12 +128,8 @@ def queued_jobs(metrics_url: str, timeout: int = 5):
 
 def _items(response, key: str) -> list[dict]:
     """The records of a MISP index, whether wrapped as {"Key": {...}} or not."""
-    items = []
-    for item in response if isinstance(response, list) else []:
-        inner = item.get(key, item) if isinstance(item, dict) else None
-        if isinstance(inner, dict):
-            items.append(inner)
-    return items
+    return [inner for item in (response if isinstance(response, list) else [])
+            if (inner := MISPClient._unwrap(item, key))]
 
 
 def _enabled(value) -> bool:

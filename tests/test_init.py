@@ -101,39 +101,78 @@ class TestPopulateGnupg:
             populate_gnupg()
         run.assert_not_called()
 
-    def test_existing_homedir_is_kept(self, tmp_path):
+    @staticmethod
+    def _gpg(listings):
+        """A fake gpg: --show-keys and --list-secret-keys answer from listings, by fingerprint."""
+        calls = []
+
+        def fake_run(cmd, **kwargs):
+            calls.append((cmd, kwargs))
+            result = type("R", (), {})()
+            fprs = listings["file"] if "--show-keys" in cmd else listings["home"] if "--list-secret-keys" in cmd else []
+            result.stdout = "".join(f"sec:u:3072:1:AAAA::::::::::\nfpr:::::::::{fpr}:\n" for fpr in fprs)
+            return result
+        return calls, fake_run
+
+    def test_a_homedir_with_the_secrets_key_is_kept(self, tmp_path):
         from misp_container.init import populate_gnupg
         key = tmp_path / "private.asc"
         key.write_text("key")
         homedir = tmp_path / "gnupg"
         homedir.mkdir()
         (homedir / "trustdb.gpg").write_text("")
+        calls, fake_run = self._gpg({"file": ["ABCDEF0123456789"], "home": ["ABCDEF0123456789"]})
         with patch.dict(os.environ, self._env(tmp_path, key)), \
-                patch("misp_container.init.subprocess.run") as run:
+                patch("misp_container.init.subprocess.run", side_effect=fake_run):
             populate_gnupg()
-        run.assert_not_called()
+        assert not any("--import" in cmd for cmd, _ in calls)
+
+    def test_a_rotated_key_is_imported_next_to_the_old_one(self, tmp_path):
+        from misp_container.init import populate_gnupg
+        key = tmp_path / "private.asc"
+        key.write_text("key")
+        homedir = tmp_path / "gnupg"
+        homedir.mkdir()
+        (homedir / "trustdb.gpg").write_text("")
+        listings = {"file": ["NEW0000000000001"], "home": ["OLD0000000000001"]}
+        calls, fake_run = self._gpg(listings)
+
+        def run_then_hold_both(cmd, **kwargs):
+            result = fake_run(cmd, **kwargs)
+            if "--import" in cmd and "--import-ownertrust" not in cmd:
+                listings["home"] = ["OLD0000000000001", "NEW0000000000001"]
+            return result
+
+        with patch.dict(os.environ, self._env(tmp_path, key)), \
+                patch("misp_container.init.subprocess.run", side_effect=run_then_hold_both):
+            populate_gnupg()
+        assert any("--import" in cmd and str(key) in cmd for cmd, _ in calls)
+        trust = next(kwargs["input"] for cmd, kwargs in calls if "--import-ownertrust" in cmd)
+        assert trust == "NEW0000000000001:6:\nOLD0000000000001:6:\n"
 
     def test_imports_and_trusts_key(self, tmp_path):
         from misp_container.init import populate_gnupg
         key = tmp_path / "private.asc"
         key.write_text("key")
-        calls = []
+        listings = {"file": ["ABCDEF0123456789"], "home": []}
+        calls, fake_run = self._gpg(listings)
 
-        def fake_run(cmd, **kwargs):
-            calls.append((cmd, kwargs))
-            result = type("R", (), {})()
-            result.stdout = "sec:u:3072:1:AAAA::::::::::\nfpr:::::::::ABCDEF0123456789:\n"
+        def run_then_hold(cmd, **kwargs):
+            result = fake_run(cmd, **kwargs)
+            if "--import" in cmd and "--import-ownertrust" not in cmd:
+                listings["home"] = ["ABCDEF0123456789"]
             return result
 
         with patch.dict(os.environ, self._env(tmp_path, key)), \
-                patch("misp_container.init.subprocess.run", side_effect=fake_run):
+                patch("misp_container.init.subprocess.run", side_effect=run_then_hold):
             populate_gnupg()
 
         assert (tmp_path / "gnupg").is_dir()
-        assert "--import" in calls[0][0] and str(key) in calls[0][0]
-        assert "--list-secret-keys" in calls[1][0]
-        assert "--import-ownertrust" in calls[2][0]
-        assert calls[2][1]["input"] == "ABCDEF0123456789:6:\n"
+        assert "--show-keys" in calls[0][0] and str(key) in calls[0][0]
+        assert "--import" in calls[1][0] and str(key) in calls[1][0]
+        assert "--list-secret-keys" in calls[2][0]
+        assert "--import-ownertrust" in calls[3][0]
+        assert calls[3][1]["input"] == "ABCDEF0123456789:6:\n"
         for cmd, _ in calls:
             assert cmd[:4] == ["gpg", "--batch", "--homedir", str(tmp_path / "gnupg")]
 

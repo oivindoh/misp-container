@@ -95,8 +95,6 @@ def setup_tmp():
     log.info("creating tmp directory structure")
     for d in ("cache", "cache/models", "cache/persistent", "cache/views", "logs"):
         Path(MISP_TMP, d).mkdir(parents=True, exist_ok=True)
-    Path(MISP_BASE, "app/webroot/img/orgs").mkdir(parents=True, exist_ok=True)
-    Path(MISP_BASE, "app/webroot/img/custom").mkdir(parents=True, exist_ok=True)
 
 
 def prepare_config():
@@ -146,30 +144,46 @@ def populate_gnupg():
         return
 
     gpg_dir = Path(env("GNUPG_HOMEDIR"))
-    if (gpg_dir / "trustdb.gpg").exists():
-        log.info("GPG homedir already populated, skipping key import")
-        return
-
-    log.info("importing GPG key from %s", key_file)
     gpg_dir.mkdir(parents=True, exist_ok=True)
     try:
         gpg_dir.chmod(0o700)
     except PermissionError:
         pass  # K8s emptyDir: mount point chmod not allowed, permissions are fine
-
     gpg = [env("GNUPG_BINARY", "gpg"), "--batch", "--homedir", str(gpg_dir)]
+
+    # A homedir that outlives the pod (a Compose volume) holds the key of an
+    # earlier start; a rotated Secret is imported next to it
+    wanted = _fingerprints(gpg + ["--show-keys", "--with-colons", str(key_file)])
+    present = _fingerprints(gpg + ["--list-secret-keys", "--with-colons"]) if (gpg_dir / "trustdb.gpg").exists() else set()
+    if wanted and wanted <= present:
+        log.info("GPG homedir holds the key of the Secret, skipping key import")
+        return
+
+    log.info("importing GPG key from %s", key_file)
     subprocess.run(gpg + ["--import", str(key_file)], check=True)
 
     # gpg trusts nothing it imports; MISP needs the instance key at ultimate trust
-    listing = subprocess.run(
-        gpg + ["--list-secret-keys", "--with-colons"],
-        capture_output=True, text=True, check=True,
-    ).stdout
-    fingerprints = [line.split(":")[9] for line in listing.splitlines() if line.startswith("fpr:")]
+    fingerprints = _fingerprints(gpg + ["--list-secret-keys", "--with-colons"])
     if fingerprints:
-        trust = "".join(f"{fpr}:6:\n" for fpr in fingerprints)
+        trust = "".join(f"{fpr}:6:\n" for fpr in sorted(fingerprints))
         subprocess.run(gpg + ["--import-ownertrust"], input=trust, text=True, check=True)
     log.info("GPG key imported (%d fingerprint(s))", len(fingerprints))
+
+
+def _fingerprints(command: list[str]) -> set[str]:
+    """The primary key fingerprints a gpg listing (--with-colons) prints."""
+    listing = subprocess.run(command, capture_output=True, text=True, check=True).stdout
+    found = set()
+    primary = False
+    for line in listing.splitlines():
+        kind = line.split(":")[0]
+        if kind in ("pub", "sec"):
+            primary = True
+        elif kind in ("sub", "ssb"):
+            primary = False
+        elif kind == "fpr" and primary:
+            found.add(line.split(":")[9])
+    return found
 
 
 def populate_certs():
@@ -213,7 +227,7 @@ def _generate_config_php(config_dst):
     from .config import load_settings_yaml, config_php_specs, render_config_php
 
     specs = config_php_specs(load_settings_yaml())
-    (config_dst / "config.php").write_text(render_config_php(specs))
+    _replace(config_dst / "config.php", render_config_php(specs))
 
 
 def _generate_database_config(config_dst):
@@ -221,57 +235,29 @@ def _generate_database_config(config_dst):
     from .config import php_literal
     from . import db
 
-    if db.is_postgres():
-        content = f"""<?php
-class DATABASE_CONFIG {{
-    public $default = array(
-        'datasource' => 'Database/PostgresObserverExtended',
-        'persistent' => false,
-        'host' => {php_literal(env("DB_HOST"))},
-        'login' => {php_literal(env("DB_USER"))},
-        'port' => {_int_env("DB_PORT", 5432)},
-        'password' => {php_literal(env("DB_PASSWORD"))},
-        'database' => {php_literal(env("DB_NAME"))},
-        'schema' => {php_literal(env("DB_SCHEMA", "public"))},
-        'prefix' => '',
-        'encoding' => 'utf8',
-        'flags' => array(PDO::ATTR_STRINGIFY_FETCHES => true),
-    );
-}}
-"""
-        (config_dst / "database.php").write_text(content)
-        return
+    postgres = db.is_postgres()
+    fields = {
+        "datasource": "Database/PostgresObserverExtended" if postgres else "Database/MysqlObserverExtended",
+        "persistent": False,
+        "host": env("DB_HOST"),
+        "login": env("DB_USER"),
+        "port": _int_env("DB_PORT", 5432 if postgres else 3306),
+        "password": env("DB_PASSWORD"),
+        "database": env("DB_NAME"),
+    }
+    if postgres:
+        fields["schema"] = env("DB_SCHEMA", "public")
+    fields["prefix"] = ""
+    fields["encoding"] = "utf8" if postgres else "utf8mb4 COLLATE utf8mb4_unicode_ci"
+    if not postgres and env("DB_TLS") == "true":
+        for key, env_key in (("ssl_ca", "MYSQL_TLS_CA"), ("ssl_cert", "MYSQL_TLS_CERT"), ("ssl_key", "MYSQL_TLS_KEY")):
+            if env(env_key) and os.path.isfile(env(env_key)):
+                fields[key] = env(env_key)
 
-    content = f"""<?php
-class DATABASE_CONFIG {{
-    public $default = array(
-        'datasource' => 'Database/MysqlObserverExtended',
-        'persistent' => false,
-        'host' => {php_literal(env("DB_HOST"))},
-        'login' => {php_literal(env("DB_USER"))},
-        'port' => {_int_env("DB_PORT", 3306)},
-        'password' => {php_literal(env("DB_PASSWORD"))},
-        'database' => {php_literal(env("DB_NAME"))},
-        'prefix' => '',
-        'encoding' => 'utf8mb4 COLLATE utf8mb4_unicode_ci',
-        'flags' => array(PDO::ATTR_STRINGIFY_FETCHES => true),
-    );
-}}
-"""
-    dst = config_dst / "database.php"
-    dst.write_text(content)
-
-    if env("DB_TLS") == "true":
-        lines = dst.read_text()
-        for key, env_key in [("ssl_ca", "MYSQL_TLS_CA"), ("ssl_cert", "MYSQL_TLS_CERT"), ("ssl_key", "MYSQL_TLS_KEY")]:
-            val = env(env_key)
-            if val and os.path.isfile(val):
-                lines = lines.replace(
-                    "public $default = array(",
-                    f"public $default = array(\n        '{key}' => {php_literal(val)},",
-                    1,
-                )
-        dst.write_text(lines)
+    lines = [f"        '{key}' => {php_literal(value)}," for key, value in fields.items()]
+    lines.append("        'flags' => array(PDO::ATTR_STRINGIFY_FETCHES => true),")
+    content = "<?php\nclass DATABASE_CONFIG {\n    public $default = array(\n" + "\n".join(lines) + "\n    );\n}\n"
+    _replace(config_dst / "database.php", content)
 
 
 def _generate_email_config(config_dst):
@@ -303,7 +289,7 @@ class EmailConfig {{
     );
 }}
 """
-    (config_dst / "email.php").write_text(content)
+    _replace(config_dst / "email.php", content)
 
 
 def _int_env(key, default):

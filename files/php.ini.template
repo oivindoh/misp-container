@@ -9,6 +9,7 @@ display_errors = Off
 display_startup_errors = Off
 log_errors = On
 error_log = /dev/stderr
+expose_php = Off
 
 memory_limit = ${PHP_MEMORY_LIMIT}
 max_execution_time = ${PHP_MAX_EXECUTION_TIME}
@@ -23,3 +24,12 @@ session.save_handler = redis
 session.save_path = "${SESSION_SAVE_PATH}"
 session.sid_length = 64
 session.use_strict_mode = 1
+; MISP sets SameSite=Lax itself when this is empty (core.php); httponly it leaves to php.ini
+session.cookie_httponly = 1
+session.cookie_samesite = Lax
+
+[opcache]
+; The Debian package loads opcache; MISP and its vendor tree are about 15000 files
+opcache.memory_consumption = 256
+opcache.interned_strings_buffer = 32
+opcache.max_accelerated_files = 20000
