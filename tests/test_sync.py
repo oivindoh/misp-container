@@ -4,6 +4,7 @@ import json
 import os
 import sys
 import tempfile
+import urllib.error
 from unittest.mock import MagicMock, call, patch
 
 import pytest
@@ -17,8 +18,10 @@ from misp_container.sync import (
     _apply_users, _apply_servers, _apply_taxonomies, _apply_warninglists,
     _apply_sharing_groups, _sync_sg_orgs,
     _disable_unmanaged_users, _disable_unmanaged_servers,
-    load_config, apply, MISPState, TAG_DEFAULTS,
+    _fetch_remote, _set_user_authkey,
+    load_config, apply, is_empty, ConfigError, MISPState, TAG_DEFAULTS,
 )
+from misp_container.api import APIError
 
 
 # ---------------------------------------------------------------------------
@@ -1289,3 +1292,108 @@ class TestApplyOrchestrator:
         org_call = client.post.call_args_list[0]
         assert "organisations/add" in org_call[0][0]
         assert org_call[0][1]["Organisation"]["name"] == "Test Team"
+
+
+# ---------------------------------------------------------------------------
+# A failed step never disables what it failed to read
+# ---------------------------------------------------------------------------
+
+class TestFailedStepDisablesNothing:
+    def test_none_managed_users_disables_none(self):
+        client = MagicMock()
+        state = MagicMock()
+        state.users = {"someone@x.com": {"id": 7, "disabled": False}}
+        assert _disable_unmanaged_users(client, state, None) == 0
+        client.post.assert_not_called()
+
+    def test_none_managed_servers_disables_none(self):
+        client = MagicMock()
+        state = MagicMock()
+        state.servers = {"https://partner": {"id": 2, "push": True, "pull": True}}
+        assert _disable_unmanaged_servers(client, state, None) == 0
+        client.post.assert_not_called()
+
+    @patch("misp_container.sync.MISPState")
+    def test_one_rejected_user_disables_no_user(self, MockState):
+        """One 403 on a user add must not turn every other user into an unmanaged one."""
+        state = MagicMock(spec=MISPState)
+        state.orgs = {"f3b1eff3-f14e-4b3a-83f7-c31cd2720d9f": {"id": "5"}}
+        state.users = {"alice@x.com": {"id": "5", "email": "alice@x.com", "disabled": False,
+                                       "org_id": "5", "role_id": "3"},
+                       "bob@x.com": {"id": "6", "email": "bob@x.com", "disabled": False,
+                                     "org_id": "5", "role_id": "3"}}
+        state.roles = {"User": {"id": "3", "name": "User"}}
+        state.servers = state.tags = state.taxonomies = state.warninglists = state.sharing_groups = {}
+        state.role_id = lambda name: 3
+        state.org_id = lambda uuid: 5
+        state.tag_id = lambda name: None
+        MockState.return_value = state
+
+        client = MagicMock()
+
+        def post(path, data):
+            if path.startswith("/admin/users/add"):
+                raise APIError(403, "validation", path)
+            return {}
+        client.post.side_effect = post
+
+        config = _normalize({"teams": [{
+            "uuid": "f3b1eff3-f14e-4b3a-83f7-c31cd2720d9f", "name": "T",
+            "users": [{"email": "alice@x.com"}, {"email": "new@x.com"}, {"email": "bob@x.com"}],
+        }]})
+        summary = apply(client=client, config=config)
+
+        assert "error" in summary["users"]
+        assert summary["disabled_users"] == 0
+        disabled = [p for p in client.post.call_args_list if p[0][1].get("User", {}).get("disabled") is True]
+        assert disabled == []
+
+
+class TestRemoteConfig:
+    def test_failed_fetch_fails_the_load(self):
+        with patch("misp_container.sync.urllib.request.urlopen",
+                   side_effect=urllib.error.URLError("timed out")):
+            with pytest.raises(ConfigError, match="cannot fetch the remote config"):
+                _fetch_remote("https://source.example/orgs.yaml", "token")
+
+
+class TestIsEmpty:
+    def test_nothing(self):
+        assert is_empty(_normalize({}))
+
+    def test_roles_alone_count(self):
+        assert not is_empty(_normalize({"roles": [{"name": "Analyst"}]}))
+
+    def test_teams_count(self):
+        assert not is_empty(_normalize({"teams": [{"uuid": "f3b1eff3-f14e-4b3a-83f7-c31cd2720d9f", "name": "T"}]}))
+
+
+class TestSetUserAuthkey:
+    KEY = "inbound-key-for-partner-0000000000000000"
+
+    @patch("misp_container.db.execute")
+    @patch("misp_container.db.dict_query")
+    def test_a_key_the_table_holds_is_left_alone(self, mock_query, mock_execute):
+        import bcrypt
+        stored = bcrypt.hashpw(self.KEY.encode(), bcrypt.gensalt(4)).decode().replace("$2b$", "$2y$", 1)
+        mock_query.return_value = [{"authkey": stored}]
+        _set_user_authkey(42, self.KEY)
+        mock_execute.assert_not_called()
+
+    @patch("misp_container.db.execute")
+    @patch("misp_container.db.dict_query", return_value=[])
+    def test_a_missing_key_is_written(self, mock_query, mock_execute):
+        _set_user_authkey(42, self.KEY)
+        assert mock_execute.call_count == 2
+        insert = mock_execute.call_args_list[1][0]
+        assert insert[1][2] == self.KEY[:4] and insert[1][3] == self.KEY[-4:]
+
+    @patch("misp_container.db.execute")
+    @patch("misp_container.db.dict_query")
+    def test_another_key_with_the_same_ends_is_replaced(self, mock_query, mock_execute):
+        import bcrypt
+        other = self.KEY[:4] + "x" * 32 + self.KEY[-4:]
+        stored = bcrypt.hashpw(other.encode(), bcrypt.gensalt(4)).decode()
+        mock_query.return_value = [{"authkey": stored}]
+        _set_user_authkey(42, self.KEY)
+        assert mock_execute.call_count == 2
