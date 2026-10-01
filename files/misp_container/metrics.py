@@ -332,9 +332,12 @@ def _collect_db_metrics() -> tuple[str, int]:
                 status_map = {0: "unfinished", 1: "queued", 2: "running", 3: "failed", 4: "completed"}
 
                 # All jobs in one query -- LEFT JOIN to servers for pull/push,
-                # split into server vs non-server in Python.
+                # split into server vs non-server in Python. The server id is the
+                # tail of job_input ("Server: 3"); a tail that is no number ("all")
+                # joins nothing: MySQL casts it to 0, PostgreSQL would refuse it.
                 if db.is_postgres():
-                    server_id_expr = "NULLIF(regexp_replace(j.job_input, '^.*: ', ''), '')::bigint"
+                    tail = "regexp_replace(j.job_input, '^.*: ', '')"
+                    server_id_expr = f"CASE WHEN {tail} ~ '^[0-9]+$' THEN {tail}::bigint END"
                 else:
                     server_id_expr = "CAST(SUBSTRING_INDEX(j.job_input, ': ', -1) AS UNSIGNED)"
                 cur.execute(
