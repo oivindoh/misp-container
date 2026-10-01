@@ -239,7 +239,7 @@ services:
   #    DB_HOST=postgres, DB_PORT=5432 in compose.env) ----------------------------
   postgres:
     profiles: [postgres]
-    image: docker.io/library/postgres:17
+    image: docker.io/library/postgres:18
     env_file:
       - chart/files/secrets-db.env
       - compose-secrets.env
@@ -247,7 +247,7 @@ services:
       POSTGRES_DB: misp
       POSTGRES_INITDB_ARGS: "--encoding=UTF8"
     volumes:
-      - postgres-data:/var/lib/postgresql/data
+      - postgres-data:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d misp"]
       interval: 10s
