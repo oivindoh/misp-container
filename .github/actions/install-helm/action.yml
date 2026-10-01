@@ -1,0 +1,34 @@
+# Installs helm, and on request kubeconform and kind, at the versions mise.toml
+# pins, with their checksums.
+name: Install helm
+description: helm, plus kubeconform and kind when asked, pinned and checked
+inputs:
+  kubeconform:
+    description: Also install kubeconform
+    default: "false"
+  kind:
+    description: Also install kind
+    default: "false"
+runs:
+  using: composite
+  steps:
+    - name: Install the tools
+      shell: bash
+      run: |
+        set -euo pipefail
+        mkdir -p "$RUNNER_TEMP/bin"
+        cd "$RUNNER_TEMP"
+        curl -sfLo helm.tgz https://get.helm.sh/helm-v4.3.0-linux-amd64.tar.gz
+        echo "86584a54def73570558f66f5111cc53dfed56689637ae32c1201205d494f54fb  helm.tgz" | sha256sum -c
+        tar -xzf helm.tgz -C bin --strip-components=1 linux-amd64/helm
+        if [ "${{ inputs.kubeconform }}" = true ]; then
+          curl -sfLo kubeconform.tgz https://github.com/yannh/kubeconform/releases/download/v0.8.0/kubeconform-linux-amd64.tar.gz
+          echo "9bc2bffbf71f261128533edaf912153948b7ff238f9a531ae6d34466ec287883  kubeconform.tgz" | sha256sum -c
+          tar -xzf kubeconform.tgz -C bin kubeconform
+        fi
+        if [ "${{ inputs.kind }}" = true ]; then
+          curl -sfLo bin/kind https://github.com/kubernetes-sigs/kind/releases/download/v0.33.0/kind-linux-amd64
+          echo "aee6151561422756b764a4ae28e7f44cda5af5a9eead3cc9985112b1de8d8e0d  bin/kind" | sha256sum -c
+          chmod +x bin/kind
+        fi
+        echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"

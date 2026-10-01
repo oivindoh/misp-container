@@ -6,17 +6,14 @@ metadata:
   name: metrics
   labels:
     {{- include "misp.labels" (dict "root" . "name" "metrics") | nindent 4 }}
-    app: metrics
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: metrics
       app.kubernetes.io/name: metrics
   template:
     metadata:
       labels:
-        app: metrics
         app.kubernetes.io/name: metrics
       annotations:
         prometheus.io/scrape: "true"

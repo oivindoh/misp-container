@@ -158,6 +158,40 @@ LOG_WRITERS = {
 }
 
 
+SERVER_MODEL = """<?php
+class Server extends AppModel
+{
+    public function getFileRules()
+    {
+        return [
+            'orgs' => [
+                'name' => __('Organisation logos'),
+                'path' => APP . 'files' . DS . 'img' . DS . 'orgs',
+                'regex' => '.*\\.(png|svg)$',
+                'files' => [],
+            ],
+            'img' => [
+                'name' => __('Additional image files'),
+                'expected' => [
+                    'MISP.footer_logo' => Configure::read('MISP.footer_logo'),
+                ],
+                'path' => APP . 'files' . DS . 'img' . DS . 'custom',
+                'regex' => '.*\\.(png|svg)$',
+                'files' => array(),
+            ],
+        ];
+    }
+}
+"""
+
+ORG_IMG_HELPER = """<?php
+class OrgImgHelper extends AppHelper
+{
+    const IMG_PATH = APP . 'files' . DS . 'img' . DS . 'orgs' . DS;
+}
+"""
+
+
 def write(root, rel, text):
     path = root / rel
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -174,6 +208,8 @@ def misp(tmp_path):
     write(root, cu.BOOTSTRAP, BOOTSTRAP)
     write(root, cu.ATTACHMENT_TOOL, ATTACHMENT_TOOL)
     write(root, cu.AWS_S3_CLIENT, AWS_S3_CLIENT)
+    write(root, cu.SERVER_MODEL, SERVER_MODEL)
+    write(root, cu.ORG_IMG_HELPER, ORG_IMG_HELPER)
     for rel, text in LOG_WRITERS.items():
         write(root, rel, text)
     actions: dict[str, list[str]] = {}
@@ -351,3 +387,21 @@ class TestMain:
     def test_a_missing_file_is_a_problem(self, misp):
         (misp / cu.BACKGROUND_JOBS).unlink()
         assert problems(misp, "worker-queues")[0].startswith(f"cannot read {cu.BACKGROUND_JOBS}")
+
+
+class TestImagePaths:
+    def test_logos_moved(self, misp):
+        edit(misp, cu.SERVER_MODEL, "'files' . DS . 'img' . DS . 'orgs'", "'webroot' . DS . 'img' . DS . 'orgs'")
+        assert any("uploads 'orgs' files to app/webroot/img/orgs" in p for p in problems(misp, "image-paths"))
+
+    def test_custom_images_moved(self, misp):
+        edit(misp, cu.SERVER_MODEL, "'files' . DS . 'img' . DS . 'custom'", "'files' . DS . 'custom'")
+        assert any("uploads 'img' files to app/files/custom" in p for p in problems(misp, "image-paths"))
+
+    def test_helper_reads_elsewhere(self, misp):
+        edit(misp, cu.ORG_IMG_HELPER, "APP . 'files' . DS . 'img' . DS . 'orgs' . DS", "APP . 'webroot' . DS . 'img' . DS . 'orgs' . DS")
+        assert any("reads org logos from app/webroot/img/orgs" in p for p in problems(misp, "image-paths"))
+
+    def test_rules_gone(self, misp):
+        edit(misp, cu.SERVER_MODEL, "function getFileRules(", "function getUploadRules(")
+        assert any("no getFileRules()" in p for p in problems(misp, "image-paths"))

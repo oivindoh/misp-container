@@ -22,6 +22,12 @@ TABLES = {
 BATCH = 25000
 
 
+def retention_days(table: str) -> int:
+    """HOUSEKEEPING_<TABLE>_DAYS, or the table's default when unset or empty."""
+    value = env(f"HOUSEKEEPING_{table.upper()}_DAYS").strip()
+    return int(value) if value else TABLES[table][1]
+
+
 def delete_batch(table: str, column: str, days: int) -> int:
     cutoff = db.ago(days, "DAY")
     if db.is_postgres():
@@ -33,14 +39,14 @@ def delete_batch(table: str, column: str, days: int) -> int:
 
 
 def run(table: str) -> int:
-    column, default_days = TABLES[table]
-    days = int(env(f"HOUSEKEEPING_{table.upper()}_DAYS", str(default_days)))
+    column, _ = TABLES[table]
+    days = retention_days(table)
     total = 0
     while True:
         deleted = delete_batch(table, column, days)
         total += deleted
         log.info("%s: deleted %d rows older than %d days", table, deleted, days)
-        if deleted < 100:
+        if deleted < BATCH:
             break
     log.info("%s: %d rows deleted in total", table, total)
     return total

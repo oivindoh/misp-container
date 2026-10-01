@@ -3,7 +3,7 @@
 {{- .Values.image.tag | default .Chart.AppVersion -}}
 {{- end }}
 
-{{/* Labels of a resource. Selectors use app and app.kubernetes.io/name only. */}}
+{{/* Labels of a resource. Selectors use app.kubernetes.io/name only. */}}
 {{- define "misp.labels" -}}
 app.kubernetes.io/name: {{ .name }}
 app.kubernetes.io/instance: {{ .root.Release.Name }}
@@ -72,8 +72,15 @@ worker and the console tasks. Each pod renders its own app/Config.
   mountPath: /var/www/MISP/app/files/certs
 - name: files-terms
   mountPath: /var/www/MISP/app/files/terms
-- name: files-img-orgs
+# MISP uploads org logos and custom images here and inlines them into its pages
+# (Server::getFileRules, OrgImgHelper; the image-paths check of
+# scripts/check_upstream.py), so every pod sees the same files
+- name: attachments
   mountPath: /var/www/MISP/app/files/img/orgs
+  subPath: img/orgs
+- name: attachments
+  mountPath: /var/www/MISP/app/files/img/custom
+  subPath: img/custom
 - name: misp-config
   mountPath: /var/www/MISP/app/Config
 - name: misp-tmp
@@ -100,9 +107,6 @@ worker and the console tasks. Each pod renders its own app/Config.
 - name: files-terms
   emptyDir:
     sizeLimit: 10Mi
-- name: files-img-orgs
-  emptyDir:
-    sizeLimit: 100Mi
 - name: misp-config
   emptyDir:
     sizeLimit: 10Mi
@@ -124,6 +128,22 @@ worker and the console tasks. Each pod renders its own app/Config.
   secret:
     secretName: misp-certs
     optional: true
+{{- end }}
+
+{{/* LOG_FORMAT and TZ from misp-env, for a pod that does not read the whole ConfigMap */}}
+{{- define "misp.logEnv" -}}
+- name: LOG_FORMAT
+  valueFrom:
+    configMapKeyRef:
+      name: misp-env
+      key: LOG_FORMAT
+      optional: true
+- name: TZ
+  valueFrom:
+    configMapKeyRef:
+      name: misp-env
+      key: TZ
+      optional: true
 {{- end }}
 
 {{/* The attachments volume: the shared claim, or an emptyDir per pod when attachments are in S3 */}}
@@ -224,6 +244,9 @@ spec:
                 {{- toYaml $root.Values.cronjobs.resources.console | nindent 16 }}
               {{- else }}
               env:
+                # No misp-env for an API task: only what the runner reads, plus the
+                # log format and time zone every other pod takes from it
+                {{- include "misp.logEnv" $root | nindent 16 }}
                 - name: SYNC_BASE_URL
                   value: http://web:8080
                 - name: TASK_METRICS_URL
@@ -243,5 +266,6 @@ spec:
           {{- if $console }}
           volumes:
             {{- include "misp.appVolumes" $root | nindent 12 }}
+            {{- include "misp.attachmentsVolume" $root | nindent 12 }}
           {{- end }}
 {{- end }}

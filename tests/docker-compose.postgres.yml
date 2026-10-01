@@ -6,6 +6,18 @@ x-postgres-env: &postgres-env
     - chart/files/base.env
     - chart/files/secrets-db.env
     - chart/files/secrets-app.env
+    - compose.env
+    - compose-secrets.env
+    - ../tests/test-compose.env
+    - ../tests/test-compose-secrets.env
+    - ../tests/postgres.env
+
+# configure and sync act as the admin: the same plus secrets-admin.env
+x-postgres-env-admin: &postgres-env-admin
+  env_file:
+    - chart/files/base.env
+    - chart/files/secrets-db.env
+    - chart/files/secrets-app.env
     - chart/files/secrets-admin.env
     - compose.env
     - compose-secrets.env
@@ -15,7 +27,7 @@ x-postgres-env: &postgres-env
 
 services:
   configure:
-    <<: *postgres-env
+    <<: *postgres-env-admin
     depends_on:
       postgres:
         condition: service_healthy
@@ -24,6 +36,6 @@ services:
   worker:
     <<: *postgres-env
   sync:
-    <<: *postgres-env
+    <<: *postgres-env-admin
   metrics:
     <<: *postgres-env

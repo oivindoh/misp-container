@@ -6,7 +6,6 @@ metadata:
   name: worker
   labels:
     {{- include "misp.labels" (dict "root" . "name" "worker") | nindent 4 }}
-    app: worker
   annotations:
     # After the configure Job (wave 1)
     argocd.argoproj.io/sync-wave: "2"
@@ -14,18 +13,17 @@ spec:
   replicas: {{ .Values.worker.replicas }}
   selector:
     matchLabels:
-      app: worker
       app.kubernetes.io/name: worker
   template:
     metadata:
       labels:
-        app: worker
         app.kubernetes.io/name: worker
       annotations:
         {{- include "misp.checksums" . | nindent 8 }}
     spec:
-      # Long enough for supervisord to let a running job finish (WORKER_STOP_GRACE)
-      terminationGracePeriodSeconds: 330
+      # supervisord lets a running job finish for WORKER_STOP_GRACE seconds (default
+      # 300, files/entrypoint-worker.py); the kubelet must wait longer than that
+      terminationGracePeriodSeconds: {{ add 30 (int (default 300 (index .Values.env "WORKER_STOP_GRACE"))) }}
       {{- include "misp.podSecurityContext" . | nindent 6 }}
       {{- include "misp.podScheduling" . | nindent 6 }}
       containers:
@@ -45,18 +43,21 @@ spec:
               mountPath: /var/www/MISP/app/attachments
           resources:
             {{- toYaml .Values.worker.resources | nindent 12 }}
+          # The web pods reach supervisord through the TCP proxy on 9001, so that
+          # port is what the probes test. The entrypoint exits when supervisord
+          # does, which restarts the pod.
           startupProbe:
-            exec:
-              command: ["test", "-S", "/tmp/supervisor.sock"]
+            tcpSocket:
+              port: 9001
             failureThreshold: 60
             periodSeconds: 5
           readinessProbe:
-            exec:
-              command: ["test", "-S", "/tmp/supervisor.sock"]
+            tcpSocket:
+              port: 9001
             periodSeconds: 30
           livenessProbe:
-            exec:
-              command: ["test", "-S", "/tmp/supervisor.sock"]
+            tcpSocket:
+              port: 9001
             periodSeconds: 60
           {{- include "misp.containerSecurityContext" . | nindent 10 }}
 

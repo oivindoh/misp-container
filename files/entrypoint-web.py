@@ -9,6 +9,7 @@ import os
 import re
 import subprocess
 import sys
+import urllib.parse
 from pathlib import Path
 
 from misp_container import MISP_BASE
@@ -38,7 +39,8 @@ def configure_php():
     if not redis_pw:
         session_path = f"{redis_host}:{redis_port}"
     else:
-        session_path = f"{redis_host}:{redis_port}?auth={redis_pw}"
+        # phpredis parses the part after ? as a query string
+        session_path = f"{redis_host}:{redis_port}?auth={urllib.parse.quote(redis_pw, safe='')}"
     os.environ["SESSION_SAVE_PATH"] = session_path
 
     # envsubst equivalent: replace ${VAR} in templates

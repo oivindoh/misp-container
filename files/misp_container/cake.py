@@ -8,12 +8,9 @@ from .log import get as getlog
 log = getlog("cake")
 
 
-def run(*args, quiet=True, check=False):
+def run(*args, check=False):
     """Run a cake command. Returns (returncode, stdout)."""
-    cmd = [CAKE] + list(args)
-    if quiet and args and args[0] == "Admin" and len(args) > 1 and args[1] == "setSetting":
-        cmd.insert(cmd.index("setSetting") + 1, "-q")
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    result = subprocess.run([CAKE, *args], capture_output=True, text=True)
     if check and result.returncode != 0:
         raise RuntimeError(f"cake {' '.join(args)} failed: {result.stderr.strip()}")
     return result.returncode, result.stdout.strip()
@@ -25,7 +22,7 @@ def set_setting(setting, value, force=False):
     if force:
         args.append("-f")
     args.extend([setting, str(value)])
-    result = subprocess.run([CAKE] + args, capture_output=True, text=True)
+    result = subprocess.run([CAKE, *args], capture_output=True, text=True)
     if result.returncode != 0:
         detail = (result.stderr or result.stdout).strip().splitlines()
         log.warning("cake setSetting %s failed (rc=%d): %s", setting, result.returncode,

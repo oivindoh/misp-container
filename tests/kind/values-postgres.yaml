@@ -1,0 +1,6 @@
+# tests/run-kind-test.sh --postgres: the postgres component in place of mariadb,
+# on top of values.yaml
+mariadb:
+  enabled: false
+postgres:
+  enabled: true

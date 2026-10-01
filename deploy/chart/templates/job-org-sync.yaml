@@ -8,7 +8,6 @@ metadata:
   name: org-sync-{{ .Release.Revision }}
   labels:
     {{- include "misp.labels" (dict "root" . "name" "org-sync") | nindent 4 }}
-    app: org-sync
   annotations:
     argocd.argoproj.io/hook: Sync
     argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
@@ -18,7 +17,6 @@ spec:
   template:
     metadata:
       labels:
-        app: org-sync
         app.kubernetes.io/name: org-sync
     spec:
       restartPolicy: Never

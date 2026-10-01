@@ -7,19 +7,16 @@ metadata:
   name: redis
   labels:
     {{- include "misp.labels" (dict "root" . "name" "redis") | nindent 4 }}
-    app: redis
 spec:
   replicas: 1
   strategy:
     type: Recreate
   selector:
     matchLabels:
-      app: redis
       app.kubernetes.io/name: redis
   template:
     metadata:
       labels:
-        app: redis
         app.kubernetes.io/name: redis
       {{- if .Values.secrets.create }}
       annotations:
@@ -60,18 +57,21 @@ spec:
               protocol: TCP
           resources:
             {{- toYaml .Values.redis.resources | nindent 12 }}
+          # Redis answers on the port as soon as it serves. An exec probe cannot
+          # authenticate: the kubelet expands $(VAR) from static env values only,
+          # never from a secretKeyRef, and redis-cli exits 0 on an error reply.
           startupProbe:
-            exec:
-              command: ["redis-cli", "-a", "$(MISP_REDIS_PASSWORD)", "--no-auth-warning", "ping"]
+            tcpSocket:
+              port: 6379
             failureThreshold: 10
             periodSeconds: 3
           readinessProbe:
-            exec:
-              command: ["redis-cli", "-a", "$(MISP_REDIS_PASSWORD)", "--no-auth-warning", "ping"]
+            tcpSocket:
+              port: 6379
             periodSeconds: 10
           livenessProbe:
-            exec:
-              command: ["redis-cli", "-a", "$(MISP_REDIS_PASSWORD)", "--no-auth-warning", "ping"]
+            tcpSocket:
+              port: 6379
             periodSeconds: 30
           {{- include "misp.containerSecurityContext" . | nindent 10 }}
 ---

@@ -142,10 +142,16 @@ class Stack:
         return self.exec_rc(service, 'python3 -c "$CODE"', env={**(env or {}), "CODE": prelude + code})
 
     def sql(self, query: str, service: str = "web") -> str:
-        """A query through the image's db layer, against the database the service uses."""
-        _, out = self.python("import os\nfrom misp_container.env import apply_defaults\n"
-                             "from misp_container import db\napply_defaults()\n"
-                             "print(db.query(os.environ['SQL']))", service, env={"SQL": query})
+        """A query through the image's db layer, against the database the service uses.
+
+        Raises when the query or the library fails: an error would otherwise
+        come back as a traceback string that a negative assertion accepts.
+        """
+        rc, out = self.python("import os\nfrom misp_container.env import apply_defaults\n"
+                              "from misp_container import db\napply_defaults()\n"
+                              "print(db.query(os.environ['SQL'], check=True))", service, env={"SQL": query})
+        if rc != 0:
+            raise RuntimeError(f"query failed in {service}: {query}\n{out}")
         return "".join(out.split())
 
     def logs(self, service: str, stopped: bool = False) -> str:

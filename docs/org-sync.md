@@ -41,6 +41,10 @@ taxonomies:
 | Variable | Description |
 |----------|-------------|
 | `ORG_CONFIG_FILE` | Path of the file (default `/etc/misp-docker/orgs.yaml`) |
-| `ORG_CONFIG_URL` | URL to fetch the file from instead |
+| `ORG_CONFIG_URL` | URL to fetch a second file from, merged under the local one; a fetch that fails ends the run with exit 1 |
 | `ADMIN_KEY` | Admin API key (required) |
 | `SYNC_BASE_URL` | MISP URL the run connects to (default `MISP_BASEURL`) |
+
+A user or server the file does not name is disabled at the end of the run. A step that
+fails part way (one rejected user, one refused server) disables nothing of its kind that
+run: the run exits 1 and the next one starts over.

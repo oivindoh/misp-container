@@ -202,12 +202,13 @@ def test_a_published_event_runs_a_job(stack):
     eid = event.get("Event", {}).get("id")
     assert eid, event
     stack.http("POST", f"/events/publish/{eid}", stack.key, {})
-    deadline = time.monotonic() + 30
+    deadline = time.monotonic() + 60
     while time.monotonic() < deadline and int(stack.sql("SELECT COUNT(*) FROM jobs WHERE status=4;") or 0) == 0:
         time.sleep(2)
     done = int(stack.sql("SELECT COUNT(*) FROM jobs WHERE status=4;") or 0)
+    queued = int(stack.sql("SELECT COUNT(*) FROM jobs;") or 0)
     stack.http("POST", f"/events/delete/{eid}", stack.key, {})
-    assert done > 0 or int(stack.sql("SELECT COUNT(*) FROM jobs;") or 0) > 0
+    assert done > 0, f"no job reached status 4 (completed) in 60 s; {queued} job(s) in the table: no worker ran it"
 
 
 # -- PHP-FPM -------------------------------------------------------------------------
@@ -862,8 +863,6 @@ def test_metrics_queue_returns_to_0(waiting_job):
 
 
 def test_metrics_sync_log_after_org_sync(metrics_text, synced):
-    if "misp_sync_runs_24h" not in metrics_text:
-        pytest.skip("the sync log table may not exist yet")
     assert "misp_sync_runs_24h" in metrics_text
 
 
@@ -1043,7 +1042,7 @@ def test_every_misp_setting_curated_or_catalogued(stack):
     dump.write_text(stack.exec("web", "/var/www/MISP/app/Console/cake Admin getSetting all"))
     result = subprocess.run([sys.executable, str(REPO / "scripts/update_settings.py"), "--check", "--json", str(dump)],
                             capture_output=True, text=True, env={**os.environ, "PYTHONPATH": str(REPO / "files")})
-    assert result.returncode == 0, "new or stale settings (run scripts/update-settings.sh and review):\n" + result.stdout
+    assert result.returncode == 0, "new or stale settings (run mise run settings-update and review):\n" + result.stdout
 
 
 def test_no_rejected_cake_settings(stack):

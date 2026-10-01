@@ -3,7 +3,7 @@
 ; Runs as UID 1000 (misp) - no root required.
 
 [global]
-pid = /tmp/php-fpm.pid
+; No pid file: php-fpm runs in the foreground under tini, and nothing reads one
 error_log = /dev/stderr
 daemonize = no
 ; Longer lines are split; a JSON log line with a stack trace needs room

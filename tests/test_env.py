@@ -38,24 +38,15 @@ class TestEnv:
 
 
 class TestApplyDefaults:
-    """apply_defaults() loads settings.yaml defaults into os.environ."""
+    """apply_defaults() fills the derived names and the aliases into os.environ."""
 
-    def test_worker_fallback(self):
-        """WORKERS env var sets default for all queue worker counts."""
-        with patch.dict(os.environ, {"WORKERS": "2"}, clear=False):
-            for q in ("DEFAULT", "PRIO", "EMAIL", "CACHE"):
-                os.environ.pop(f"NUM_WORKERS_{q}", None)
-            os.environ.pop("NUM_WORKERS_UPDATE", None)
+    def test_custom_auth_aliases_feed_the_derived_names(self):
+        with patch.dict(os.environ, {"CUSTOM_AUTH_HEADER": "X-User", "OIDC_LOGOUT_URL": "https://idp/logout"}, clear=False):
+            os.environ.pop("PLUGIN_CUSTOMAUTH_HEADER", None)
+            os.environ.pop("PLUGIN_CUSTOMAUTH_CUSTOM_LOGOUT", None)
             apply_defaults()
-            assert os.environ["NUM_WORKERS_DEFAULT"] == "2"
-            assert os.environ["NUM_WORKERS_PRIO"] == "2"
-            assert os.environ["NUM_WORKERS_UPDATE"] == "1"
-
-    def test_worker_explicit_override(self):
-        """Explicit NUM_WORKERS_* env vars are preserved."""
-        with patch.dict(os.environ, {"NUM_WORKERS_DEFAULT": "3"}, clear=False):
-            apply_defaults()
-            assert os.environ["NUM_WORKERS_DEFAULT"] == "3"
+            assert os.environ["PLUGIN_CUSTOMAUTH_HEADER"] == "X-User"
+            assert os.environ["PLUGIN_CUSTOMAUTH_CUSTOM_LOGOUT"] == "https://idp/logout"
 
 
 class TestDerivedDefaults:

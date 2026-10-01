@@ -44,7 +44,7 @@ Scrape `/metrics`; `/healthz` and `/ready` answer 200.
 | `misp_server_push_enabled{id,name}` | gauge | Push enabled per server |
 | `misp_server_last_pull_event_id{id,name}` | gauge | Last pulled event ID |
 | `misp_server_last_push_event_id{id,name}` | gauge | Last pushed event ID |
-| `misp_server_reachable{id,name,url}` | gauge | Connectivity, auth-verified when the authkey is stored in clear (5min cache). With `Security.encryption_key` set, MISP stores authkeys encrypted and any HTTP answer counts as reachable |
+| `misp_server_reachable{id,name,url}` | gauge | Connectivity, auth-verified when the authkey is stored in clear (checked every 5 minutes). With `Security.encryption_key` set, MISP stores authkeys encrypted and any HTTP answer counts as reachable |
 | `misp_server_tls_expiry_timestamp_seconds{id,name,url}` | gauge | TLS cert expiry as unix timestamp |
 
 **Background jobs:**
@@ -73,7 +73,7 @@ job at `unfinished` while it waits and runs; a job whose worker died stays `unfi
 ## Design decisions
 
 - **No DB cache**: metrics are fresh on every scrape. All queries are cheap (information_schema for large tables, exact counts for small tables).
-- **Network check cache**: remote server auth probes and TLS cert checks are cached for 5 minutes to avoid hammering sync partners.
+- **Partner checks beside the scrape**: a thread of the exporter probes every sync server (auth and TLS certificate) every 5 minutes; a scrape serves the last result, so an unreachable partner never delays a scrape or a probe of the exporter.
 - **Queue depth from Redis**: waiting jobs are the queue lists (`LLEN <namespace>:<queue>`) and running jobs the `<namespace>:running:<queue>:<id>` keys, in the database and namespace of `SimpleBackgroundJobs.redis_*`. A failed Redis read counts in `misp_scrape_errors`.
 - **Counters for jobs**: `misp_server_jobs_total` and `misp_jobs_total` are counters. Use `increase(...[1h])` in PromQL for time-windowed views. MISP prunes completed jobs, which Prometheus handles as counter resets.
 - **information_schema for big tables**: `events`, `attributes`, and `shadow_attributes` use InnoDB's `TABLE_ROWS` estimate (~10-20% accuracy) instead of `COUNT(*)` to avoid full index scans on large instances.

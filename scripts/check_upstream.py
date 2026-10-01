@@ -41,6 +41,11 @@ CONTROLLERS = "app/Controller"
 ATTACHMENT_TOOL = "app/Lib/Tools/AttachmentTool.php"
 AWS_S3_CLIENT = "app/Lib/Tools/AWSS3Client.php"
 BOOTSTRAP = "app/Config/bootstrap.default.php"
+SERVER_MODEL = "app/Model/Server.php"
+ORG_IMG_HELPER = "app/View/Helper/OrgImgHelper.php"
+# Where MISP keeps the files of each upload rule of Server::getFileRules(): the
+# chart mounts the attachments claim and Compose a volume at these paths
+IMAGE_DIRS = {"orgs": "files/img/orgs", "img": "files/img/custom"}
 # The directories of MISP's own PHP code, and the parts in them that are not MISP's
 MISP_PHP = ("app/Model", "app/Lib", "app/Controller", "app/Console", "app/Plugin")
 NOT_MISP_PARTS = {"cakephp", "Vendor"}
@@ -315,6 +320,38 @@ def log_block_php(root: Path, php: str | None = None) -> list[str]:
     return problems
 
 
+def php_path(expr: str) -> str:
+    """The relative path a PHP expression like APP . 'files' . DS . 'img' names."""
+    return "/".join(re.findall(r"'([^']+)'", expr)).strip("/")
+
+
+def image_paths(root: Path) -> list[str]:
+    """Org logos and custom images are uploaded to, and read from, the directories the volumes mount."""
+    source = strip_php_comments(read(root, SERVER_MODEL))
+    start = source.find("function getFileRules(")
+    if start == -1:
+        return ["no getFileRules() in Server.php: find where MISP uploads org logos and custom images now"]
+    rules = source[start:]
+    problems = []
+    for kind, expected in IMAGE_DIRS.items():
+        at = rules.find(f"'{kind}' =>")
+        path = re.search(r"'path'\s*=>\s*([^,\n]+)", rules[at:]) if at != -1 else None
+        if not path:
+            problems.append(f"getFileRules() has no {kind!r} rule with a path: MISP changed where it uploads these files")
+            continue
+        found = php_path(path.group(1))
+        if found != expected:
+            problems.append(f"MISP uploads {kind!r} files to app/{found}, the volumes mount app/{expected}: "
+                            "a file uploaded on one pod is missing on the others")
+    helper = re.search(r"IMG_PATH\s*=\s*([^;]+);", strip_php_comments(read(root, ORG_IMG_HELPER)))
+    if not helper:
+        problems.append("no IMG_PATH in OrgImgHelper.php: find where MISP reads org logos now")
+    elif php_path(helper.group(1)) != IMAGE_DIRS["orgs"]:
+        problems.append(f"MISP reads org logos from app/{php_path(helper.group(1))}, the volumes mount "
+                        f"app/{IMAGE_DIRS['orgs']}")
+    return problems
+
+
 CHECKS = [
     Check("worker-queues", BACKGROUND_JOBS, "files/misp_container/__init__.py WORKER_QUEUES", worker_queues),
     Check("worker-group", BACKGROUND_JOBS, "files/misp_container/__init__.py WORKER_GROUP", worker_group),
@@ -328,6 +365,8 @@ CHECKS = [
     Check("shell-streams", CONSOLE_SHELL, "files/misp_container/init.py LOG_BLOCK", shell_streams),
     Check("relayed-files", "app/Model, app/Lib, app/Controller, app/Console, app/Plugin",
           "files/misp_container/logrelay.py FILES", relayed_files),
+    Check("image-paths", f"{SERVER_MODEL}, {ORG_IMG_HELPER}",
+          "deploy/chart/templates/_helpers.tpl misp.appVolumeMounts, deploy/docker-compose.yml", image_paths),
 ]
 PHP_CHECK = Check("log-block-php", "php", "files/misp_container/init.py LOG_BLOCK", log_block_php)
 

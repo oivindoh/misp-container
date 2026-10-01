@@ -23,8 +23,10 @@ from misp_container.metrics import (
     collect_all,
     init_sync_log_table,
     log_sync_result,
-    _net_cache,
+    network_metrics,
+    refresh_network_metrics,
 )
+import misp_container.metrics as metrics
 
 
 # ---------------------------------------------------------------------------
@@ -32,8 +34,8 @@ from misp_container.metrics import (
 # ---------------------------------------------------------------------------
 
 def _reset_caches():
-    """Force network cache expiry so tests always hit the collection path."""
-    _net_cache.update(output="", ts=-(10**9))
+    """Forget the last partner check block."""
+    metrics._net_output = ""
 
 
 def _parse_metrics(text):
@@ -175,10 +177,7 @@ class FakeCursor:
     def fetchall(self):
         return self._rows
 
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *a):
+    def close(self):
         pass
 
 
@@ -211,10 +210,10 @@ class TestCollectDbMetrics:
     def test_db_unreachable(self, mock_connect):
         """misp_up=0 when the database connection fails."""
         mock_connect.side_effect = Exception("connection refused")
-        output, servers = _collect_db_metrics()
+        output, errors = _collect_db_metrics()
         parsed = _parse_metrics(output)
         assert parsed["misp_up"][0] == ({}, "0")
-        assert servers == []
+        assert errors == 1
 
     @patch("misp_container.metrics._connect")
     def test_basic_content_counts(self, mock_connect):
@@ -238,7 +237,7 @@ class TestCollectDbMetrics:
             "FROM jobs": [],
             "misp_container_sync_log": [],
         })
-        output, servers = _collect_db_metrics()
+        output, errors = _collect_db_metrics()
         parsed = _parse_metrics(output)
 
         assert parsed["misp_up"][0] == ({}, "1")
@@ -322,10 +321,10 @@ class TestCollectDbMetrics:
             "FROM jobs": [],
             "misp_container_sync_log": [],
         })
-        output, servers = _collect_db_metrics()
+        output, errors = _collect_db_metrics()
         parsed = _parse_metrics(output)
 
-        assert len(servers) == 2
+        assert errors == 0
         assert len(parsed["misp_server_info"]) == 2
         assert len(parsed["misp_server_pull_enabled"]) == 2
         assert len(parsed["misp_server_push_enabled"]) == 2
@@ -361,9 +360,9 @@ class TestCollectDbMetrics:
             "FROM jobs": [],
             "misp_container_sync_log": [],
         })
-        output, servers = _collect_db_metrics()
+        output, errors = _collect_db_metrics()
         parsed = _parse_metrics(output)
-        assert servers == []
+        assert errors == 0
         assert "misp_server_info" not in parsed
 
     @patch("misp_container.metrics._connect")
@@ -593,17 +592,21 @@ class TestCollectNetworkMetrics:
         mock_auth.assert_not_called()
         assert output == ""
 
-    @patch("misp_container.metrics._check_tls_cert")
-    @patch("misp_container.metrics._check_server_auth")
-    def test_cache_returns_previous(self, mock_auth, mock_tls):
-        """Second call within TTL returns cached output."""
-        mock_auth.return_value = True
-        mock_tls.return_value = 1750000000.0
-        servers = [{"id": 1, "name": "A", "url": "https://a.test", "authkey": "k"}]
-        out1 = _collect_network_metrics(servers)
-        out2 = _collect_network_metrics(servers)
-        assert out1 == out2
-        assert mock_auth.call_count == 1  # second call hit cache
+    @patch("misp_container.metrics._check_tls_cert", return_value=1750000000.0)
+    @patch("misp_container.metrics._check_server_auth", return_value=True)
+    @patch("misp_container.metrics._connect")
+    def test_refresh_stores_the_block_for_the_scrape(self, mock_connect, mock_auth, mock_tls):
+        """The check thread reads the servers itself and leaves the block for collect_all."""
+        mock_connect.return_value = _make_conn({"FROM servers": [
+            {"id": 1, "name": "A", "url": "https://a.test", "authkey": "k"}]})
+        refresh_network_metrics()
+        assert 'misp_server_reachable{id="1",name="A",url="https://a.test"} 1' in network_metrics()
+
+    @patch("misp_container.metrics._connect", side_effect=OSError("refused"))
+    def test_a_failed_refresh_keeps_the_last_block(self, mock_connect):
+        metrics._net_output = "misp_server_reachable 1"
+        refresh_network_metrics()
+        assert network_metrics() == "misp_server_reachable 1"
 
 
 # ---------------------------------------------------------------------------
@@ -828,66 +831,53 @@ class TestCollectAll:
     def teardown_method(self):
         self._queues.stop()
 
-    @patch("misp_container.metrics._collect_network_metrics", return_value="")
     @patch("misp_container.metrics._collect_db_metrics")
-    def test_redis_failure_sets_error_and_omits_the_queue_metric(self, mock_db, mock_net):
+    def test_redis_failure_sets_error_and_omits_the_queue_metric(self, mock_db):
         """The task runner treats a missing misp_jobs_queued as unknown and dispatches."""
-        mock_db.return_value = (_metric("misp_up", "up", "gauge", [({}, 1)]), [])
+        mock_db.return_value = (_metric("misp_up", "up", "gauge", [({}, 1)]), 0)
         with patch("misp_container.metrics._collect_queue_metrics", side_effect=OSError("refused")):
             parsed = _parse_metrics(collect_all())
         assert "misp_jobs_queued" not in parsed
         assert parsed["misp_scrape_errors"][0] == ({}, "1")
 
-    @patch("misp_container.metrics._collect_network_metrics", return_value="")
     @patch("misp_container.metrics._collect_db_metrics")
-    def test_includes_scrape_metadata(self, mock_db, mock_net):
-        mock_db.return_value = (
-            _metric("misp_up", "up", "gauge", [({}, 1)]),
-            [],
-        )
+    def test_includes_scrape_metadata(self, mock_db):
+        mock_db.return_value = (_metric("misp_up", "up", "gauge", [({}, 1)]), 0)
         output = collect_all()
         parsed = _parse_metrics(output)
         assert "misp_scrape_duration_seconds" in parsed
         assert "misp_scrape_errors" in parsed
         assert parsed["misp_scrape_errors"][0] == ({}, "0")
 
-    @patch("misp_container.metrics._collect_network_metrics", return_value="")
     @patch("misp_container.metrics._collect_db_metrics")
-    def test_db_failure_sets_error(self, mock_db, mock_net):
+    def test_db_failure_sets_error(self, mock_db):
         mock_db.side_effect = RuntimeError("boom")
         output = collect_all()
         parsed = _parse_metrics(output)
         assert parsed["misp_up"][0] == ({}, "0")
         assert parsed["misp_scrape_errors"][0] == ({}, "1")
 
-    @patch("misp_container.metrics._collect_network_metrics")
     @patch("misp_container.metrics._collect_db_metrics")
-    def test_net_failure_sets_error(self, mock_db, mock_net):
-        mock_db.return_value = (
-            _metric("misp_up", "up", "gauge", [({}, 1)]),
-            [{"id": 1, "name": "A", "url": "https://a", "authkey": "k"}],
-        )
-        mock_net.side_effect = RuntimeError("network boom")
-        output = collect_all()
-        parsed = _parse_metrics(output)
-        assert parsed["misp_scrape_errors"][0] == ({}, "1")
+    def test_a_failed_collector_counts_as_an_error(self, mock_db):
+        mock_db.return_value = (_metric("misp_up", "up", "gauge", [({}, 1)]), 2)
+        parsed = _parse_metrics(collect_all())
+        assert parsed["misp_scrape_errors"][0] == ({}, "2")
 
-    @patch("misp_container.metrics._collect_network_metrics", return_value="")
     @patch("misp_container.metrics._collect_db_metrics")
-    def test_output_ends_with_newline(self, mock_db, mock_net):
-        mock_db.return_value = (_metric("misp_up", "up", "gauge", [({}, 1)]), [])
+    def test_output_ends_with_newline(self, mock_db):
+        mock_db.return_value = (_metric("misp_up", "up", "gauge", [({}, 1)]), 0)
         output = collect_all()
         assert output.endswith("\n")
 
-    @patch("misp_container.metrics._collect_network_metrics")
     @patch("misp_container.metrics._collect_db_metrics")
-    def test_passes_servers_to_network(self, mock_db, mock_net):
-        """Server list from DB collection is forwarded to network checks."""
-        fake_servers = [{"id": 1, "name": "A", "url": "https://a", "authkey": "k"}]
-        mock_db.return_value = ("misp_up 1", fake_servers)
-        mock_net.return_value = ""
-        collect_all()
-        mock_net.assert_called_once_with(fake_servers)
+    def test_serves_the_last_partner_block(self, mock_db):
+        """The scrape includes what the check thread left, and never runs a check itself."""
+        mock_db.return_value = ("misp_up 1", 0)
+        metrics._net_output = _metric("misp_server_reachable", "r", "gauge", [({"id": "1"}, 1)])
+        with patch("misp_container.metrics._check_server_auth") as check:
+            parsed = _parse_metrics(collect_all())
+        check.assert_not_called()
+        assert parsed["misp_server_reachable"][0] == ({"id": "1"}, "1")
 
 
 # ---------------------------------------------------------------------------
@@ -900,10 +890,8 @@ class TestSyncLogTable:
 
     @patch("misp_container.metrics._connect")
     def test_init_creates_table(self, mock_connect):
-        cursor = MagicMock()
         conn = MagicMock()
-        conn.cursor.return_value.__enter__ = MagicMock(return_value=cursor)
-        conn.cursor.return_value.__exit__ = MagicMock(return_value=False)
+        cursor = conn.cursor.return_value
         mock_connect.return_value = conn
 
         init_sync_log_table()
@@ -916,10 +904,8 @@ class TestSyncLogTable:
 
     @patch("misp_container.metrics._connect")
     def test_log_result_inserts_row(self, mock_connect):
-        cursor = MagicMock()
         conn = MagicMock()
-        conn.cursor.return_value.__enter__ = MagicMock(return_value=cursor)
-        conn.cursor.return_value.__exit__ = MagicMock(return_value=False)
+        cursor = conn.cursor.return_value
         mock_connect.return_value = conn
 
         log_sync_result(

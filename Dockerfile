@@ -12,6 +12,14 @@
 ARG CORE_TAG=v2.5.47
 ARG CORE_COMMIT
 ARG PHP_VER=20240924
+# The runtime packages of the final image. php-base, which the build stages
+# start from, installs the same set, so composer and pecl see the extensions
+# MISP runs with.
+ARG RUNTIME_PACKAGES="ca-certificates tini gettext procps openssl gpg gpg-agent \
+    php8.4 php8.4-apcu php8.4-curl php8.4-xml php8.4-intl php8.4-bcmath php8.4-mbstring \
+    php8.4-mysql php8.4-pgsql php8.4-redis php8.4-gd php8.4-fpm php8.4-zip php8.4-ldap \
+    libmagic1 libldap-common librdkafka1 libbrotli1 libsimdjson25 libzstd1 ssdeep libfuzzy2 \
+    unzip zip curl uuid-runtime jq python3-minimal libpython3.13-stdlib"
 
 # =============================================================================
 # Stage 1: php-base - Common runtime packages
@@ -19,46 +27,12 @@ ARG PHP_VER=20240924
 # debian:trixie-20260505-slim
 FROM debian:trixie-slim@sha256:b6e2a152f22a40ff69d92cb397223c906017e1391a73c952b588e51af8883bf8 AS php-base
 ENV DEBIAN_FRONTEND=noninteractive
+ARG RUNTIME_PACKAGES
 
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
-    rm -f /etc/apt/apt.conf.d/docker-clean && apt-get update && apt-get install -y --no-install-recommends \
-        ca-certificates \
-        tini \
-        gettext \
-        procps \
-        openssl \
-        gpg \
-        gpg-agent \
-        mariadb-client \
-        php8.4 \
-        php8.4-apcu \
-        php8.4-curl \
-        php8.4-xml \
-        php8.4-intl \
-        php8.4-bcmath \
-        php8.4-mbstring \
-        php8.4-mysql \
-        php8.4-pgsql \
-        php8.4-redis \
-        php8.4-gd \
-        php8.4-fpm \
-        php8.4-zip \
-        php8.4-ldap \
-        libmagic1 \
-        libldap-common \
-        librdkafka1 \
-        libbrotli1 \
-        libsimdjson25 \
-        libzstd1 \
-        ssdeep \
-        libfuzzy2 \
-        unzip \
-        zip \
-        curl \
-        uuid-runtime \
-        jq \
-        python3-minimal \
+    rm -f /etc/apt/apt.conf.d/docker-clean && apt-get update && \
+    apt-get install -y --no-install-recommends $RUNTIME_PACKAGES \
     && apt-get autoremove -y
 
 # =============================================================================
@@ -74,7 +48,7 @@ ARG CORE_COMMIT
 ENV COMPOSER_ALLOW_SUPERUSER=1
 
 WORKDIR /tmp
-RUN curl -o /tmp/composer.json https://raw.githubusercontent.com/MISP/MISP/${CORE_COMMIT:-${CORE_TAG}}/app/composer.json
+RUN curl -fsSL -o /tmp/composer.json https://raw.githubusercontent.com/MISP/MISP/${CORE_COMMIT:-${CORE_TAG}}/app/composer.json
 # SimpleBackgroundJobs replaces CakeResque; MISP loads the plugin only without
 # it (scripts/check_upstream.py, check cakeresque)
 RUN if ! jq -e '.require["iglocska/cake-resque"]' /tmp/composer.json >/dev/null; then \
@@ -213,63 +187,26 @@ FROM ghcr.io/astral-sh/uv:latest@sha256:b46b03ddfcfbf8f547af7e9eaefdf8a39c8cebcb
 # =============================================================================
 # Stage 6: final - Runtime image (non-root)
 # =============================================================================
-# Separate FROM (not php-base) so the final image carries only runtime deps.
-# php-base includes perl, gconv, video codecs etc. pulled in during apt install
-# that are only needed by build stages (phpize, adduser). Starting fresh and
-# installing only runtime packages saves ~75 MB.
+# A fresh FROM, not php-base: the strip below runs in the same layer as the
+# install, so what it removes (perl from adduser and debconf, gconv, the systemd
+# libraries, the Python test suite, docs and man pages) never enters a layer.
+# Deleted in a later layer on top of php-base, those files would still be pulled.
 # debian:trixie-20260505-slim
 FROM debian:trixie-slim@sha256:b6e2a152f22a40ff69d92cb397223c906017e1391a73c952b588e51af8883bf8 AS final
 ENV DEBIAN_FRONTEND=noninteractive
 
-ARG CORE_TAG
-ARG CORE_COMMIT
-ARG PHP_VER
+ARG RUNTIME_PACKAGES
 ARG MISP_UID=1000
 ARG MISP_GID=1000
 
-# Install runtime packages only, then strip transitive deps not needed at runtime:
-# - perl: pulled in by adduser/debconf, only needed during apt install
-# - gconv: libc6 charset converters, not needed by PHP/MISP
-# - systemd libs, python test suite, docs/man pages
+# The upgrade takes the security pocket's fixes for the base image's packages
+# (perl-base and the like, which no stage removes): the scan job fails a release
+# on a fixable CRITICAL finding
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
-    rm -f /etc/apt/apt.conf.d/docker-clean && apt-get update && apt-get install -y --no-install-recommends \
-        ca-certificates \
-        tini \
-        gettext \
-        procps \
-        openssl \
-        gpg \
-        gpg-agent \
-        php8.4 \
-        php8.4-apcu \
-        php8.4-curl \
-        php8.4-xml \
-        php8.4-intl \
-        php8.4-bcmath \
-        php8.4-mbstring \
-        php8.4-mysql \
-        php8.4-pgsql \
-        php8.4-redis \
-        php8.4-gd \
-        php8.4-fpm \
-        php8.4-zip \
-        php8.4-ldap \
-        libmagic1 \
-        libldap-common \
-        librdkafka1 \
-        libbrotli1 \
-        libsimdjson25 \
-        libzstd1 \
-        ssdeep \
-        libfuzzy2 \
-        unzip \
-        zip \
-        curl \
-        uuid-runtime \
-        jq \
-        python3-minimal \
-        libpython3.13-stdlib \
+    rm -f /etc/apt/apt.conf.d/docker-clean && apt-get update && \
+    apt-get upgrade -y --no-install-recommends && \
+    apt-get install -y --no-install-recommends $RUNTIME_PACKAGES \
     && apt-get autoremove -y \
     && rm -rf /root/.cache \
               /usr/lib/*/gconv \
@@ -292,8 +229,7 @@ RUN --mount=type=bind,from=uv,source=/uv,target=/tmp/uv \
 # Create non-root user
 RUN groupadd -g ${MISP_GID} misp && \
     useradd -u ${MISP_UID} -g ${MISP_GID} -m -s /bin/bash misp && \
-    update-alternatives --set php /usr/bin/php8.4 && \
-    mkdir -p /run/php && chown ${MISP_UID}:${MISP_GID} /run/php
+    update-alternatives --set php /usr/bin/php8.4
 
 # Install PHP PECL extensions
 COPY --from=php-build /pecl_libs.tar.gz /
@@ -322,11 +258,11 @@ COPY --from=misp-source --chown=${MISP_UID}:${MISP_GID} /srv/misp-config /srv/mi
 COPY --from=misp-source --chown=${MISP_UID}:${MISP_GID} /tmp/misp-dist-version /srv/misp-dist-version
 
 # Prepare writable directories (overlaid by emptyDir volumes in K8s / named volumes in Compose).
-# app/files ships in the image; MISP writes only to these four subdirectories of it.
+# app/files ships in the image; MISP writes only to these five subdirectories of it.
 RUN for dir in app/files/scripts/tmp app/files/certs app/files/terms app/files/img/orgs \
-               app/attachments app/tmp app/tmp/cache app/tmp/cache/models \
+               app/files/img/custom app/attachments app/tmp app/tmp/cache app/tmp/cache/models \
                app/tmp/cache/persistent app/tmp/cache/views app/tmp/logs \
-               app/Config app/webroot/img/orgs app/webroot/img/custom .gnupg; do \
+               app/Config .gnupg; do \
         mkdir -p /var/www/MISP/$dir && chown ${MISP_UID}:${MISP_GID} /var/www/MISP/$dir && chmod 0770 /var/www/MISP/$dir; \
     done
 

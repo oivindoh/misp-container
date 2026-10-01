@@ -61,15 +61,19 @@ class TestAliases:
 
 
 class TestHousekeeping:
-    def test_batches_until_below_threshold(self, monkeypatch):
-        calls = iter([25000, 3000, 50])
+    def test_batches_until_a_partial_batch(self, monkeypatch):
+        calls = iter([25000, 3000])
         executed = []
         monkeypatch.setattr(db, "execute", lambda sql, params=None: (executed.append(sql), next(calls))[1])
         with patch.dict(os.environ, {"DB_ENGINE": "mysql", "HOUSEKEEPING_JOBS_DAYS": "5"}):
             total = housekeeping.run("jobs")
-        assert total == 28050
-        assert len(executed) == 3
+        assert total == 28000
+        assert len(executed) == 2
         assert "date_created < NOW() - INTERVAL 5 DAY LIMIT 25000" in executed[0]
+
+    def test_an_empty_retention_variable_takes_the_default(self, monkeypatch):
+        with patch.dict(os.environ, {"HOUSEKEEPING_LOGS_DAYS": ""}):
+            assert housekeeping.retention_days("logs") == 30
 
     def test_postgres_delete_uses_subselect(self, monkeypatch):
         executed = []

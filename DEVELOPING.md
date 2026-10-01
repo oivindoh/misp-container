@@ -8,7 +8,7 @@
   `settings-upstream.yaml` (`mise run settings-update`).
 - New MISP release: the tracking workflow opens a PR with the bump, `files/composer.lock` and
   the catalogue; CI's strict checks tell you what changed.
-- Release: `mise run release [vX.Y.Z]`, then push master and the tag.
+- Release: `mise run release <hotfix|normal|breaking>`, then push master and the tag.
 
 ## Setup
 
@@ -75,6 +75,7 @@ revisit.
 | `cakelog-streams` | `bootstrap.default.php` | `LOG_BLOCK` in `misp_container/init.py` | configures a CakeLog file stream that the logging block does not drop |
 | `shell-streams` | CakePHP's `Shell.php` | `LOG_BLOCK` in `misp_container/init.py` | checks other stream names before it adds its console streams |
 | `relayed-files` | MISP's PHP code | `FILES` in `misp_container/logrelay.py` | writes a new file under `app/tmp/logs`, or stops writing one the relay follows |
+| `image-paths` | `Server.php`, `OrgImgHelper.php` | `misp.appVolumeMounts` in `deploy/chart/templates/_helpers.tpl`, `deploy/docker-compose.yml` | uploads org logos or custom images to, or reads them from, a directory the volumes do not mount |
 | `log-block-php` | PHP in the image | `LOG_BLOCK` in `misp_container/init.py` | cannot run the logging block, in either format |
 
 A new queue needs its name in `WORKER_QUEUES` and `NUM_WORKERS_<QUEUE>` in
@@ -113,8 +114,9 @@ as `normal`.
 3. Reads the chart version that the previous release published, from the `Chart.yaml` of its
    tag, and raises the part the kind names. The first release with a chart publishes the
    version `Chart.yaml` has.
-4. Sets `version` and `appVersion` in `deploy/chart/Chart.yaml` and the `MISP_IMAGE_TAG`
-   default of the Compose files.
+4. Sets `version` and `appVersion` in `deploy/chart/Chart.yaml`, the `MISP_IMAGE_TAG`
+   default of the Compose files, and the chart version in the `helm install` examples of
+   `README.md` and `docs/kubernetes.md`.
 5. Shows the plan and the diff. On a yes it commits and tags; on a no it restores the files.
 
 Publish the release. `--atomic` lands the branch and the tag together:
@@ -159,16 +161,18 @@ The YAML type of `value` (bool, int, string) is the type rendered into `config.p
 
 ### Version-gated defaults
 
-Re-apply a default when upgrading past a specific image version:
+Re-apply a default once more on the first configure run of an image at or past a version:
 
 ```yaml
-MISP.my_setting:
-  group: critical
-  value: new-secure-value
-  since: v2.5.40
+settings:
+  critical:
+    MISP.my_setting:
+      value: new-secure-value
+      since: v2.5.40
 ```
 
-The version gate only triggers once per image version. Env vars always take precedence.
+The run that applies it records the image version (`misp_docker.defaults_version`), so the
+next run leaves the setting to the operator again. Env vars always take precedence.
 
 ### Optional fields
 
@@ -268,14 +272,12 @@ files/
   composer.lock             # Resolved PHP dependencies for the current CORE_TAG (generated)
 scripts/
   release.py                # mise run release <hotfix|normal|breaking>
-  update-settings.sh        # Regenerates the catalogue from a live stack
-  update_settings.py        # The catalogue tool (--check in the integration suite)
+  update_settings.py        # The catalogue tool (--stack --write: mise run settings-update; --check in the integration suite)
   check_scheduler_coverage.py  # Fails when MISP's scheduler offers work no task covers
   check_upstream.py         # Fails when MISP changed something the image patches or depends on
   generate_agents_md.py     # Writes AGENTS.md from the tree (mise run agents-md)
   generate_docs.py          # Fills the generated regions of the docs (mise run docs)
   chart.py                  # Renders the Helm chart for the generators and the tests
-  check-chart.sh            # helm lint and every chart render against the schemas
   update-composer-lock.sh   # Resolves files/composer.lock through the composer-lock stage
 tests/
   test_*.py                 # Unit tests (see tests/README.md)

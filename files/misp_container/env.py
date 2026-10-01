@@ -71,6 +71,19 @@ ALIASES = {
     "APACHESECUREAUTH_LDAP_DEFAULT_ORG": "APACHESECUREAUTH_LDAPDEFAULTORG",
     "APACHESECUREAUTH_LDAP_EMAIL_FIELD": "APACHESECUREAUTH_LDAPEMAILFIELD",
     "APACHESECUREAUTH_LDAP_STARTTLS": "APACHESECUREAUTH_STARTTLS",
+    # Header authentication (the custom_auth group of settings.yaml)
+    "CUSTOM_AUTH_ENABLE": "PLUGIN_CUSTOMAUTH_ENABLE",
+    "CUSTOM_AUTH_HEADER": "PLUGIN_CUSTOMAUTH_HEADER",
+    "CUSTOM_AUTH_USE_HEADER_NAMESPACE": "PLUGIN_CUSTOMAUTH_USE_HEADER_NAMESPACE",
+    "CUSTOM_AUTH_REQUIRED": "PLUGIN_CUSTOMAUTH_REQUIRED",
+    "CUSTOM_AUTH_HEADER_NAMESPACE": "PLUGIN_CUSTOMAUTH_HEADER_NAMESPACE",
+    "CUSTOM_AUTH_NAME": "PLUGIN_CUSTOMAUTH_NAME",
+    "CUSTOM_AUTH_DISABLE_LOGOUT": "PLUGIN_CUSTOMAUTH_DISABLE_LOGOUT",
+    "CUSTOM_AUTH_ONLY_ALLOW_SOURCE": "PLUGIN_CUSTOMAUTH_ONLY_ALLOW_SOURCE",
+    "CUSTOM_AUTH_CUSTOM_PASSWORD_RESET": "PLUGIN_CUSTOMAUTH_CUSTOM_PASSWORD_RESET",
+    "CUSTOM_AUTH_CUSTOM_LOGOUT": "PLUGIN_CUSTOMAUTH_CUSTOM_LOGOUT",
+    # The logout redirect is one setting whichever plugin logs the user in
+    "OIDC_LOGOUT_URL": "PLUGIN_CUSTOMAUTH_CUSTOM_LOGOUT",
 }
 
 
@@ -79,16 +92,8 @@ def apply_defaults():
 
     MISP setting defaults live in settings.yaml (loaded by the config engine).
     Container config defaults live in base.env (read by the Helm chart and Compose).
-    This function handles the WORKERS shorthand and the derived variables.
+    This function handles the derived variables and the aliases.
     """
-    # Worker queue counts: WORKERS env var as shorthand for all queues
-    workers_default = os.environ.get("WORKERS", "5")
-    for queue in ("DEFAULT", "PRIO", "EMAIL", "CACHE"):
-        key = f"NUM_WORKERS_{queue}"
-        if key not in os.environ:
-            os.environ[key] = workers_default
-    os.environ.setdefault("NUM_WORKERS_UPDATE", "1")
-
     for source, targets in DERIVED.items():
         value = os.environ.get(source, "")
         if value:

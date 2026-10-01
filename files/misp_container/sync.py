@@ -37,7 +37,28 @@ ROLE_FIELDS = ("name", "permission", "perm_site_admin", "perm_admin", "perm_sync
 
 TAG_DEFAULTS = {"colour": "#004daa", "exportable": True, "hide_tag": False}
 
+# The user lists of a team: the role a list gives its users (None: the team's
+# default_role) and whether they log in through an external provider
+USER_KINDS = {
+    "users": (None, False),
+    "feide_users": (None, True),
+    "sync_users": ("Sync user", False),
+    "service_users": (None, False),
+}
+USER_LIST_KEYS = tuple(USER_KINDS)
+
+# The lists apply() reconciles; a config without any of them is empty
+RESOURCE_KEYS = ("teams", "roles", "tags", "taxonomies", "warninglists", "sharing_groups")
+
 import re
+
+
+class ConfigError(Exception):
+    """The org config cannot be loaded as the deployment set it up."""
+
+
+def is_empty(config: dict) -> bool:
+    return not any(config.get(key) for key in RESOURCE_KEYS)
 
 
 def _expand_env(value: str) -> str:
@@ -105,7 +126,11 @@ def _load_local(path: str) -> dict:
 
 
 def _fetch_remote(url: str, token: str) -> dict:
-    """Fetch config from an HTTPS endpoint with bearer token."""
+    """Fetch config from an HTTPS endpoint with bearer token.
+
+    A remote source that is set is part of the truth: a run without it would
+    disable every user it places, so a failed fetch fails the run.
+    """
     headers = {"Accept": "application/json, application/yaml"}
     if token:
         headers["Authorization"] = f"Bearer {token}"
@@ -118,11 +143,7 @@ def _fetch_remote(url: str, token: str) -> dict:
                 return json.loads(body)
             return yaml.safe_load(body) or {}
     except Exception as e:
-        log.warning("failed to fetch remote config from %s: %s", url, e)
-        return {}
-
-
-USER_LIST_KEYS = ("users", "feide_users", "sync_users", "service_users")
+        raise ConfigError(f"cannot fetch the remote config from {url}: {e}") from e
 
 
 def _merge_configs(local: dict, remote: dict) -> dict:
@@ -250,19 +271,10 @@ def _normalize(raw: dict) -> dict:
             "servers": [{**SERVER_DEFAULTS, **s} for s in team.get("servers", [])],
             "tags": [_normalize_tag(tg) for tg in team.get("tags", [])],
         }
-        # Apply team's default_role and disabled default to all user types
-        for u in t["users"]:
-            u.setdefault("role", default_role)
-            u.setdefault("disabled", False)
-        for u in t["feide_users"]:
-            u.setdefault("role", default_role)
-            u.setdefault("disabled", False)
-        for u in t["sync_users"]:
-            u.setdefault("role", "Sync user")
-            u.setdefault("disabled", False)
-        for u in t["service_users"]:
-            u.setdefault("role", default_role)
-            u.setdefault("disabled", False)
+        for key, (role, _) in USER_KINDS.items():
+            for u in t[key]:
+                u.setdefault("role", role or default_role)
+                u.setdefault("disabled", False)
         config["teams"].append(t)
 
     return config
@@ -461,33 +473,12 @@ def _apply_users(client: MISPClient, state: MISPState,
             log.warning("skipping users for unknown org %s", team["uuid"])
             continue
 
-        # Regular users
-        for user in team.get("users", []):
-            managed_emails.add(user["email"].lower())
-            c = _apply_one_user(client, state, user, org_id, external_auth=False)
-            if c in counts:
-                counts[c] += 1
-
-        # Feide users (external auth)
-        for user in team.get("feide_users", []):
-            managed_emails.add(user["email"].lower())
-            c = _apply_one_user(client, state, user, org_id, external_auth=True)
-            if c in counts:
-                counts[c] += 1
-
-        # Sync users
-        for user in team.get("sync_users", []):
-            managed_emails.add(user["email"].lower())
-            c = _apply_one_user(client, state, user, org_id, external_auth=False)
-            if c in counts:
-                counts[c] += 1
-
-        # Service users
-        for user in team.get("service_users", []):
-            managed_emails.add(user["email"].lower())
-            c = _apply_one_user(client, state, user, org_id, external_auth=False)
-            if c in counts:
-                counts[c] += 1
+        for key, (_, external_auth) in USER_KINDS.items():
+            for user in team.get(key, []):
+                managed_emails.add(user["email"].lower())
+                c = _apply_one_user(client, state, user, org_id, external_auth=external_auth)
+                if c in counts:
+                    counts[c] += 1
 
     return counts, managed_emails
 
@@ -558,17 +549,40 @@ def _apply_one_user(client: MISPClient, state: MISPState,
     return "updated" if changes else "unchanged"
 
 
+def _has_authkey(user_id: int, authkey: str) -> bool:
+    """Whether a live auth_keys row of the user already holds this key."""
+    import bcrypt
+    from . import db
+
+    rows = db.dict_query(
+        "SELECT authkey FROM auth_keys WHERE user_id = %s AND authkey_start = %s AND authkey_end = %s "
+        f"AND (expiration = 0 OR expiration > {db.now_epoch()})",
+        (user_id, authkey[:4], authkey[-4:]),
+    )
+    for row in rows:
+        # MISP writes PHP's $2y$ prefix; the bcrypt module checks $2b$
+        stored = str(row["authkey"]).replace("$2y$", "$2b$", 1).encode()
+        if bcrypt.checkpw(authkey.encode(), stored):
+            return True
+    return False
+
+
 def _set_user_authkey(user_id: int, authkey: str):
     """Set a specific authkey for a user by writing directly to the DB.
 
     MISP's API does not allow setting custom authkeys (it always generates
     random ones). We bypass this by hashing the key with bcrypt and inserting
-    into the auth_keys table directly.
+    into the auth_keys table directly. A key the table already holds is left
+    as it is: the file is the truth for this user's key, and every run would
+    otherwise replace the row.
     """
     try:
         import bcrypt
         import uuid as uuid_mod
         from . import db
+
+        if _has_authkey(user_id, authkey):
+            return
 
         # Use $2y$ prefix (PHP bcrypt) instead of Python's $2b$ for compatibility
         # with PHP's password_verify() used by MISP
@@ -839,7 +853,9 @@ def _apply_sharing_groups(client: MISPClient, state: MISPState,
     counts = {"created": 0, "updated": 0}
 
     for sg in desired_sgs:
-        sg_data = {k: sg.get(k, "") for k in SG_FIELDS}
+        # Only the fields the file sets: MISP keeps its defaults for the rest, and
+        # an empty string sent for them would differ from those on every run
+        sg_data = {k: sg[k] for k in SG_FIELDS if k in sg}
         if "uuid" in sg:
             sg_data["uuid"] = _validate_uuid(sg["uuid"], f"sharing group '{sg['name']}'")
 
@@ -859,8 +875,7 @@ def _apply_sharing_groups(client: MISPClient, state: MISPState,
             counts["created"] += 1
         else:
             sg_id = existing["id"]
-            changes = {k: sg_data[k] for k in SG_FIELDS
-                       if str(existing.get(k, "")) != str(sg_data[k])}
+            changes = {k: v for k, v in sg_data.items() if not _values_equal(v, existing.get(k, ""))}
             if changes:
                 log.info("updating sharing group '%s': %s", sg["name"], list(changes.keys()))
                 client.post(f"/sharing_groups/edit/{sg_id}", {"SharingGroup": changes})
@@ -918,9 +933,16 @@ def _sync_sg_orgs(client: MISPClient, state: MISPState,
 
 
 def _disable_unmanaged_users(client: MISPClient, state: MISPState,
-                             managed_emails: set):
-    """Disable users not in managed set (never touches user ID 1)."""
+                             managed_emails: set | None):
+    """Disable users not in managed set (never touches user ID 1).
+
+    None means the users step failed before it knew what it manages, so
+    nothing is unmanaged.
+    """
     count = 0
+    if managed_emails is None:
+        log.warning("the users step failed; no user is disabled this run")
+        return count
 
     for email, user in state.users.items():
         if email in managed_emails:
@@ -941,9 +963,12 @@ def _disable_unmanaged_users(client: MISPClient, state: MISPState,
 
 
 def _disable_unmanaged_servers(client: MISPClient, state: MISPState,
-                               managed_urls: set):
-    """Disable push/pull on servers not in managed set."""
+                               managed_urls: set | None):
+    """Disable push/pull on servers not in managed set; None (the servers step failed) disables none."""
     count = 0
+    if managed_urls is None:
+        log.warning("the servers step failed; no server is disabled this run")
+        return count
     for url, server in state.servers.items():
         if url in managed_urls:
             continue
@@ -968,9 +993,7 @@ def apply(client: MISPClient | None = None, config: dict | None = None) -> dict:
     if not config:
         config = load_config()
 
-    if not config.get("teams") and not config.get("taxonomies") and \
-       not config.get("tags") and not config.get("sharing_groups") and \
-       not config.get("warninglists") and not config.get("roles"):
+    if is_empty(config):
         log.info("no org config to apply")
         return {}
 
@@ -1020,7 +1043,7 @@ def apply(client: MISPClient | None = None, config: dict | None = None) -> dict:
     except Exception as e:
         log.error("failed applying users: %s", e)
         summary["users"] = {"error": str(e)}
-        managed_emails = set()
+        managed_emails = None
 
     # 5. Servers
     state.refresh_users(client)
@@ -1030,7 +1053,7 @@ def apply(client: MISPClient | None = None, config: dict | None = None) -> dict:
     except Exception as e:
         log.error("failed applying servers: %s", e)
         summary["servers"] = {"error": str(e)}
-        managed_urls = set()
+        managed_urls = None
 
     # 6. Taxonomies
     try:

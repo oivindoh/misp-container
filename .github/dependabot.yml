@@ -6,8 +6,27 @@ updates:
     schedule:
       interval: weekly
 
-  # Track Dockerfile base image updates
+  # The base images of the Dockerfile
   - package-ecosystem: docker
     directory: /
+    schedule:
+      interval: weekly
+
+  # The MariaDB, PostgreSQL and Redis images of the Compose stacks. The chart pins
+  # the same images in values.yaml: tests/test_chart.py fails until it follows.
+  - package-ecosystem: docker-compose
+    directories:
+      - /deploy
+      - /tests
+    schedule:
+      interval: weekly
+
+  # The Python pins: the repository's own (uv.lock) and the images' (files/requirements-*.txt)
+  - package-ecosystem: uv
+    directory: /
+    schedule:
+      interval: weekly
+  - package-ecosystem: pip
+    directory: /files
     schedule:
       interval: weekly

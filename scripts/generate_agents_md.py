@@ -129,10 +129,7 @@ def kubernetes() -> str:
         rendered.setdefault(template, []).append(f"{doc['kind']} `{name}`")
     templates = [(f"`{p.relative_to(chart.CHART / 'templates')}`", ", ".join(rendered.get(str(p.relative_to(chart.CHART)), [])),
                   comment_block(p)) for p in sorted((chart.CHART / "templates").rglob("*.yaml"))]
-    comments = chart.value_comments()
-    parts = chart.components()
-    values = [(f"`{key}`", comments.get(key, "")) for key in comments if key not in parts]
-    components = [(f"`{key}`", comments.get(key, "")) for key in parts]
+    values, components = chart.value_rows()
     return ("## Kubernetes: the Helm chart in `deploy/chart/`\n\n" + comment_block(chart.CHART / "values.yaml")
             + "\n\n" + table(("Template", "Renders, every component on", "Note"), templates)
             + "\n\nValues:\n\n" + table(("Value", "Is"), values)

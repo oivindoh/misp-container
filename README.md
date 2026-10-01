@@ -93,6 +93,7 @@ storage, network policies and periodic tasks.
 | [docs/org-sync.md](docs/org-sync.md) | Organisations, users, servers, tags and taxonomies from a YAML file |
 | [docs/metrics.md](docs/metrics.md) | The Prometheus metrics and example alerts |
 | [docs/migration.md](docs/migration.md) | Copying an existing MISP database and its attachments into a deployment |
+| [docs/operations.md](docs/operations.md) | Backup and restore, keys and secrets, upgrades |
 | [DEVELOPING.md](DEVELOPING.md) | The settings engine, the tests, new MISP releases, the release process |
 | [tests/README.md](tests/README.md) | The test suites |
 | [AGENTS.md](AGENTS.md) | A map of the tree for agents, generated from the tree (`mise run agents-md`) |

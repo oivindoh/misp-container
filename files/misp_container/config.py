@@ -81,18 +81,9 @@ class SettingSpec:
         return self.env_value if self.is_envar else self.default_value
 
     @property
-    def is_sensitive(self) -> bool:
-        return self.sensitive
-
-    @property
     def print_value(self) -> str:
         """Value safe for logging. Sensitive values are redacted."""
         return _redact(self.effective_value) if self.sensitive else self.effective_value
-
-    @property
-    def setting_type(self) -> str:
-        """Backward compat for code that checks setting_type."""
-        return "envar" if self.is_envar else "default"
 
     @property
     def typed_value(self):
@@ -157,11 +148,15 @@ class SettingsCache:
         self.last_defaults_version: str = ""
 
     def load(self) -> None:
-        """Load all settings from system_settings table and config.php."""
+        """Load all settings from system_settings table and config.php.
+
+        A failed read raises: an empty result would read as "no settings" and
+        every default would be applied over what the operator changed.
+        """
         self.settings = {}
 
         # Load from DB
-        raw = db.query("SELECT setting, value FROM system_settings;")
+        raw = db.query("SELECT setting, value FROM system_settings;", check=True)
         db_count = 0
         for line in raw.splitlines():
             parts = line.split("\t", 1)
@@ -185,14 +180,16 @@ class SettingsCache:
                     if key not in self.settings:
                         self.settings[key] = str(value)
                         php_count += 1
-        except Exception:
-            pass
+            else:
+                log.warning("config.php could not be read: %s", result.stderr.strip() or result.stdout.strip())
+        except Exception as e:
+            log.warning("config.php could not be read: %s", e)
         log.info("loaded %d DB settings + %d config.php settings", db_count, php_count)
 
     def load_defaults_version(self) -> None:
         """Load the last-applied defaults version from DB."""
         raw = db.query(
-            "SELECT value FROM system_settings WHERE setting='misp_docker.defaults_version';"
+            "SELECT value FROM system_settings WHERE setting='misp_docker.defaults_version';", check=True,
         )
         self.last_defaults_version = raw.strip().strip('"')
         image_version = _read_file(DIST_VERSION_FILE, "unknown")
@@ -229,10 +226,6 @@ class SettingsCache:
 
         for spec in specs:
             self.enforced.add(spec.name)
-
-            if spec.blank_protection and not spec.effective_value:
-                continue
-
             db_value = self.normalise(self.get(spec.name)) if self.has(spec.name) else "__UNSET__"
 
             if db_value == spec.effective_value:
@@ -270,9 +263,10 @@ class SettingsCache:
                 applied += 1
                 continue
 
-            # Version-gated upgrade
+            # Version-gated upgrade: this image is at or past since, and the last
+            # configure run that applied defaults was before it
             if (spec.since
-                    and _version_newer(spec.since, image_version)
+                    and not _version_newer(spec.since, image_version)
                     and _version_newer(spec.since, self.last_defaults_version)):
                 log.info("upgrading default %s '%s' to '%s' (since %s)", group, spec.name, spec.print_value, spec.since)
                 cake.set_setting(spec.name, spec.effective_value, force=spec.force)
@@ -286,7 +280,7 @@ class SettingsCache:
 
 
 # Generated catalogue of every MISP setting the curated file does not name
-# (scripts/update-settings.sh). Its entries are track_only.
+# (scripts/update_settings.py --stack). Its entries are track_only.
 UPSTREAM_GROUP = "upstream"
 UPSTREAM_FILE = "settings-upstream.yaml"
 
@@ -364,6 +358,8 @@ def apply_settings_fast(group: str, cache: SettingsCache, all_specs: dict[str, l
 # encryption key, python_bin, attachments_dir, system_setting_db and others),
 # so every pod renders these from settings.yaml and env at start.
 CONFIG_PHP_GROUPS = ("minimum_config", "db_enable")
+# The S3 group joins them while the bucket name is set; nothing else applies it
+S3_GROUP, S3_SWITCH = "s3", "PLUGIN_S3_BUCKET_NAME"
 
 
 def php_literal(value) -> str:
@@ -429,8 +425,8 @@ def config_php_specs(all_specs: dict[str, list[SettingSpec]]) -> list[SettingSpe
     specs: list[SettingSpec] = []
     for group in CONFIG_PHP_GROUPS:
         specs.extend(all_specs.get(group, []))
-    if os.environ.get("PLUGIN_S3_BUCKET_NAME"):
-        specs.extend(all_specs.get("s3", []))
+    if os.environ.get(S3_SWITCH):
+        specs.extend(all_specs.get(S3_GROUP, []))
     for group, switch in CONDITIONAL_CONFIG_PHP_GROUPS:
         if os.environ.get(switch, "").lower() == "true":
             specs.extend(all_specs.get(group, []))

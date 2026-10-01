@@ -10,6 +10,17 @@ x-test-env: &test-env
     - chart/files/base.env
     - chart/files/secrets-db.env
     - chart/files/secrets-app.env
+    - compose.env
+    - compose-secrets.env
+    - ../tests/test-compose.env
+    - ../tests/test-compose-secrets.env
+
+# configure and sync act as the admin: the same plus secrets-admin.env
+x-test-env-admin: &test-env-admin
+  env_file:
+    - chart/files/base.env
+    - chart/files/secrets-db.env
+    - chart/files/secrets-app.env
     - chart/files/secrets-admin.env
     - compose.env
     - compose-secrets.env
@@ -20,7 +31,7 @@ services:
   # read_only on all our containers to catch filesystem write issues
   # before they hit Kubernetes (readOnlyRootFilesystem: true)
   configure:
-    <<: *test-env
+    <<: *test-env-admin
     read_only: true
   web:
     <<: *test-env
@@ -36,28 +47,12 @@ services:
       - "28080:8080"
 
   sync:
+    <<: *test-env-admin
     read_only: true
-    env_file:
-      - chart/files/base.env
-      - chart/files/secrets-db.env
-      - chart/files/secrets-app.env
-      - chart/files/secrets-admin.env
-      - compose.env
-      - compose-secrets.env
-      - ../tests/test-compose.env
-      - ../tests/test-compose-secrets.env
 
   metrics:
+    <<: *test-env
     read_only: true
-    env_file:
-      - chart/files/base.env
-      - chart/files/secrets-db.env
-      - chart/files/secrets-app.env
-      - chart/files/secrets-admin.env
-      - compose.env
-      - compose-secrets.env
-      - ../tests/test-compose.env
-      - ../tests/test-compose-secrets.env
     ports:
       - "19191:9191"
 

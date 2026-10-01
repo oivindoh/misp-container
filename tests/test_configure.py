@@ -60,3 +60,16 @@ class TestCheckIdentity:
         """ChangeMe-... is the documented Compose demo password, not a placeholder."""
         with patch.dict(os.environ, {**GOOD, "ADMIN_PASSWORD": "ChangeMe-Str0ng!Pass#2026"}):
             configure.check_identity()
+
+
+class TestEveryGroupIsApplied:
+    def test_every_group_of_settings_yaml_is_named_by_the_engine(self):
+        """A group nobody applies is a set of env vars that do nothing."""
+        from misp_container import config
+        repo = os.path.join(os.path.dirname(__file__), "..")
+        groups = set(config.load_settings_yaml(os.path.join(repo, "files/misp-config/settings.yaml")))
+        groups.discard(config.UPSTREAM_GROUP)
+        applied = (set(configure.DB_GROUPS) | set(configure.SWITCHED_GROUPS) | {"gpg"}
+                   | set(config.CONFIG_PHP_GROUPS) | {config.S3_GROUP}
+                   | {group for group, _ in config.CONDITIONAL_CONFIG_PHP_GROUPS})
+        assert groups <= applied, f"never applied: {sorted(groups - applied)}"

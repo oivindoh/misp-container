@@ -17,6 +17,7 @@ from misp_container.init import prepare, check_writable
 from misp_container.log import setup as setup_logging, get as getlog
 
 SUPERVISORD_CONF = "/tmp/supervisord-workers.conf"
+PHP_CLI_INI_DIR = "/tmp/php-cli"
 
 WORKER_TEMPLATE = """
 [program:{name}]
@@ -54,8 +55,6 @@ def generate_supervisord_config():
     sv_user = env("SIMPLEBACKGROUNDJOBS_SUPERVISOR_USER")
     sv_pass = env("SIMPLEBACKGROUNDJOBS_SUPERVISOR_PASSWORD")
 
-    sv_port = env("SIMPLEBACKGROUNDJOBS_SUPERVISOR_PORT")
-
     header = f"""[supervisord]
 nodaemon=true
 logfile=/dev/null
@@ -86,24 +85,39 @@ password={sv_pass}
     stopwait = env("WORKER_STOP_GRACE", "300")
 
     sections = [header]
+    worker_programs = []
     for name in WORKER_QUEUES:
         numprocs = env(f"NUM_WORKERS_{name.upper()}", "0")
         if int(numprocs) > 0:
             sections.append(WORKER_TEMPLATE.format(
                 name=name, misp_base=MISP_BASE, cake=CAKE, numprocs=numprocs, stopwait=stopwait,
             ))
+            worker_programs.append(name)
 
     # Outside the worker group: MISP must not list or manage it as a worker
     sections.append(LOGRELAY_TEMPLATE.format(python=sys.executable))
 
     # MISP's BackgroundJobsTool finds its workers by this group name, for the
     # diagnostic page and for restarts
-    worker_programs = [name for name in WORKER_QUEUES
-                       if int(env(f"NUM_WORKERS_{name.upper()}", "0")) > 0]
     if worker_programs:
         sections.append(f"\n[group:{WORKER_GROUP}]\nprograms={','.join(worker_programs)}\n")
 
     Path(SUPERVISORD_CONF).write_text("".join(sections))
+
+
+def limit_worker_memory():
+    """A memory limit per worker process, in place of the CLI's unlimited default.
+
+    Debian's CLI php.ini sets memory_limit -1, so one runaway job would grow until
+    the kubelet kills the pod with every worker in it. With a limit the job fails
+    alone. PHP appends the directory to its scan path when the value starts with
+    a colon; supervisord and the workers inherit the variable.
+    """
+    limit = env("WORKER_MEMORY_LIMIT") or env("PHP_MEMORY_LIMIT", "2048M")
+    Path(PHP_CLI_INI_DIR).mkdir(parents=True, exist_ok=True)
+    Path(PHP_CLI_INI_DIR, "memory.ini").write_text(f"memory_limit = {limit}\n")
+    os.environ["PHP_INI_SCAN_DIR"] = f":{PHP_CLI_INI_DIR}"
+    log.info("worker memory limit %s per process", limit)
 
 
 # -- Main --
@@ -120,6 +134,7 @@ if not env("PLUGIN_S3_BUCKET_NAME"):
 db.wait_for_db(retries=60, wait_seconds=5)
 db.wait_for_live()
 generate_supervisord_config()
+limit_worker_memory()
 
 log.info("starting background workers via supervisord")
 
@@ -151,12 +166,19 @@ def _tcp_proxy(port):
         while True:
             try:
                 client, _ = srv.accept()
-                backend = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-                backend.connect(SUPERVISOR_SOCK)
-                threading.Thread(target=relay, args=(client, backend), daemon=True).start()
-                threading.Thread(target=relay, args=(backend, client), daemon=True).start()
             except OSError:
-                pass
+                continue
+            backend = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            try:
+                backend.connect(SUPERVISOR_SOCK)
+            except OSError:
+                # supervisord is not listening yet: refuse the client instead of
+                # leaving it to hang on an open connection
+                client.close()
+                backend.close()
+                continue
+            threading.Thread(target=relay, args=(client, backend), daemon=True).start()
+            threading.Thread(target=relay, args=(backend, client), daemon=True).start()
 
     # Try IPv6 dual-stack first (accepts IPv4 via mapped addresses on Linux)
     for family, addr in [(socket.AF_INET6, "::"), (socket.AF_INET, "0.0.0.0")]:
@@ -173,7 +195,10 @@ def _tcp_proxy(port):
             return
         except OSError:
             continue
-    log.warning("could not start supervisor TCP proxy on port %d", port)
+    # Without the port the web pods cannot list, start or stop the workers, and
+    # the readiness probe tests it
+    log.error("could not listen on port %d for the supervisor TCP proxy", port)
+    sys.exit(1)
 
 sv_port_num = int(env("SIMPLEBACKGROUNDJOBS_SUPERVISOR_PORT"))
 _tcp_proxy(sv_port_num)

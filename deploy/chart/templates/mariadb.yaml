@@ -8,18 +8,15 @@ metadata:
   name: mysql
   labels:
     {{- include "misp.labels" (dict "root" . "name" "mysql") | nindent 4 }}
-    app: mysql
 spec:
   replicas: 1
   serviceName: mysql
   selector:
     matchLabels:
-      app: mysql
       app.kubernetes.io/name: mysql
   template:
     metadata:
       labels:
-        app: mysql
         app.kubernetes.io/name: mysql
     spec:
       securityContext:

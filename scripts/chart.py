@@ -43,6 +43,14 @@ def value_comments() -> dict[str, str]:
     return comments
 
 
+def value_rows() -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
+    """(values, components): the (`key`, comment) rows of values.yaml for the docs, the components apart."""
+    comments = value_comments()
+    parts = components()
+    values = [(f"`{key}`", text) for key, text in comments.items() if key not in parts]
+    return values, [(f"`{key}`", comments.get(key, "")) for key in parts]
+
+
 def template_component(template: str) -> str:
     """The component a template belongs to, from its header ("# The <key> component"); empty for the rest."""
     match = re.match(r"# The (\w+) component", (CHART / template).read_text())
@@ -50,15 +58,20 @@ def template_component(template: str) -> str:
 
 
 @functools.lru_cache(maxsize=None)
-def _render(args: tuple[str, ...]) -> tuple[tuple[str, dict], ...]:
+def _render_text(args: tuple[str, ...]) -> str:
     if not shutil.which("helm"):
         raise RuntimeError("helm is not on PATH: run mise install in the repository")
     result = subprocess.run(["helm", "template", "misp", str(CHART), "--namespace", "misp", *args],
                             capture_output=True, text=True)
     if result.returncode:
         raise RuntimeError(f"helm template {' '.join(args)} failed:\n{result.stderr}")
+    return result.stdout
+
+
+@functools.lru_cache(maxsize=None)
+def _render(args: tuple[str, ...]) -> tuple[tuple[str, dict], ...]:
     found = []
-    for chunk in re.split(r"^---\s*$", result.stdout, flags=re.M):
+    for chunk in re.split(r"^---\s*$", _render_text(args), flags=re.M):
         source = SOURCE.search(chunk)
         doc = yaml.safe_load(chunk)
         if source and isinstance(doc, dict):
@@ -66,12 +79,21 @@ def _render(args: tuple[str, ...]) -> tuple[tuple[str, dict], ...]:
     return tuple(found)
 
 
-def render(*sets: str, every_component: bool = False) -> list[tuple[str, dict]]:
-    """[(template, object)] of helm template with these --set values, or with every component on."""
+def _args(sets: tuple[str, ...], every_component: bool) -> tuple[str, ...]:
     args: list[str] = []
     for value in [*(f"{c}.enabled=true" for c in components() if every_component), *sets]:
         args += ["--set", value]
-    return list(_render(tuple(args)))
+    return tuple(args)
+
+
+def render_text(*sets: str, every_component: bool = False) -> str:
+    """The YAML helm template prints with these --set values, or with every component on."""
+    return _render_text(_args(sets, every_component))
+
+
+def render(*sets: str, every_component: bool = False) -> list[tuple[str, dict]]:
+    """[(template, object)] of helm template with these --set values, or with every component on."""
+    return list(_render(_args(sets, every_component)))
 
 
 def objects(*sets: str, every_component: bool = False) -> list[dict]:

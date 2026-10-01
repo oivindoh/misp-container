@@ -6,6 +6,19 @@ x-target-env: &target-env
     - chart/files/base.env
     - chart/files/secrets-db.env
     - chart/files/secrets-app.env
+    - compose.env
+    - compose-secrets.env
+    - ../tests/test-compose.env
+    - ../tests/test-compose-secrets.env
+    - ../tests/postgres.env
+    - ../tests/migrate-target-s3.env
+
+# configure and sync act as the admin: the same plus secrets-admin.env
+x-target-env-admin: &target-env-admin
+  env_file:
+    - chart/files/base.env
+    - chart/files/secrets-db.env
+    - chart/files/secrets-app.env
     - chart/files/secrets-admin.env
     - compose.env
     - compose-secrets.env
@@ -16,7 +29,7 @@ x-target-env: &target-env
 
 services:
   configure:
-    <<: *target-env
+    <<: *target-env-admin
     depends_on:
       postgres:
         condition: service_healthy
@@ -25,6 +38,6 @@ services:
   worker:
     <<: *target-env
   sync:
-    <<: *target-env
+    <<: *target-env-admin
   metrics:
     <<: *target-env

@@ -10,11 +10,12 @@ Default port: 9191
 
 import socket
 import sys
+import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
 from misp_container.env import apply_defaults
 from misp_container.db import wait_for_db
-from misp_container.metrics import collect_all
+from misp_container.metrics import collect_all, run_network_checks
 from misp_container.log import setup as setup_logging, get as getlog
 
 setup_logging("metrics")
@@ -56,6 +57,10 @@ def main():
     log.info("MISP metrics exporter starting")
     apply_defaults()
     wait_for_db(retries=30, wait_seconds=5)
+
+    # The partner checks take seconds per unreachable server; they run beside the
+    # server, so a scrape and the probes never wait for them
+    threading.Thread(target=run_network_checks, name="partner-checks", daemon=True).start()
 
     # Try IPv6 dual-stack first (K8s), fall back to IPv4 (Docker)
     try:

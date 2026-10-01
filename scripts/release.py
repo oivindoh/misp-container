@@ -68,6 +68,15 @@ def set_image_default(text: str, image_tag: str) -> str:
     return IMAGE_DEFAULT.sub(lambda m: f"{m.group(1)}:${{MISP_IMAGE_TAG:-{image_tag}}}", text)
 
 
+# The docs whose helm install examples carry the chart version (tests/test_docs.py checks them)
+DOC_FILES = [REPO / "README.md", REPO / "docs/kubernetes.md"]
+INSTALL_VERSION = re.compile(r"(helm install .*?--version )\S+")
+
+
+def set_install_version(text: str, chart_version: str) -> str:
+    return INSTALL_VERSION.sub(lambda m: f"{m.group(1)}{chart_version}", text)
+
+
 def git(*args: str) -> str:
     return subprocess.run(["git", *args], cwd=REPO, check=True, capture_output=True, text=True).stdout.strip()
 
@@ -114,6 +123,8 @@ def main(argv: list[str]) -> int:
     CHART_YAML.write_text(set_chart(CHART_YAML.read_text(), chart_version, image_tag))
     for path in COMPOSE_FILES:
         path.write_text(set_image_default(path.read_text(), image_tag))
+    for path in DOC_FILES:
+        path.write_text(set_install_version(path.read_text(), chart_version))
 
     print(f"Release kind:   {kind}")
     print(f"Previous:       {previous or 'none'}, chart {previous_chart or 'none'}")
@@ -122,12 +133,13 @@ def main(argv: list[str]) -> int:
     print(f"Chart version:  {chart_version}")
     print()
     print(git("diff", "--stat"))
+    changed = [str(CHART_YAML), *map(str, COMPOSE_FILES), *map(str, DOC_FILES)]
     if input(f"\nCommit and tag {tag}? [y/N] ").strip().lower() != "y":
-        git("checkout", "--", str(CHART_YAML), *map(str, COMPOSE_FILES))
+        git("checkout", "--", *changed)
         print("Aborted; the files are as they were.")
         return 1
 
-    git("add", str(CHART_YAML), *map(str, COMPOSE_FILES))
+    git("add", *changed)
     git("commit", "--quiet", "-m", f"release {tag}, chart {chart_version}")
     git("tag", tag)
     print(f"\nDone. To publish:\n  git push --atomic origin master {tag}")

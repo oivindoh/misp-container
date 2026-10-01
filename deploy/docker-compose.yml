@@ -36,6 +36,18 @@ x-misp-common: &misp-common
     - chart/files/base.env
     - chart/files/secrets-db.env
     - chart/files/secrets-app.env
+    - compose.env
+    - compose-secrets.env
+  user: "1000:1000"
+
+# The services that act as the admin: the same plus secrets-admin.env, which
+# web, worker and metrics never see (as in the chart)
+x-misp-admin: &misp-admin
+  <<: *misp-image
+  env_file:
+    - chart/files/base.env
+    - chart/files/secrets-db.env
+    - chart/files/secrets-app.env
     - chart/files/secrets-admin.env
     - compose.env
     - compose-secrets.env
@@ -44,13 +56,14 @@ x-misp-common: &misp-common
 services:
   # -- One-shot configure: schema, settings, admin, GPG, sets MISP.live -----
   configure:
-    <<: *misp-common
+    <<: *misp-admin
     command: ["python3", "/entrypoint-configure.py"]
     volumes:
       - misp-files-scripts-tmp:/var/www/MISP/app/files/scripts/tmp
       - misp-files-certs:/var/www/MISP/app/files/certs
       - misp-files-terms:/var/www/MISP/app/files/terms
       - misp-files-img-orgs:/var/www/MISP/app/files/img/orgs
+      - misp-files-img-custom:/var/www/MISP/app/files/img/custom
       - misp-config:/var/www/MISP/app/Config
       - misp-tmp:/var/www/MISP/app/tmp
       - misp-gnupg:/var/www/MISP/.gnupg
@@ -70,12 +83,11 @@ services:
       - misp-files-certs:/var/www/MISP/app/files/certs
       - misp-files-terms:/var/www/MISP/app/files/terms
       - misp-files-img-orgs:/var/www/MISP/app/files/img/orgs
+      - misp-files-img-custom:/var/www/MISP/app/files/img/custom
       - misp-attachments:/var/www/MISP/app/attachments
       - misp-config:/var/www/MISP/app/Config
       - misp-tmp:/var/www/MISP/app/tmp
       - misp-gnupg:/var/www/MISP/.gnupg
-      - misp-img-orgs:/var/www/MISP/app/webroot/img/orgs
-      - misp-img-custom:/var/www/MISP/app/webroot/img/custom
       - php-tmp:/tmp
     depends_on:
       configure:
@@ -103,8 +115,6 @@ services:
       # - "443:443"   # uncomment for HTTPS
       # - "80:80"     # uncomment for HTTP->HTTPS redirect
     volumes:
-      - misp-img-orgs:/var/www/MISP/app/webroot/img/orgs:ro
-      - misp-img-custom:/var/www/MISP/app/webroot/img/custom:ro
       - caddy-data:/data
       - caddy-config:/config
     depends_on:
@@ -114,11 +124,14 @@ services:
   worker:
     <<: *misp-common
     command: ["python3", "/entrypoint-worker.py"]
+    # supervisord lets a running job finish for WORKER_STOP_GRACE seconds (default 300)
+    stop_grace_period: 330s
     volumes:
       - misp-files-scripts-tmp:/var/www/MISP/app/files/scripts/tmp
       - misp-files-certs:/var/www/MISP/app/files/certs
       - misp-files-terms:/var/www/MISP/app/files/terms
       - misp-files-img-orgs:/var/www/MISP/app/files/img/orgs
+      - misp-files-img-custom:/var/www/MISP/app/files/img/custom
       - misp-attachments:/var/www/MISP/app/attachments
       - misp-config:/var/www/MISP/app/Config
       - worker-misp-tmp:/var/www/MISP/app/tmp
@@ -134,7 +147,7 @@ services:
 
   # -- Org sync (runs once after MISP is ready, then exits) ----------------
   sync:
-    <<: *misp-common
+    <<: *misp-admin
     command: ["python3", "/entrypoint-sync.py"]
     environment:
       SYNC_BASE_URL: http://caddy:8080
@@ -150,9 +163,6 @@ services:
       MPLCONFIGDIR: /tmp/matplotlib
     tmpfs:
       - /tmp:size=100M
-    depends_on:
-      redis:
-        condition: service_healthy
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:6666/healthcheck')"]
       interval: 30s
@@ -258,7 +268,7 @@ services:
       --save ""
       --appendonly no'
     healthcheck:
-      test: ["CMD-SHELL", "redis-cli -a $$MISP_REDIS_PASSWORD --no-auth-warning ping"]
+      test: ["CMD-SHELL", "redis-cli -e -a $$MISP_REDIS_PASSWORD --no-auth-warning ping"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -268,12 +278,11 @@ volumes:
   misp-files-certs:
   misp-files-terms:
   misp-files-img-orgs:
+  misp-files-img-custom:
   misp-attachments:
   misp-config:
   misp-tmp:
   misp-gnupg:
-  misp-img-orgs:
-  misp-img-custom:
   configure-tmp:
   migrate-tmp:
   php-tmp:
