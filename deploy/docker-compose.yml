@@ -239,7 +239,7 @@ services:
   #    DB_HOST=postgres, DB_PORT=5432 in compose.env) ----------------------------
   postgres:
     profiles: [postgres]
-    image: docker.io/library/postgres:17
+    image: docker.io/library/postgres:18
     env_file:
       - chart/files/secrets-db.env
       - compose-secrets.env
