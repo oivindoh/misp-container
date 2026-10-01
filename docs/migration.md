@@ -144,9 +144,9 @@ they answer with errors while the copy runs, and MISP shows itself as offline
 1. Set `MIGRATE_FORCE=true` in `migrate.secret`, switch the component on and upgrade.
 2. Switch the component off, with `MIGRATE_FORCE`, in the next upgrade.
 
-With the `ciliumNetworkPolicy` component the configure pod may reach the source on port 3306
-and S3 on 443, in the cluster or outside it, while `migrate` is on; another port needs a
-change to the template.
+With the `ciliumNetworkPolicy` or `networkPolicy` component the configure pod may reach the
+source on port 3306 and S3 on 443, in the cluster or outside it, while `migrate` is on;
+another port needs a change to the template.
 
 ## Compose
 
@@ -168,7 +168,7 @@ the attachments go to that bucket.
 
 | Data | Where it goes |
 |------|---------------|
-| Org logos (`app/webroot/img/orgs`) and custom images (`app/webroot/img/custom`) | The attachments claim under `img/orgs` and `img/custom` (Kubernetes); the `misp-img-orgs` and `misp-img-custom` volumes (Compose) |
+| Org logos (`app/files/img/orgs`) and custom images (`app/files/img/custom`) | The attachments claim under `img/orgs` and `img/custom` (Kubernetes); the `misp-files-img-orgs` and `misp-files-img-custom` volumes (Compose) |
 | Terms, server certificates | The `misp-certs` Secret (Kubernetes, see [kubernetes.md](kubernetes.md#secrets)); the `misp-files-terms` and `misp-files-certs` volumes (Compose) |
 | GPG keyring | The `misp-gnupg` Secret from the old `private.asc` export; or `AUTOCONF_GPG=true` for a new key, re-exported to sync partners |
 | Attachments already on S3 | Nothing: point `PLUGIN_S3_*` at the same bucket, or copy them to a new one with `MIGRATE_SOURCE_S3_*` |
@@ -207,4 +207,4 @@ same-engine copy took under 3 minutes.
 The database schema is the same, so the migration copies it directly. Differences to account
 for: the official image runs as `www-data` (33), this one as UID 1000, so copied files need
 `chown`; `app/files` ships in this image and only the attachments, `app/files/scripts/tmp`,
-`certs`, `terms` and `img/orgs` are volumes; workers run in their own container.
+`certs`, `terms`, `img/orgs` and `img/custom` are volumes; workers run in their own container.
