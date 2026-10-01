@@ -94,7 +94,7 @@ services:
 
   # S3-compatible storage for attachment testing
   garage:
-    image: dxflrs/garage:v2.3.0
+    image: dxflrs/garage:v2.4.1
     ports:
       - "3900:3900"
       - "3903:3903"
