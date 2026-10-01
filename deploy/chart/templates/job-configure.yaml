@@ -77,9 +77,7 @@ spec:
           {{- include "misp.containerSecurityContext" . | nindent 10 }}
       volumes:
         {{- include "misp.appVolumes" . | nindent 8 }}
-        {{- if .Values.migrate.enabled }}
         {{- include "misp.attachmentsVolume" . | nindent 8 }}
         {{- with .Values.migrate.volumes }}
         {{- toYaml . | nindent 8 }}
-        {{- end }}
         {{- end }}

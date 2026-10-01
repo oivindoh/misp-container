@@ -166,3 +166,19 @@ def test_a_misspelt_value_is_refused():
     import pytest
     with pytest.raises(RuntimeError, match="replica"):
         chart.objects("web.replica=2")
+
+
+def test_every_volume_mount_names_a_volume_of_its_pod():
+    """kubeconform cannot see a mount of a volume the pod lacks; the API server refuses the pod."""
+    for sets in ((), ("migrate.enabled=true",), ("attachments.claim=false",)):
+        for doc in chart.objects(*sets, every_component=True):
+            spec = chart.pod_spec(doc)
+            if not spec:
+                continue
+            volumes = {v["name"] for v in spec.get("volumes", [])}
+            # a StatefulSet mounts its claim templates as well
+            volumes |= {t["metadata"]["name"] for t in doc["spec"].get("volumeClaimTemplates", [])}
+            for container in spec.get("containers", []) + spec.get("initContainers", []):
+                mounts = {m["name"] for m in container.get("volumeMounts", [])}
+                assert mounts <= volumes, (f"{doc['kind']} {doc['metadata']['name']} ({' '.join(sets) or 'defaults'}): "
+                                           f"{container['name']} mounts {sorted(mounts - volumes)}, which the pod lacks")
