@@ -53,7 +53,7 @@ jobs:
       # Build the new version, start it, and regenerate the settings catalogue
       # from what this MISP defines, so the PR carries the settings diff and
       # CI's strict coverage check can pass.
-      - uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
         if: steps.misp.outputs.changed == 'true' && steps.bump.outputs.skip != 'true'
       # Warm the layer cache the CI job fills (scope misp): the PECL stage does
       # not change between MISP releases, only the source and later stages rebuild.
