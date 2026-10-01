@@ -79,7 +79,7 @@ short names below are aliases of the derived ones (`OidcAuth.provider_url` is
 | `OIDC_ENABLE=true` | `oidc` | `OidcAuth`: OpenID Connect |
 | `LDAPAUTH_ENABLE=true` | `ldap` | `LdapAuth`: LDAP bind with a reader account |
 | `APACHESECUREAUTH_LDAP_ENABLE=true` | `apache_auth` | `ApacheSecureAuth`: a header from the proxy, looked up in LDAP |
-| `CUSTOM_AUTH_ENABLE=true` | (database) | `Plugin.CustomAuth_*`: a header from the proxy, no lookup |
+| `CUSTOM_AUTH_ENABLE=true` | `custom_auth` | `Plugin.CustomAuth_*`: a header from the proxy, no lookup. The configure step applies this group to the database; the `CUSTOM_AUTH_*` names below are aliases of the derived ones |
 
 ### OpenID Connect
 
@@ -102,6 +102,18 @@ The redirect URI is `MISP_BASEURL/users/login`; register it at the IdP. Every ot
 `OidcAuth.*` key in `settings.yaml` (offline access, user validity checks, email linking)
 takes its derived env var. The integration suite logs in through a dex instance with a role
 mapped by name and the default organisation.
+
+### Header authentication
+
+| Variable | Setting | Default |
+|----------|---------|---------|
+| `CUSTOM_AUTH_HEADER` | `Plugin.CustomAuth_header` | `X_FORWARDED_EMAIL` |
+| `CUSTOM_AUTH_USE_HEADER_NAMESPACE`, `CUSTOM_AUTH_HEADER_NAMESPACE` | `Plugin.CustomAuth_use_header_namespace`, `header_namespace` | `true`, `HTTP_` |
+| `CUSTOM_AUTH_REQUIRED` | `Plugin.CustomAuth_required` | `false`: without the header, the login page |
+| `CUSTOM_AUTH_NAME` | `Plugin.CustomAuth_name` | `External Authentication` |
+| `CUSTOM_AUTH_DISABLE_LOGOUT` | `Plugin.CustomAuth_disable_logout` | `false` |
+| `CUSTOM_AUTH_ONLY_ALLOW_SOURCE` | `Plugin.CustomAuth_only_allow_source` | unset: the proxy's URL, when only it may log users in |
+| `CUSTOM_AUTH_CUSTOM_PASSWORD_RESET`, `CUSTOM_AUTH_CUSTOM_LOGOUT` | `Plugin.CustomAuth_custom_password_reset`, `custom_logout` | unset: the external system's URLs |
 
 ### LDAP
 

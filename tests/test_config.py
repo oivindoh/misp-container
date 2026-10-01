@@ -158,8 +158,8 @@ class TestSettingSpec:
 
     def test_is_sensitive(self):
         """Sensitive settings are marked via the sensitive field."""
-        assert SettingSpec(name="Security.salt", default_value="x", sensitive=True).is_sensitive is True
-        assert SettingSpec(name="MISP.baseurl", default_value="x").is_sensitive is False
+        assert SettingSpec(name="Security.salt", default_value="x", sensitive=True).print_value == "<REDACTED>"
+        assert SettingSpec(name="MISP.baseurl", default_value="x").print_value == "x"
 
     def test_print_value_redacts_sensitive(self):
         """Sensitive values are redacted in print_value."""
@@ -348,3 +348,54 @@ class TestBlankProtectedDefault:
         with _patch("misp_container.config.cake.set_setting") as set_setting:
             cache.apply_defaults([spec], "gpg")
         set_setting.assert_called_once()
+
+
+class TestVersionGate:
+    """A default with since is applied once more by the first image at or past that version."""
+
+    def _cache(self, last: str) -> SettingsCache:
+        cache = SettingsCache()
+        cache.settings = {"MISP.x": '"old"'}
+        cache.last_defaults_version = last
+        return cache
+
+    def _apply(self, cache: SettingsCache, image: str):
+        spec = SettingSpec(name="MISP.x", default_value="new", since="v2.5.40")
+        with patch("misp_container.config._read_file", return_value=image), \
+                patch("misp_container.config.cake.set_setting") as set_setting:
+            cache.apply_defaults([spec], "critical")
+        return set_setting
+
+    def test_upgrade_past_since_applies(self):
+        assert self._apply(self._cache("v2.5.37"), "v2.5.47").call_count == 1
+
+    def test_upgrade_to_since_applies(self):
+        assert self._apply(self._cache("v2.5.37"), "v2.5.40").call_count == 1
+
+    def test_image_before_since_leaves_it(self):
+        self._apply(self._cache("v2.5.37"), "v2.5.39").assert_not_called()
+
+    def test_already_applied_leaves_it(self):
+        self._apply(self._cache("v2.5.40"), "v2.5.47").assert_not_called()
+
+
+def test_no_setting_is_in_two_groups():
+    """The group applied first would win, and the other group's value would never land.
+
+    Two names live in more than one config.php group on purpose: Security.auth,
+    which the render merges across the auth plugins, and MISP.attachments_dir,
+    which the s3 group overrides. A group the configure step writes to the
+    database shares no name with any other group.
+    """
+    import collections
+    from misp_container import configure
+    path = os.path.join(os.path.dirname(__file__), "..", "files", "misp-config", "settings.yaml")
+    groups = load_settings_yaml(path)
+    database = set(configure.DB_GROUPS) | set(configure.SWITCHED_GROUPS) | {"gpg"}
+    homes = collections.defaultdict(set)
+    for group, specs in groups.items():
+        for spec in specs:
+            homes[spec.name].add(group)
+    shared = {name: sorted(where) for name, where in homes.items() if len(where) > 1}
+    assert all(not (where & database) for where in map(set, shared.values())), shared
+    assert set(shared) <= {"Security.auth", "MISP.attachments_dir"}, shared

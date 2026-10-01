@@ -1,4 +1,4 @@
-"""Admin user, GPG, auth, and service configuration."""
+"""Admin user and GPG key setup."""
 
 from __future__ import annotations
 
@@ -6,7 +6,6 @@ import os
 import subprocess
 from pathlib import Path
 
-from . import MISP_BASE
 from . import cake
 from . import db
 from .env import env
@@ -15,9 +14,10 @@ from .log import get as getlog
 log = getlog("admin")
 
 
-def _sql_escape(value: str) -> str:
-    """Escape a string for safe use in SQL single-quoted literals."""
-    return value.replace("\\", "\\\\").replace("'", "\\'").replace("\n", "\\n").replace("\r", "\\r")
+def _one(sql: str, params=()) -> dict | None:
+    """The first row of a query, or None."""
+    rows = db.dict_query(sql, params)
+    return rows[0] if rows else None
 
 
 def setup_admin() -> None:
@@ -31,12 +31,11 @@ def setup_admin() -> None:
 
     # Change admin email if different from default
     if admin_email != "admin@admin.test":
-        current = db.query("SELECT email FROM users WHERE id=1;").strip()
-        if current != admin_email:
+        row = _one("SELECT email FROM users WHERE id = 1")
+        if (row or {}).get("email") != admin_email:
             log.info("changing admin email to %s", admin_email)
-            db.query(f"UPDATE users SET email='{_sql_escape(admin_email)}' WHERE id=1;")
+            db.execute("UPDATE users SET email = %s WHERE id = 1", (admin_email,))
 
-    # Configure admin organisation
     _configure_admin_org(admin_org)
 
     # Set admin password
@@ -51,7 +50,8 @@ def setup_admin() -> None:
             if rc != 0:
                 log.error("failed to set admin password: %s", out)
             else:
-                db.query(f"UPDATE users SET change_pw={db.bool_lit(False)}, last_pw_change={db.now_epoch()} WHERE id=1;")
+                db.execute(f"UPDATE users SET change_pw = {db.bool_lit(False)}, "
+                           f"last_pw_change = {db.now_epoch()} WHERE id = 1")
 
     # Set admin API key
     api_key = _read_secret("ADMIN_KEY", "ADMIN_KEY_FILE")
@@ -75,19 +75,18 @@ def configure_gnupg() -> None:
         except PermissionError:
             pass  # K8s emptyDir: mount point chmod not allowed, permissions are fine
 
-        tmp = Path("/tmp/gpg.tmp")
-        tmp.write_text(
-            f"%echo Generating a basic OpenPGP key\n"
-            f"Key-Type: RSA\nKey-Length: 3072\n"
+        # The parameters carry the passphrase, so they go over stdin, never a file
+        params = (
+            "%echo Generating a basic OpenPGP key\n"
+            "Key-Type: RSA\nKey-Length: 3072\n"
             f"Name-Real: MISP Admin\nName-Email: {env('MISP_EMAIL', env('ADMIN_EMAIL'))}\n"
             f"Expire-Date: 0\nPassphrase: {env('GNUPG_PASSWORD')}\n"
-            f"%commit\n%echo Done\n"
+            "%commit\n%echo Done\n"
         )
         subprocess.run(
-            ["gpg", "--homedir", str(gpg_dir), "--gen-key", "--batch", str(tmp)],
-            check=True,
+            ["gpg", "--homedir", str(gpg_dir), "--gen-key", "--batch"],
+            input=params, text=True, check=True,
         )
-        tmp.unlink(missing_ok=True)
     else:
         log.info("found pre-generated GPG key in %s", gpg_dir)
 
@@ -96,118 +95,55 @@ def configure_gnupg() -> None:
     # to the read-only webroot.
 
 
-def configure_oidc() -> None:
-    """Database-side settings for OIDC; the plugin config itself is in config.php."""
-    if env("OIDC_ENABLE") != "true":
-        return
-    log.info("OIDC authentication enabled (OidcAuth in config.php)")
-    logout_url = env("OIDC_LOGOUT_URL")
-    if logout_url:
-        cake.set_setting("Plugin.CustomAuth_custom_logout", logout_url)
-
-
-def configure_ldap() -> None:
-    """The LDAP and Apache auth plugins read config.php; nothing to set in the database."""
-    if env("LDAPAUTH_ENABLE") == "true":
-        log.info("LDAP authentication enabled (LdapAuth in config.php)")
-    if env("APACHESECUREAUTH_LDAP_ENABLE") == "true":
-        log.info("Apache header authentication enabled (ApacheSecureAuth in config.php)")
-
-
-def configure_custom_auth() -> None:
-    """Configure custom header authentication (oauth2-proxy / reverse proxy)."""
-    if env("CUSTOM_AUTH_ENABLE") != "true":
-        return
-
-    log.info("enabling custom header authentication")
-    _apply_settings_with_defaults({
-        "Plugin.CustomAuth_enable": (None, "true"),
-        "Plugin.CustomAuth_header": ("CUSTOM_AUTH_HEADER", "X_FORWARDED_EMAIL"),
-        "Plugin.CustomAuth_use_header_namespace": ("CUSTOM_AUTH_USE_HEADER_NAMESPACE", "true"),
-        "Plugin.CustomAuth_required": ("CUSTOM_AUTH_REQUIRED", "false"),
-        "Plugin.CustomAuth_header_namespace": ("CUSTOM_AUTH_HEADER_NAMESPACE", "HTTP_"),
-        "Plugin.CustomAuth_name": ("CUSTOM_AUTH_NAME", "External Authentication"),
-        "Plugin.CustomAuth_disable_logout": ("CUSTOM_AUTH_DISABLE_LOGOUT", "false"),
-    })
-    _apply_optional_settings({
-        "CUSTOM_AUTH_ONLY_ALLOW_SOURCE": "Plugin.CustomAuth_only_allow_source",
-        "CUSTOM_AUTH_CUSTOM_PASSWORD_RESET": "Plugin.CustomAuth_custom_password_reset",
-        "CUSTOM_AUTH_CUSTOM_LOGOUT": "Plugin.CustomAuth_custom_logout",
-    })
-
-
-
 # -- Internal helpers --
 
 
-def _apply_optional_settings(mapping: dict[str, str]) -> None:
-    """Apply settings only if the corresponding env var is non-empty.
-
-    mapping: {env_var_name: misp_setting_name}
-    """
-    for env_key, setting in mapping.items():
-        val = env(env_key)
-        if val:
-            cake.set_setting(setting, val)
-
-
-def _apply_settings_with_defaults(mapping: dict[str, tuple[str | None, str]]) -> None:
-    """Apply settings using env var with a fallback default.
-
-    mapping: {misp_setting_name: (env_var_name_or_None, default_value)}
-    If env_var_name is None, uses the default directly.
-    """
-    for setting, (env_key, default) in mapping.items():
-        val = env(env_key, default) if env_key else default
-        cake.set_setting(setting, val)
+def _org_id_by_uuid(org_uuid: str):
+    row = _one("SELECT id FROM organisations WHERE uuid = %s", (org_uuid,))
+    return row["id"] if row else None
 
 
 def _configure_admin_org(admin_org: str) -> None:
     """Configure admin organisation by UUID or name."""
-    org_uuid = _sql_escape(env("ADMIN_ORG_UUID"))
-    safe_org = _sql_escape(admin_org)
+    org_uuid = env("ADMIN_ORG_UUID")
     if org_uuid:
-        org_id = db.query(f"SELECT id FROM organisations WHERE uuid='{org_uuid}';").strip()
+        org_id = _org_id_by_uuid(org_uuid)
         if not org_id:
             log.info("creating organisation '%s' with UUID %s", admin_org, org_uuid)
-            db.query(
-                f"INSERT INTO organisations (name, uuid, local, date_created, date_modified, "
-                f"description, type, nationality, sector, created_by) "
-                f"VALUES ('{safe_org}', '{org_uuid}', {db.bool_lit(True)}, NOW(), NOW(), '', '', '', '', 0);"
+            db.execute(
+                "INSERT INTO organisations (name, uuid, local, date_created, date_modified, "
+                "description, type, nationality, sector, created_by) "
+                f"VALUES (%s, %s, {db.bool_lit(True)}, NOW(), NOW(), '', '', '', '', 0)",
+                (admin_org, org_uuid),
             )
-            org_id = db.query(f"SELECT id FROM organisations WHERE uuid='{org_uuid}';").strip()
+            org_id = _org_id_by_uuid(org_uuid)
 
         if org_id:
             if admin_org != "ORGNAME":
                 log.info("setting org name to %s (id=%s)", admin_org, org_id)
-                db.query(
-                    f"UPDATE organisations SET name='{safe_org}', date_modified=NOW() "
-                    f"WHERE id={org_id} AND name != '{safe_org}';"
-                )
-            current_org = db.query("SELECT org_id FROM users WHERE id=1;").strip()
-            if current_org != org_id:
+                db.execute("UPDATE organisations SET name = %s, date_modified = NOW() WHERE id = %s AND name != %s",
+                           (admin_org, org_id, admin_org))
+            row = _one("SELECT org_id FROM users WHERE id = 1")
+            if str((row or {}).get("org_id")) != str(org_id):
                 log.info("assigning admin user to org id=%s (uuid=%s)", org_id, org_uuid)
-                db.query(f"UPDATE users SET org_id={org_id} WHERE id=1;")
+                db.execute("UPDATE users SET org_id = %s WHERE id = 1", (org_id,))
             cake.set_setting("MISP.host_org_id", org_id)
 
     elif admin_org != "ORGNAME":
         log.info("setting admin org name to %s", admin_org)
-        db.query(
-            f"UPDATE organisations SET name='{safe_org}', date_modified=NOW() "
-            f"WHERE id=1 AND name != '{safe_org}';"
-        )
+        db.execute("UPDATE organisations SET name = %s, date_modified = NOW() WHERE id = 1 AND name != %s",
+                   (admin_org, admin_org))
 
 
 def _set_admin_authkey(email: str, api_key: str) -> None:
     """Set admin API key, skipping if it already exists (idempotent)."""
-    key_start = _sql_escape(api_key[:4])
-    key_end = _sql_escape(api_key[36:40] if len(api_key) >= 40 else "")
-    count = db.query(
-        f"SELECT COUNT(*) FROM auth_keys WHERE user_id=1 "
-        f"AND authkey_start='{key_start}' AND authkey_end='{key_end}' "
-        f"AND (expiration = 0 OR expiration > {db.now_epoch()});"
-    ).strip()
-    if count == "0" or not count:
+    # MISP keeps the first and last four characters of a key next to its hash
+    row = _one(
+        "SELECT COUNT(*) AS n FROM auth_keys WHERE user_id = 1 AND authkey_start = %s AND authkey_end = %s "
+        f"AND (expiration = 0 OR expiration > {db.now_epoch()})",
+        (api_key[:4], api_key[-4:]),
+    )
+    if not row or not int(row["n"]):
         log.info("setting admin API key")
         cake.user_change_authkey(email, api_key)
 

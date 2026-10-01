@@ -16,9 +16,12 @@
 #   If the env var exists and is non-empty, the setting is enforced every startup.
 #   If no env var, the default is applied once (then user owns it via the UI).
 #
-# minimum_config and db_enable are rendered into config.php by the init container.
-# The configure step applies the other groups to the database in this order:
-#   initialisation -> critical -> optional -> gpg -> s3 -> proxy -> kafka -> linotp
+# Every pod renders minimum_config and db_enable into config.php, plus s3 while
+# PLUGIN_S3_BUCKET_NAME is set and the auth plugin groups (oidc, ldap,
+# apache_auth) while their switch is true. The configure step applies the other
+# groups to the database, in this order: initialisation, critical, optional,
+# upstream (the generated catalogue), gpg, then proxy, kafka, linotp and
+# custom_auth while their switch is true (misp_container/configure.py).
 
 settings:
 
@@ -229,9 +232,6 @@ settings:
       value: true
     Security.username_in_response_header:
       description: "When enabled, logged in username will be included in X-Username HTTP response header. This is useful for request logg..."
-      value: true
-    Security.do_not_log_authkeys:
-      description: "If enabled, any authkey will be replaced by asterisks in Audit log"
       value: true
     Security.log_each_individual_auth_fail:
       description: "By default API authentication failures that happen within the same hour for the same key are omitted and a single log..."
@@ -627,20 +627,6 @@ settings:
       description: "The base URL of the tile server used for geolocation maps. Defaults to https://geo.circl.lu if not set"
       value: "https://geo.circl.lu"
 
-    # Custom auth header (used when CustomAuth_enable=true)
-    Plugin.CustomAuth_name:
-      description: "The name of the authentication method, this is cosmetic only and will be shown on the user creation page and logs"
-      value: "External authentication"
-    Plugin.CustomAuth_header:
-      description: "Set the header that MISP should look for here. If left empty it will default to the Authorization header"
-      value: AUTHORIZATION
-    Plugin.CustomAuth_header_namespace:
-      description: "The default header namespace for the auth header - default setting is HTTP_"
-      value: "HTTP_"
-    Plugin.CustomAuth_use_header_namespace:
-      description: "Use a header namespace for the auth header - default setting is enabled"
-      value: true
-
     # RPZ export
     Plugin.RPZ_policy:
       description: "The default policy action for the values added to the RPZ"
@@ -677,6 +663,13 @@ settings:
     Plugin.S3_aws_validate_ca:
       description: "Validate CA"
       value: true
+
+    # The logout redirect, whichever plugin logs the user in (OIDC_LOGOUT_URL,
+    # CUSTOM_AUTH_CUSTOM_LOGOUT); applied while set
+    Plugin.CustomAuth_custom_logout:
+      description: "Provide your custom authentication users with an external URL to the authentication system to log out."
+      value: ""
+      blank_protection: true
 
   # -- gpg: GnuPG settings ----------------------------------------------------
   gpg:
@@ -757,7 +750,41 @@ settings:
       value: ""
       sensitive: true
 
-  # -- kafka: Kafka pub/sub integration (only applied when PLUGIN_KAFKA_ENABLE is set)
+  # -- custom_auth: header authentication from a reverse proxy, no directory lookup
+  # (only applied when CUSTOM_AUTH_ENABLE=true; the CUSTOM_AUTH_* names are aliases, env.py)
+  custom_auth:
+
+    Plugin.CustomAuth_enable:
+      description: "Enable this functionality if you would like to handle the authentication via an external tool and authenticate with MISP using a custom header."
+      value: true
+    Plugin.CustomAuth_header:
+      description: "Set the header that MISP should look for here. If left empty it will default to the Authorization header."
+      value: "X_FORWARDED_EMAIL"
+    Plugin.CustomAuth_use_header_namespace:
+      description: "Use a header namespace for the auth header - default setting is enabled"
+      value: true
+    Plugin.CustomAuth_header_namespace:
+      description: "The default header namespace for the auth header - default setting is HTTP_"
+      value: "HTTP_"
+    Plugin.CustomAuth_required:
+      description: "If this setting is enabled then the only way to authenticate will be using the custom header. Alternatively, you can run in mixed mode that will log users in via the header if found, otherwise users will be redirected to the normal login page."
+      value: false
+    Plugin.CustomAuth_name:
+      description: "The name of the authentication method, this is cosmetic only and will be shown on the user creation page and logs."
+      value: "External Authentication"
+    Plugin.CustomAuth_disable_logout:
+      description: "Disable the logout button for users authenticate with the external auth mechanism."
+      value: false
+    Plugin.CustomAuth_only_allow_source:
+      description: "If you are using an external tool to authenticate with MISP and would like to only allow the tool's url as a valid point of entry then set this field."
+      value: ""
+      blank_protection: true
+    Plugin.CustomAuth_custom_password_reset:
+      description: "Provide your custom authentication users with an external URL to the authentication system to reset their passwords."
+      value: ""
+      blank_protection: true
+
+  # -- kafka: Kafka pub/sub integration (only applied when PLUGIN_KAFKA_ENABLE=true)
   kafka:
 
     Plugin.Kafka_enable:
@@ -803,7 +830,7 @@ settings:
       description: "Topic for publishing log entries"
       value: misp_audit
 
-  # -- linotp: LinOTP two-factor authentication
+  # -- linotp: LinOTP two-factor authentication (only applied when LINOTPAUTH_ENABLED=true)
   linotp:
 
     LinOTPAuth.enabled:

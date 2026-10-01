@@ -12,13 +12,25 @@ from pathlib import Path
 from . import admin
 from . import cake
 from . import db
-from .config import SettingsCache, apply_settings_fast, load_settings_yaml
+from .config import CONDITIONAL_CONFIG_PHP_GROUPS, SettingsCache, apply_settings_fast, load_settings_yaml
 from .env import env
 from .log import get as getlog
 
 log = getlog("configure")
 
 CUSTOM_SETUP_SCRIPT = "/custom/setup.py"
+
+# The settings groups this step applies to the database, in order. The groups
+# init renders into config.php (config.CONFIG_PHP_GROUPS, the S3 group and the
+# auth plugins) are not among them: MISP reads those from the file. gpg follows
+# the key setup. A switched group is applied while its env var is "true".
+DB_GROUPS = ("initialisation", "critical", "optional", "upstream")
+SWITCHED_GROUPS = {
+    "proxy": "PROXY_ENABLE",
+    "kafka": "PLUGIN_KAFKA_ENABLE",
+    "linotp": "LINOTPAUTH_ENABLED",
+    "custom_auth": "CUSTOM_AUTH_ENABLE",
+}
 
 
 def run_custom_script(path: str, label: str) -> None:
@@ -34,7 +46,7 @@ def run_custom_script(path: str, label: str) -> None:
 PLACEHOLDER_MARKERS = ("change-me", "override-me", "REPLACE-WITH", "0000000000")
 CHECKED_SECRETS = ("SECURITY_SALT", "SECURITY_ENCRYPTION_KEY", "ADMIN_PASSWORD", "ADMIN_KEY",
                    "DB_PASSWORD", "MYSQL_PASSWORD", "MYSQL_ROOT_PASSWORD", "POSTGRES_PASSWORD", "MISP_REDIS_PASSWORD",
-                   "GNUPG_PASSWORD")
+                   "GNUPG_PASSWORD", "SIMPLEBACKGROUNDJOBS_SUPERVISOR_PASSWORD")
 
 
 def is_placeholder(value: str) -> bool:
@@ -81,9 +93,8 @@ def configure_misp() -> None:
 
         all_specs = load_settings_yaml()
 
-        # minimum_config and db_enable live in config.php, rendered by init in every pod
         log.info("core settings")
-        for group in ("initialisation", "critical", "optional", "upstream"):
+        for group in DB_GROUPS:
             apply_settings_fast(group, cache, all_specs)
 
         log.info("admin user")
@@ -91,18 +102,15 @@ def configure_misp() -> None:
 
         log.info("GPG")
         admin.configure_gnupg()
-
-        log.info("auth")
-        admin.configure_oidc()
-        admin.configure_ldap()
-        admin.configure_custom_auth()
-
-        log.info("storage and network")
-        if env("PLUGIN_S3_BUCKET_NAME"):
-            apply_settings_fast("s3", cache, all_specs)
-        if env("PROXY_ENABLE") == "true":
-            apply_settings_fast("proxy", cache, all_specs)
         apply_settings_fast("gpg", cache, all_specs)
+
+        log.info("plugins")
+        for group, switch in CONDITIONAL_CONFIG_PHP_GROUPS:
+            if env(switch) == "true":
+                log.info("%s enabled (in config.php)", group)
+        for group, switch in SWITCHED_GROUPS.items():
+            if env(switch) == "true":
+                apply_settings_fast(group, cache, all_specs)
 
         cache.save_defaults_version()
         log.info("configuration complete")

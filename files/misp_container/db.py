@@ -110,6 +110,39 @@ def _cursor(conn):
     return closing(conn.cursor())
 
 
+class DictCursor:
+    """A cursor whose fetchone and fetchall return dicts keyed by column name, closed on exit."""
+
+    def __init__(self, cur):
+        self._cur = cur
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self._cur.close()
+        return False
+
+    def execute(self, sql, params=None):
+        return self._cur.execute(sql, params or ())
+
+    def _row(self, row):
+        if row is None or isinstance(row, dict):
+            return row
+        names = [d[0] for d in (self._cur.description or [])]
+        return dict(zip(names, row))
+
+    def fetchone(self):
+        return self._row(self._cur.fetchone())
+
+    def fetchall(self):
+        return [self._row(r) for r in self._cur.fetchall()]
+
+
+def dict_cursor(conn) -> DictCursor:
+    return DictCursor(conn.cursor())
+
+
 def _fetch_rows(cur):
     """Rows of the last statement, or [] when it returned no result set."""
     if cur.description is None:
@@ -204,9 +237,6 @@ def wait_for_db(retries: int = 100, wait_seconds: int = 5) -> None:
         time.sleep(wait_seconds)
     log.error("could not connect to %s at %s:%s", engine(), s["host"], s["port"])
     sys.exit(1)
-
-
-wait_for_mysql = wait_for_db
 
 
 def set_system_setting(name: str, value: str) -> None:
