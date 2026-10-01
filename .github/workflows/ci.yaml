@@ -70,7 +70,7 @@ jobs:
             image: ghcr.io/oivindoh/misp-container-modules
             scope: modules
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
       - name: Build ${{ matrix.name }} image
         uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
@@ -91,7 +91,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # The chart and doc tests render the chart with helm; test_chart_schema.py
       # lints it and validates every render with kubeconform
       - name: Install helm and kubeconform
@@ -112,7 +112,7 @@ jobs:
     env:
       MISP_IMAGE_TAG: ci
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Load the images
         uses: ./.github/actions/load-images
         with:
@@ -148,7 +148,7 @@ jobs:
     env:
       MISP_IMAGE_TAG: ci
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Load the images
         uses: ./.github/actions/load-images
         with:
@@ -184,7 +184,7 @@ jobs:
     env:
       MISP_IMAGE_TAG: ci
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Load the images
         uses: ./.github/actions/load-images
         with:
@@ -220,7 +220,7 @@ jobs:
     env:
       MISP_IMAGE_TAG: ci
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Load the images
         uses: ./.github/actions/load-images
         with:
@@ -262,7 +262,7 @@ jobs:
     env:
       MISP_IMAGE_TAG: ci
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Load the images
         uses: ./.github/actions/load-images
         with:
@@ -303,7 +303,7 @@ jobs:
             tag: ghcr.io/oivindoh/misp-container-modules:scan
             scope: modules
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
 
       - name: Build ${{ matrix.target }} image (from cache)
@@ -355,7 +355,7 @@ jobs:
       id-token: write
 
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
 
       - name: Extract version info
