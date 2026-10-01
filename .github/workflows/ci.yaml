@@ -28,8 +28,8 @@ env:
 
 jobs:
   # Stops a master run whose commit carries a release tag: the run of the tag
-  # tests the same commit and releases it. build, unit and chart wait for it, and
-  # every other job waits for them. When the lookup fails, both runs go ahead.
+  # tests the same commit and releases it. build and unit wait for it, and every
+  # other job waits for them. When the lookup fails, both runs go ahead.
   gate:
     runs-on: ubuntu-latest
     permissions: {}
@@ -92,47 +92,17 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-      # The chart and doc tests render the chart with helm
-      - name: Install helm
-        run: |
-          set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/bin"
-          cd "$RUNNER_TEMP"
-          curl -sfLo helm.tgz https://get.helm.sh/helm-v4.3.0-linux-amd64.tar.gz
-          echo "86584a54def73570558f66f5111cc53dfed56689637ae32c1201205d494f54fb  helm.tgz" | sha256sum -c
-          tar -xzf helm.tgz -C bin --strip-components=1 linux-amd64/helm
-          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      # The chart and doc tests render the chart with helm; test_chart_schema.py
+      # lints it and validates every render with kubeconform
+      - name: Install helm and kubeconform
+        uses: ./.github/actions/install-helm
+        with:
+          kubeconform: "true"
       - name: Unit tests
         run: |
           pip install --quiet uv
           uv sync
           PYTHONPATH=files .venv/bin/python -m pytest tests/ -v --ignore=tests/e2e
-
-  # Lints the Helm chart, renders it with the default values, with each component
-  # and with all of them, and validates every render against the Kubernetes and
-  # CRD schemas
-  chart:
-    needs: gate
-    if: needs.gate.outputs.release_commit != 'true'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-      - name: Install helm and kubeconform
-        run: |
-          set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/bin"
-          cd "$RUNNER_TEMP"
-          curl -sfLo helm.tgz https://get.helm.sh/helm-v4.3.0-linux-amd64.tar.gz
-          echo "86584a54def73570558f66f5111cc53dfed56689637ae32c1201205d494f54fb  helm.tgz" | sha256sum -c
-          tar -xzf helm.tgz -C bin --strip-components=1 linux-amd64/helm
-          curl -sfLo kubeconform.tgz https://github.com/yannh/kubeconform/releases/download/v0.8.0/kubeconform-linux-amd64.tar.gz
-          echo "9bc2bffbf71f261128533edaf912153948b7ff238f9a531ae6d34466ec287883  kubeconform.tgz" | sha256sum -c
-          tar -xzf kubeconform.tgz -C bin kubeconform
-          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
-      - name: Lint, render and validate
-        run: scripts/check-chart.sh
 
   integration:
     needs: build
@@ -143,39 +113,12 @@ jobs:
       MISP_IMAGE_TAG: ci
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-      - uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
-      - name: Build misp image
-        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
+      - name: Load the images
+        uses: ./.github/actions/load-images
         with:
-          context: .
-          target: final
-          load: true
-          tags: ${{ env.IMAGE_MISP }}:ci
-          cache-from: |
-            type=gha,scope=misp
-            type=gha,scope=misp
-
-      - name: Build caddy image
-        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
-        with:
-          context: .
-          target: caddy
-          load: true
-          tags: ${{ env.IMAGE_CADDY }}:ci
-          cache-from: |
-            type=gha,scope=misp
-            type=gha,scope=caddy
-
-      - name: Build modules image
-        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
-        with:
-          context: .
-          target: modules
-          load: true
-          tags: ${{ env.IMAGE_MODULES }}:ci
-          cache-from: |
-            type=gha,scope=misp
-            type=gha,scope=modules
+          misp: ${{ env.IMAGE_MISP }}
+          caddy: ${{ env.IMAGE_CADDY }}
+          modules: ${{ env.IMAGE_MODULES }}
 
       - name: Integration tests
         timeout-minutes: 15
@@ -206,39 +149,12 @@ jobs:
       MISP_IMAGE_TAG: ci
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-      - uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
-      - name: Build misp image
-        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
+      - name: Load the images
+        uses: ./.github/actions/load-images
         with:
-          context: .
-          target: final
-          load: true
-          tags: ${{ env.IMAGE_MISP }}:ci
-          cache-from: |
-            type=gha,scope=misp
-            type=gha,scope=misp
-
-      - name: Build caddy image
-        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
-        with:
-          context: .
-          target: caddy
-          load: true
-          tags: ${{ env.IMAGE_CADDY }}:ci
-          cache-from: |
-            type=gha,scope=misp
-            type=gha,scope=caddy
-
-      - name: Build modules image
-        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
-        with:
-          context: .
-          target: modules
-          load: true
-          tags: ${{ env.IMAGE_MODULES }}:ci
-          cache-from: |
-            type=gha,scope=misp
-            type=gha,scope=modules
+          misp: ${{ env.IMAGE_MISP }}
+          caddy: ${{ env.IMAGE_CADDY }}
+          modules: ${{ env.IMAGE_MODULES }}
 
       - name: Integration tests on PostgreSQL
         timeout-minutes: 15
@@ -269,39 +185,12 @@ jobs:
       MISP_IMAGE_TAG: ci
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-      - uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
-      - name: Build misp image
-        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
+      - name: Load the images
+        uses: ./.github/actions/load-images
         with:
-          context: .
-          target: final
-          load: true
-          tags: ${{ env.IMAGE_MISP }}:ci
-          cache-from: |
-            type=gha,scope=misp
-            type=gha,scope=misp
-
-      - name: Build caddy image
-        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
-        with:
-          context: .
-          target: caddy
-          load: true
-          tags: ${{ env.IMAGE_CADDY }}:ci
-          cache-from: |
-            type=gha,scope=misp
-            type=gha,scope=caddy
-
-      - name: Build modules image
-        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
-        with:
-          context: .
-          target: modules
-          load: true
-          tags: ${{ env.IMAGE_MODULES }}:ci
-          cache-from: |
-            type=gha,scope=misp
-            type=gha,scope=modules
+          misp: ${{ env.IMAGE_MISP }}
+          caddy: ${{ env.IMAGE_CADDY }}
+          modules: ${{ env.IMAGE_MODULES }}
 
       - name: Hub-spoke sync tests
         timeout-minutes: 15
@@ -332,39 +221,12 @@ jobs:
       MISP_IMAGE_TAG: ci
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-      - uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
-      - name: Build misp image
-        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
+      - name: Load the images
+        uses: ./.github/actions/load-images
         with:
-          context: .
-          target: final
-          load: true
-          tags: ${{ env.IMAGE_MISP }}:ci
-          cache-from: |
-            type=gha,scope=misp
-            type=gha,scope=misp
-
-      - name: Build caddy image
-        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
-        with:
-          context: .
-          target: caddy
-          load: true
-          tags: ${{ env.IMAGE_CADDY }}:ci
-          cache-from: |
-            type=gha,scope=misp
-            type=gha,scope=caddy
-
-      - name: Build modules image
-        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
-        with:
-          context: .
-          target: modules
-          load: true
-          tags: ${{ env.IMAGE_MODULES }}:ci
-          cache-from: |
-            type=gha,scope=misp
-            type=gha,scope=modules
+          misp: ${{ env.IMAGE_MISP }}
+          caddy: ${{ env.IMAGE_CADDY }}
+          modules: ${{ env.IMAGE_MODULES }}
 
       - name: Migration tests
         timeout-minutes: 20
@@ -393,65 +255,34 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        database: [mariadb, postgres]
     env:
       MISP_IMAGE_TAG: ci
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-      - uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
-      - name: Build misp image
-        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
+      - name: Load the images
+        uses: ./.github/actions/load-images
         with:
-          context: .
-          target: final
-          load: true
-          tags: ${{ env.IMAGE_MISP }}:ci
-          cache-from: |
-            type=gha,scope=misp
-            type=gha,scope=misp
-
-      - name: Build caddy image
-        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
-        with:
-          context: .
-          target: caddy
-          load: true
-          tags: ${{ env.IMAGE_CADDY }}:ci
-          cache-from: |
-            type=gha,scope=misp
-            type=gha,scope=caddy
-
-      - name: Build modules image
-        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
-        with:
-          context: .
-          target: modules
-          load: true
-          tags: ${{ env.IMAGE_MODULES }}:ci
-          cache-from: |
-            type=gha,scope=misp
-            type=gha,scope=modules
+          misp: ${{ env.IMAGE_MISP }}
+          caddy: ${{ env.IMAGE_CADDY }}
+          modules: ${{ env.IMAGE_MODULES }}
 
       - name: Install kind and helm
-        run: |
-          set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/bin"
-          cd "$RUNNER_TEMP"
-          curl -sfLo bin/kind https://github.com/kubernetes-sigs/kind/releases/download/v0.33.0/kind-linux-amd64
-          echo "aee6151561422756b764a4ae28e7f44cda5af5a9eead3cc9985112b1de8d8e0d  bin/kind" | sha256sum -c
-          chmod +x bin/kind
-          curl -sfLo helm.tgz https://get.helm.sh/helm-v4.3.0-linux-amd64.tar.gz
-          echo "86584a54def73570558f66f5111cc53dfed56689637ae32c1201205d494f54fb  helm.tgz" | sha256sum -c
-          tar -xzf helm.tgz -C bin --strip-components=1 linux-amd64/helm
-          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+        uses: ./.github/actions/install-helm
+        with:
+          kind: "true"
 
       - name: Python for the smoke test
         run: |
           pip install --quiet uv
           uv sync
 
-      - name: Kubernetes test on kind
+      - name: Kubernetes test on kind (${{ matrix.database }})
         timeout-minutes: 25
-        run: tests/run-kind-test.sh
+        run: tests/run-kind-test.sh ${{ matrix.database == 'postgres' && '--postgres' || '' }}
 
   scan:
     needs: build
@@ -502,8 +333,20 @@ jobs:
           sarif_file: trivy-results.sarif
           category: ${{ matrix.target }}
 
+      # The report above never fails the job; this run does, on a CRITICAL
+      # finding with a fix, so the release job that needs this one is gated
+      - name: Fail on a fixable CRITICAL finding (${{ matrix.target }})
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ matrix.tag }}
+          format: table
+          severity: CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+          skip-setup-trivy: true
+
   release:
-    needs: [unit, chart, integration, integration-postgres, hub-spoke, migration, kind, scan]
+    needs: [unit, integration, integration-postgres, hub-spoke, migration, kind, scan]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
@@ -525,18 +368,11 @@ jobs:
           echo "Git tag: ${TAG}, MISP version: ${MISP_VERSION}"
 
       - name: Install helm
-        run: |
-          set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/bin"
-          cd "$RUNNER_TEMP"
-          curl -sfLo helm.tgz https://get.helm.sh/helm-v4.3.0-linux-amd64.tar.gz
-          echo "86584a54def73570558f66f5111cc53dfed56689637ae32c1201205d494f54fb  helm.tgz" | sha256sum -c
-          tar -xzf helm.tgz -C bin --strip-components=1 linux-amd64/helm
-          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+        uses: ./.github/actions/install-helm
 
       # appVersion is the image tag; the chart version is its own SemVer and, like an
       # image tag, is never pushed twice
-      - name: Check the chart
+      - name: Check the chart version
         id: chart
         run: |
           set -euo pipefail
@@ -548,22 +384,20 @@ jobs:
             exit 1
           fi
           echo "$REGISTRY_TOKEN" | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
-          if helm show chart "oci://ghcr.io/${{ github.repository_owner }}/charts/misp" --version "$CHART" >/dev/null 2>&1; then
+          # A lookup that fails for another reason than "not there" (a timeout, a
+          # rate limit, a token without read scope) must not pass as "not there":
+          # helm push overwrites an OCI tag
+          if out=$(helm show chart "oci://ghcr.io/${{ github.repository_owner }}/charts/misp" --version "$CHART" 2>&1); then
             echo "ERROR: chart version ${CHART} exists in GHCR. Chart versions are immutable: mise run release raises it."
+            exit 1
+          elif ! grep -qiE "not found|manifest unknown|name unknown|denied" <<<"$out"; then
+            echo "ERROR: cannot tell whether chart version ${CHART} exists in GHCR:"
+            echo "$out"
             exit 1
           fi
           echo "version=${CHART}" >> "$GITHUB_OUTPUT"
         env:
           REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Check tag immutability
-        run: |
-          TAG="${{ steps.version.outputs.tag }}"
-          if docker manifest inspect "${{ env.IMAGE_MISP }}:${TAG}" >/dev/null 2>&1; then
-            echo "ERROR: Image tag ${TAG} already exists in GHCR. Tags are immutable."
-            echo "For hotfixes, use ${TAG}-r1, ${TAG}-r2, etc."
-            exit 1
-          fi
 
       - name: Log in to GHCR
         uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
@@ -571,6 +405,24 @@ jobs:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+
+      # The images carry the tag without its v; a re-pushed git tag must not
+      # overwrite them, and a lookup that fails for another reason than "not
+      # there" must not pass either
+      - name: Check tag immutability
+        run: |
+          set -euo pipefail
+          VER="${GITHUB_REF#refs/tags/v}"
+          for image in "${{ env.IMAGE_MISP }}" "${{ env.IMAGE_CADDY }}" "${{ env.IMAGE_MODULES }}"; do
+            if out=$(docker manifest inspect "${image}:${VER}" 2>&1); then
+              echo "ERROR: ${image}:${VER} exists in GHCR. Tags are immutable: mise run release hotfix makes ${VER}-r1."
+              exit 1
+            elif ! grep -qiE "not found|manifest unknown|name unknown|no such manifest|denied" <<<"$out"; then
+              echo "ERROR: cannot tell whether ${image}:${VER} exists in GHCR:"
+              echo "$out"
+              exit 1
+            fi
+          done
 
       - name: Docker tags
         id: tags

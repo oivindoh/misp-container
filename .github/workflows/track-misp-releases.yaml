@@ -76,7 +76,7 @@ jobs:
         run: |
           pip install --quiet pyyaml
           scripts/update-composer-lock.sh
-          SETTINGS_SUMMARY="$RUNNER_TEMP/settings-summary.md" scripts/update-settings.sh
+          python3 scripts/update_settings.py --stack --write --summary "$RUNNER_TEMP/settings-summary.md"
 
       - name: Commit and open PR
         if: steps.misp.outputs.changed == 'true' && steps.bump.outputs.skip != 'true'

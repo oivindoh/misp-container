@@ -143,10 +143,11 @@ def test_every_mise_task_a_doc_names_exists():
 
 # -- lists that must be complete ------------------------------------------------------
 
-def table_names(doc: Path, header: str) -> set[str]:
-    """The backticked names in the first column of the table under a header line."""
+def table_names(doc: Path, header: str, section: str = "") -> set[str]:
+    """The backticked names in the first column of the table under a header line, after a section heading when given."""
     lines = doc.read_text().splitlines()
-    start = next(i for i, line in enumerate(lines) if line.startswith(header))
+    first = next(i for i, line in enumerate(lines) if line.startswith(section)) if section else 0
+    start = next(i for i, line in enumerate(lines) if i >= first and line.startswith(header))
     names = set()
     for line in lines[start + 2:]:
         if not line.startswith("|"):
@@ -192,11 +193,16 @@ def test_the_periodic_tasks_table_lists_every_task():
 
 
 def test_the_oidc_table_lists_every_short_name():
-    listed = table_names(REPO / "docs/configuration.md", "| Variable | Setting | Default |")
+    listed = table_names(REPO / "docs/configuration.md", "| Variable | Setting | Default |", "### OpenID Connect")
     aliases = {name for name in envmod.ALIASES if name.startswith("OIDC_")}
-    # read by the admin step itself, outside the aliases
-    aliases.add("OIDC_LOGOUT_URL")
     assert aliases <= listed, f"docs/configuration.md lacks the OIDC short names {sorted(aliases - listed)} (env.py ALIASES)"
+
+
+def test_the_header_auth_table_lists_every_short_name():
+    listed = table_names(REPO / "docs/configuration.md", "| Variable | Setting | Default |", "### Header authentication")
+    # the switch itself is in the plugins table
+    aliases = {name for name in envmod.ALIASES if name.startswith("CUSTOM_AUTH_")} - {"CUSTOM_AUTH_ENABLE"}
+    assert aliases <= listed, f"docs/configuration.md lacks the header auth names {sorted(aliases - listed)} (env.py ALIASES)"
 
 
 def test_the_upstream_checks_table_lists_every_check():
@@ -343,3 +349,11 @@ def test_the_metrics_port():
     assert f"on port {port}" in " ".join((REPO / "docs/metrics.md").read_text().split()), \
         f"docs/metrics.md should say: on port {port}"
 
+
+
+def test_the_install_examples_carry_the_chart_version():
+    """scripts/release.py rewrites them with the version it sets in Chart.yaml."""
+    version = yaml.safe_load((REPO / "deploy/chart/Chart.yaml").read_text())["version"]
+    for doc in (REPO / "README.md", REPO / "docs/kubernetes.md"):
+        for found in re.findall(r"helm install .*?--version (\S+)", doc.read_text()):
+            assert found == version, f"{doc.relative_to(REPO)} installs chart {found}, Chart.yaml is {version}"

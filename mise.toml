@@ -36,7 +36,7 @@ run = "python -m pytest tests/e2e/test_migration.py -v"
 
 [tasks.test-chart]
 description = "Lint the Helm chart, render it with each component and validate against the schemas"
-run = "scripts/check-chart.sh"
+run = "python -m pytest tests/test_chart_schema.py -v"
 
 [tasks.test-kind]
 description = "Install, test, upgrade and roll back the Helm chart on a kind cluster (build the images first)"
@@ -52,7 +52,8 @@ run = ["python scripts/generate_docs.py", "python scripts/generate_agents_md.py"
 
 [tasks.test-all]
 description = "Run unit + integration + sync + migration tests"
-depends = ["test", "test-integration", "test-sync", "test-migration"]
+# One after the other: the integration and migration suites share a compose project
+run = ["mise run test", "mise run test-integration", "mise run test-sync", "mise run test-migration"]
 
 [tasks.smoketest]
 description = "Run smoke test against a live MISP instance"
@@ -73,7 +74,7 @@ run = "${COMPOSE_CMD:-podman compose} -f tests/docker-compose.sync-test.yml logs
 
 [tasks.settings-update]
 description = "Regenerate files/misp-config/settings-upstream.yaml from a live MISP (builds and runs the test stack)"
-run = "scripts/update-settings.sh ${@}"
+run = "python scripts/update_settings.py --stack --write ${@}"
 
 [tasks.composer-lock]
 description = "Resolve MISP's PHP dependencies for the current CORE_TAG into files/composer.lock"

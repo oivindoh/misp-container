@@ -10,8 +10,9 @@ set -euo pipefail
 # each.
 #
 # Usage:
-#   tests/run-kind-test.sh           # create the cluster, test, delete it
-#   tests/run-kind-test.sh --keep    # leave the cluster running
+#   tests/run-kind-test.sh             # create the cluster, test, delete it
+#   tests/run-kind-test.sh --postgres  # the postgres component in place of mariadb
+#   tests/run-kind-test.sh --keep      # leave the cluster running
 #
 # The images must exist locally as
 #   ghcr.io/oivindoh/misp-container{,-caddy,-modules}:${MISP_IMAGE_TAG}
@@ -31,9 +32,12 @@ PORT=38080
 # The admin key tests/kind/values.yaml sets
 ADMIN_KEY=kindTESTkey0123456789abcdefghijklmnopqrs
 KEEP=0
+VALUES=(-f "$SCRIPT_DIR/kind/values.yaml")
+DB=mysql
 for arg in "$@"; do
     case "$arg" in
         --keep) KEEP=1 ;;
+        --postgres) VALUES+=(-f "$SCRIPT_DIR/kind/values-postgres.yaml"); DB=postgres ;;
         *) echo "unknown argument: $arg" >&2; exit 2 ;;
     esac
 done
@@ -69,7 +73,7 @@ diagnose() {
     kc get pods -o wide || true
     echo "--- events ---"
     kc get events --sort-by=.lastTimestamp 2>/dev/null | tail -30 || true
-    for target in job/configure-1 job/configure-2 deploy/web deploy/worker statefulset/mysql; do
+    for target in job/configure-1 job/configure-2 job/org-sync-1 job/org-sync-2 deploy/web deploy/worker "statefulset/$DB"; do
         echo "--- logs $target ---"
         kc logs "$target" --all-containers --tail=60 2>/dev/null || true
     done
@@ -113,7 +117,9 @@ wait_for_job() {
     done
 }
 
-# Waits for the configure Job of a release revision, then for the Deployments
+# Waits for the configure Job of a release revision, then for the Deployments,
+# then for the org-sync Job, which runs once web serves (helm waits for none of
+# them: the Jobs carry Argo CD annotations, not Helm hooks)
 wait_for_release() {
     wait_for_job "configure-$1" 900
     for deploy in web worker modules metrics; do
@@ -121,6 +127,7 @@ wait_for_release() {
             diagnose; exit 1
         fi
     done
+    wait_for_job "org-sync-$1" 300
 }
 
 # The repository's venv has pytest (uv sync)
@@ -141,7 +148,7 @@ smoke_test() {
 }
 
 section "Install"
-helm install misp "$CHART" --namespace "$NAMESPACE" --create-namespace -f "$SCRIPT_DIR/kind/values.yaml"
+helm install misp "$CHART" --namespace "$NAMESPACE" --create-namespace "${VALUES[@]}"
 
 section "Configure Job and rollout"
 wait_for_release 1
@@ -174,7 +181,7 @@ echo "configure Job: $json_lines JSON lines"
 section "Upgrade"
 # A changed value: a new configure Job, the old one removed, the pods rolled
 web_before=$(kc get pods -l app.kubernetes.io/name=web -o name)
-helm upgrade misp "$CHART" --namespace "$NAMESPACE" -f "$SCRIPT_DIR/kind/values.yaml" \
+helm upgrade misp "$CHART" --namespace "$NAMESPACE" "${VALUES[@]}" \
     --set env.PHP_MAX_FILE_UPLOADS=51
 wait_for_release 2
 if kc get job configure-1 >/dev/null 2>&1; then

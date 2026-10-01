@@ -52,6 +52,7 @@ def wait_for_jobs(stack, inst, timeout=90):
         if sql(stack, inst, "SELECT COUNT(*) FROM jobs WHERE status NOT IN (3,4);") == "0":
             return
         time.sleep(2)
+    raise RuntimeError(f"{inst}: a job is still unfinished after {timeout}s")
 
 
 def event_count(stack, inst, info):

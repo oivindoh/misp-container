@@ -105,15 +105,19 @@ Run with: `mise run test-integration`
 
 ## Kubernetes checks
 
-**Render check** (`scripts/check-chart.sh`): runs `helm lint --strict`, renders the chart with
-the default values, with each component on, with every component on, and with supplied
-Secrets, attachments in S3 and a workflow CronJob. It validates each render with
-`kubeconform -strict` against the Kubernetes schemas and, for the Cilium policies and the
-HTTPRoute, the CRD catalog. It needs `helm` and `kubeconform` (`mise install` in the
-repository). CI job: `chart`. The unit tests (`test_chart.py`) check what the renders hold.
+**Render check** (`tests/test_chart_schema.py`, `mise run test-chart`): runs `helm lint
+--strict`, renders the chart with the default values, with each component on, with every
+component on, and with supplied Secrets, attachments in S3 and a workflow CronJob. It
+validates each render with `kubeconform -strict` against the Kubernetes schemas and, for the
+Cilium policies and the HTTPRoute, the CRD catalog. It needs `helm` and `kubeconform` (`mise
+install` in the repository); without `kubeconform` the render tests skip, and in CI they
+fail. It runs with the unit tests (CI job: `unit`). `test_chart.py` checks what the renders
+hold.
 
 **kind test** (`tests/run-kind-test.sh`): creates a kind cluster, loads the three images
-under the tag `kind`, and installs the chart with `tests/kind/values.yaml`. Each step must pass:
+under the tag `kind`, and installs the chart with `tests/kind/values.yaml`: the `mariadb`
+component, or with `--postgres` the `postgres` component (`tests/kind/values-postgres.yaml`).
+CI runs both. Each step must pass:
 
 1. The configure Job and the Deployments finish; the smoke test (`e2e/test_smoke.py`) passes
    through a port-forward on 38080, and so does the chart's `helm test`.
@@ -248,14 +252,13 @@ GitHub Actions on every push to master and every PR:
 |-----|------|
 | `gate` | Stops a master run whose commit carries a release tag, since the tag run tests and releases that commit |
 | `build` | The three images into the layer cache |
-| `unit` | The unit tests |
+| `unit` | The unit tests, the chart lint and every chart render validated against the schemas |
 | `integration` | The upstream guard, then the integration suite on MariaDB, against the images from `build` (`MISP_IMAGE_TAG=ci`); uploads the JUnit report and, after a failure, the compose logs |
 | `integration-postgres` | The same on PostgreSQL, in parallel |
 | `hub-spoke` | The sync suite, in parallel with `integration` |
 | `migration` | The migration suite (pytest), in parallel; uploads the JUnit report and, after a failure, the compose logs |
-| `chart` | `helm lint` and every chart render validated against the schemas |
-| `kind` | The chart on a kind cluster: install, smoke test, `helm test`, task runs, upgrade, rollback |
-| `scan` | Trivy on the three images |
+| `kind` | The chart on a kind cluster, once on MariaDB and once on PostgreSQL: install, smoke test, `helm test`, task runs, upgrade, rollback |
+| `scan` | Trivy on the three images: CRITICAL and HIGH findings go to the Security tab, and a CRITICAL one with a fix fails the job, which blocks `release` |
 | `release` | On a tag: push the images and the chart, and create the GitHub Release, after every other job |
 
 ## Environment

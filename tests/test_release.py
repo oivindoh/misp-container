@@ -67,3 +67,18 @@ def test_the_image_tag_sits_in_every_compose_file_of_ours():
         text = path.read_text()
         if "ghcr.io/oivindoh/misp-container" in text:
             assert release.IMAGE_DEFAULT.search(text), path
+
+
+def test_set_install_version_changes_the_install_examples_only():
+    text = ("helm install misp oci://ghcr.io/oivindoh/charts/misp --version 1.0.0 \\\n"
+            "    --namespace misp\n"
+            "helm upgrade misp oci://ghcr.io/oivindoh/charts/misp --version 2.0.0 --namespace misp\n")
+    assert release.set_install_version(text, "2.1.0") == (
+        "helm install misp oci://ghcr.io/oivindoh/charts/misp --version 2.1.0 \\\n"
+        "    --namespace misp\n"
+        "helm upgrade misp oci://ghcr.io/oivindoh/charts/misp --version 2.0.0 --namespace misp\n")
+
+
+def test_the_install_examples_sit_in_every_doc_of_ours():
+    for path in release.DOC_FILES:
+        assert release.INSTALL_VERSION.search(path.read_text()), path

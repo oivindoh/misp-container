@@ -81,7 +81,11 @@ def secret_users() -> dict[str, dict[str, set[str]]]:
 def secrets() -> str:
     users = secret_users()
     rows = []
-    for path in sorted((chart.CHART / "files").glob("secrets-*.env"), key=lambda p: SECRET_ORDER.index(p.name)):
+    def order(path: Path):
+        # the known ones in their order, then any new one by name
+        return (path.name not in SECRET_ORDER, SECRET_ORDER.index(path.name) if path.name in SECRET_ORDER else 0, path.name)
+
+    for path in sorted((chart.CHART / "files").glob("secrets-*.env"), key=order):
         name = "misp-" + path.stem.removeprefix("secrets-")
         keys = [line.split("=", 1)[0] for line in path.read_text().splitlines()
                 if "=" in line and not line.lstrip().startswith("#")]
@@ -97,14 +101,11 @@ SECRET_ORDER = ["secrets-db.env", "secrets-app.env", "secrets-admin.env", "secre
 
 
 def components() -> str:
-    comments = chart.value_comments()
-    return table(("Component", "Adds"), [(f"`{key}`", comments.get(key, "")) for key in chart.components()])
+    return table(("Component", "Adds"), chart.value_rows()[1])
 
 
 def values() -> str:
-    comments = chart.value_comments()
-    parts = chart.components()
-    return table(("Value", "Is"), [(f"`{key}`", text) for key, text in comments.items() if key not in parts])
+    return table(("Value", "Is"), chart.value_rows()[0])
 
 
 GENERATORS = {
