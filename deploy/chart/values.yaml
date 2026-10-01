@@ -114,7 +114,7 @@ mariadb:
 # and the like).
 postgres:
   enabled: false
-  image: docker.io/library/postgres:17
+  image: docker.io/library/postgres:18
   size: 20Gi
   storageClass: ""
   args: ["-c", "shared_buffers=512MB"]

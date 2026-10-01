@@ -112,6 +112,31 @@ def test_the_postgres_component_points_misp_at_it():
     assert env_data("postgres.enabled=true", "env.DB_HOST=pg.example.org")["DB_HOST"] == "pg.example.org"
 
 
+def test_the_postgres_pod_refuses_a_claim_from_chart_1(tmp_path):
+    """The image looks for older data only where its own layout puts it; chart 1.x kept the cluster in pgdata/."""
+    import subprocess
+    spec = chart.pod_spec(chart.find("StatefulSet", "postgres", "postgres.enabled=true"))
+    postgres = spec["containers"][0]
+    assert [m["mountPath"] for m in postgres["volumeMounts"]] == ["/var/lib/postgresql"]
+    assert "PGDATA" not in {e["name"] for e in postgres["env"]}
+    check = next(c for c in spec["initContainers"] if c["name"] == "check-data")
+    script = check["command"][-1].replace("/var/lib/postgresql", str(tmp_path))
+
+    def run():
+        return subprocess.run(["sh", "-c", script], env={"PG_MAJOR": "18", "PATH": "/usr/bin:/bin"},
+                              capture_output=True, text=True)
+
+    assert run().returncode == 0
+    (tmp_path / "18/docker").mkdir(parents=True)
+    (tmp_path / "18/docker/PG_VERSION").write_text("18\n")
+    assert run().returncode == 0
+    (tmp_path / "pgdata").mkdir()
+    (tmp_path / "pgdata/PG_VERSION").write_text("17\n")
+    refused = run()
+    assert refused.returncode == 1
+    assert "PostgreSQL 17 data in" in refused.stderr and "runs PostgreSQL 18" in refused.stderr
+
+
 def test_supplied_secrets_render_no_secret():
     assert "Secret" not in kinds("secrets.create=false", "migrate.enabled=true")
     web = chart.find("Deployment", "web", "secrets.create=false")

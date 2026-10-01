@@ -94,6 +94,10 @@ kubectl -n misp delete deployment,statefulset -l app.kubernetes.io/part-of=misp
 helm upgrade misp oci://ghcr.io/oivindoh/charts/misp --version 2.0.0 --namespace misp -f values.yaml
 ```
 
+The `postgres` component of chart 2.0 runs PostgreSQL 18, which cannot read the claim of a 1.x
+release. Its pod refuses to start on that claim. Dump the database before the upgrade, and
+restore it into a new claim ([operations.md](operations.md#a-new-postgresql-major-version)).
+
 ## Components
 
 Each component is off by default:

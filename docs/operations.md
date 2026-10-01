@@ -8,6 +8,8 @@
 - Restore into a release with the same Secrets: load the dump, copy the attachments, then
   run the configure Job again.
 - The salt and the encryption key do not rotate. The GPG key rotates through its Secret.
+- A new PostgreSQL major version cannot read the data of the one before: move it with a dump
+  and a restore.
 
 ## What to back up
 
@@ -28,8 +30,11 @@ A logical dump, from the database pod of the release:
 # MariaDB
 kubectl -n misp exec sts/mysql -- sh -c 'mariadb-dump --single-transaction -u misp -p"$MARIADB_PASSWORD" misp' > misp.sql
 # PostgreSQL
-kubectl -n misp exec sts/postgres -- pg_dump -U misp misp > misp.sql
+kubectl -n misp exec sts/postgres -- pg_dump --clean --if-exists -U misp misp > misp.sql
 ```
+
+The PostgreSQL dump drops each table before it creates it, so it loads over the empty MISP
+that the configure Job creates.
 
 An external database is dumped the same way from wherever it runs. The attachments, when
 the storage class offers no snapshots:
@@ -77,3 +82,33 @@ directly and needs no dump.
 [architecture.md](architecture.md#rollout-order) describes what serves when during a rollout.
 [kubernetes.md](kubernetes.md#install) has the chart versions, and the steps for an upgrade
 from chart 1.x.
+
+### A new PostgreSQL major version
+
+A PostgreSQL major version cannot read the data of the one before. The `postgres` pod and
+the Compose `postgres` service refuse to start on it. Move the data with a dump:
+
+1. Dump the database with the old release, as in [What to back up](#what-to-back-up).
+2. Delete the StatefulSet and its claim:
+
+   ```bash
+   kubectl -n misp delete statefulset postgres
+   kubectl -n misp delete pvc postgres-data-postgres-0
+   ```
+
+3. Upgrade to the new release with `web.replicas: 0` and `worker.replicas: 0`, then follow
+   [Restore](#restore) from step 2. The StatefulSet gets an empty claim, and the new major
+   version creates its cluster there.
+
+In Compose, load the dump before the configure service runs. Run the first two commands
+with the old compose file and the rest with the new one. The volume is
+`<project>_postgres-data`, and the project of a stack started in `deploy/` is `deploy`:
+
+```bash
+podman compose --profile postgres exec -T postgres sh -c 'pg_dump --clean --if-exists -U "$POSTGRES_USER" misp' > misp.sql
+podman compose --profile postgres down
+podman volume rm deploy_postgres-data
+podman compose --profile postgres up -d postgres
+podman compose --profile postgres exec -T postgres sh -c 'psql -U "$POSTGRES_USER" misp' < misp.sql
+podman compose --profile postgres up -d
+```

@@ -27,6 +27,26 @@ spec:
         seccompProfile:
           type: RuntimeDefault
       {{- include "misp.podScheduling" . | nindent 6 }}
+      initContainers:
+        # A claim from chart 1.x holds its cluster in pgdata/, where the image does not
+        # look for older data: without this check a new cluster starts empty beside it.
+        - name: check-data
+          image: {{ .Values.postgres.image }}
+          command:
+            - sh
+            - -c
+            - |
+              if [ -s /var/lib/postgresql/pgdata/PG_VERSION ]; then
+                echo "PostgreSQL $(cat /var/lib/postgresql/pgdata/PG_VERSION) data in /var/lib/postgresql/pgdata, and this image runs PostgreSQL $PG_MAJOR: dump it and restore it into an empty claim (docs/operations.md, A new PostgreSQL major version)" >&2
+                exit 1
+              fi
+          volumeMounts:
+            - name: postgres-data
+              mountPath: /var/lib/postgresql
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
       containers:
         - name: postgres
           image: {{ .Values.postgres.image }}
@@ -51,11 +71,9 @@ spec:
                   key: DB_PASSWORD
             - name: POSTGRES_INITDB_ARGS
               value: "--encoding=UTF8"
-            - name: PGDATA
-              value: /var/lib/postgresql/data/pgdata
           volumeMounts:
             - name: postgres-data
-              mountPath: /var/lib/postgresql/data
+              mountPath: /var/lib/postgresql
           resources:
             {{- toYaml .Values.postgres.resources | nindent 12 }}
           startupProbe:
