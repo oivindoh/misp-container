@@ -338,9 +338,9 @@ CMD ["caddy", "run", "--config", "/etc/caddy/Caddyfile"]
 # Distroless Python on Debian 13 (trixie). No shell, no package manager.
 #
 # Edit files/requirements-modules.txt to change the version or extras:
-#   misp-modules[minimal]==3.0.7  (default) -- common enrichment APIs
-#   misp-modules[all]==3.0.7      -- everything including numpy, pandas, opencv
-#   misp-modules==3.0.7           -- core only (~89 modules, 106 MB)
+#   misp-modules[minimal]  (default) -- common enrichment APIs
+#   misp-modules[all]      -- everything including numpy, pandas, opencv
+#   misp-modules           -- core only (~89 modules, 106 MB)
 
 FROM debian:trixie-slim@sha256:b6e2a152f22a40ff69d92cb397223c906017e1391a73c952b588e51af8883bf8 AS modules-build
 ENV DEBIAN_FRONTEND=noninteractive
