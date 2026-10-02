@@ -70,6 +70,29 @@ class TestGenerateEmailConfig:
         assert "misp@example.com" in content
 
 
+class TestReplace:
+    """A file of app/Config is written whole."""
+
+    def test_two_containers_writing_one_file_both_succeed(self, tmp_path, monkeypatch):
+        """Compose shares app/Config between web and worker, and their process IDs can be equal."""
+        from misp_container import init
+        target = tmp_path / "config.php"
+        rename = os.replace
+        interleaved = []
+
+        def rename_after_the_other_container(src, dst):
+            if not interleaved:
+                interleaved.append(src)
+                init._replace(target, "worker")
+            rename(src, dst)
+
+        monkeypatch.setattr(init.os, "replace", rename_after_the_other_container)
+        monkeypatch.setattr(init.os, "getpid", lambda: 7)
+        init._replace(target, "web")
+        assert target.read_text() == "web"
+        assert [f.name for f in tmp_path.iterdir()] == ["config.php"]
+
+
 class TestCheckWritable:
     """The entrypoints refuse to start when the attachments directory is read-only."""
 
