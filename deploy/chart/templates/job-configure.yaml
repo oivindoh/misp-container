@@ -36,6 +36,10 @@ spec:
         - name: migrate
           {{- include "misp.image" . | nindent 10 }}
           command: ["/usr/bin/tini", "--", "python3", "-m", "misp_container.migrate"]
+          {{- with include "misp.dbEnv" . }}
+          env:
+            {{- . | nindent 12 }}
+          {{- end }}
           envFrom:
             - configMapRef:
                 name: misp-env
@@ -61,6 +65,10 @@ spec:
         - name: configure
           {{- include "misp.image" . | nindent 10 }}
           command: ["/usr/bin/tini", "--", "python3", "/entrypoint-configure.py"]
+          {{- with include "misp.dbEnv" . }}
+          env:
+            {{- . | nindent 12 }}
+          {{- end }}
           envFrom:
             - configMapRef:
                 name: misp-env

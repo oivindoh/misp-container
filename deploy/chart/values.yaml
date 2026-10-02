@@ -36,6 +36,15 @@ secrets:
   app: {}
   admin: {}
 
+# DB_USER and DB_PASSWORD from a Secret the release does not make, such as the one a database
+# operator (StackGres, CloudNativePG) keeps: a name and a key for each. They replace the same keys
+# of misp-db in every pod, the mariadb and postgres components included.
+database:
+  user: {}
+  # user: {name: misp-pg, key: username}
+  password: {}
+  # password: {name: misp-pg, key: password}
+
 # The configure Job: schema, settings, admin user, GPG and auth, on every install and upgrade.
 configure:
   resources:

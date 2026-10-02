@@ -29,6 +29,7 @@ spec:
           env:
             - name: SYNC_BASE_URL
               value: http://web:8080
+            {{- include "misp.dbEnv" . | nindent 12 }}
           envFrom:
             - configMapRef:
                 name: misp-env

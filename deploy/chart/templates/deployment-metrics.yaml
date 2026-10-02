@@ -40,13 +40,11 @@ spec:
             - name: DB_USER
               valueFrom:
                 secretKeyRef:
-                  name: misp-db
-                  key: DB_USER
+                  {{- include "misp.dbSecretKeyRef" (list . "user") | nindent 18 }}
             - name: DB_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: misp-db
-                  key: DB_PASSWORD
+                  {{- include "misp.dbSecretKeyRef" (list . "password") | nindent 18 }}
             - name: MISP_REDIS_PASSWORD
               valueFrom:
                 secretKeyRef:

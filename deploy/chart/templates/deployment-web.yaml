@@ -78,6 +78,10 @@ spec:
             - name: php-fpm
               containerPort: 9002
               protocol: TCP
+          {{- with include "misp.dbEnv" . }}
+          env:
+            {{- . | nindent 12 }}
+          {{- end }}
           envFrom:
             - configMapRef:
                 name: misp-env

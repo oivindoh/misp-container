@@ -137,6 +137,37 @@ def test_the_postgres_pod_refuses_a_claim_from_chart_1(tmp_path):
     assert "PostgreSQL 17 data in" in refused.stderr and "runs PostgreSQL 18" in refused.stderr
 
 
+DATABASE_SECRET = ("database.user.name=pg-app", "database.user.key=username",
+                   "database.password.name=pg-app", "database.password.key=password")
+
+
+def test_every_pod_takes_the_database_credentials_from_the_database_secret():
+    """env wins over envFrom: a container that reads misp-db gets DB_USER and DB_PASSWORD from database.*."""
+    pods = set()
+    for doc in chart.objects("migrate.enabled=true", "userValidity.enabled=true", *DATABASE_SECRET, every_component=True):
+        spec = chart.pod_spec(doc)
+        if not spec:
+            continue
+        for container in spec.get("initContainers", []) + spec.get("containers", []):
+            where = f"{doc['kind']} {doc['metadata']['name']}: {container['name']}"
+            refs = {e["name"]: e["valueFrom"]["secretKeyRef"] for e in container.get("env", [])
+                    if "secretKeyRef" in e.get("valueFrom", {})}
+            assert not [v for v, r in refs.items() if r == {"name": "misp-db", "key": "DB_USER"}
+                        or r == {"name": "misp-db", "key": "DB_PASSWORD"}], f"{where} reads the credentials of misp-db"
+            if any(e.get("secretRef", {}).get("name") == "misp-db" for e in container.get("envFrom", [])):
+                assert refs.get("DB_USER") == {"name": "pg-app", "key": "username"}, where
+                assert refs.get("DB_PASSWORD") == {"name": "pg-app", "key": "password"}, where
+            if any(r["name"] == "pg-app" for r in refs.values()):
+                pods.add(doc["metadata"]["name"])
+    assert {"web", "worker", "metrics", "mysql", "postgres", "housekeeping-logs", "periodic-summary"} <= pods
+
+
+def test_a_database_secret_needs_a_name_and_a_key():
+    import pytest
+    with pytest.raises(RuntimeError, match="missing property 'key'"):
+        chart.objects("database.password.name=pg-app")
+
+
 def test_supplied_secrets_render_no_secret():
     assert "Secret" not in kinds("secrets.create=false", "migrate.enabled=true")
     web = chart.find("Deployment", "web", "secrets.create=false")

@@ -167,6 +167,38 @@ checksum/secrets: {{ printf "%s%s%s%s" (.Files.Get "files/secrets-db.env") (toJs
 {{- end }}
 
 {{/*
+DB_USER and DB_PASSWORD from the Secrets that database.user and database.password name, as
+env entries of a container that reads misp-db through envFrom: env wins over envFrom.
+*/}}
+{{- define "misp.dbEnv" -}}
+{{- range $var, $ref := dict "DB_USER" .Values.database.user "DB_PASSWORD" .Values.database.password }}
+{{- if $ref }}
+- name: {{ $var }}
+  valueFrom:
+    secretKeyRef:
+      name: {{ $ref.name }}
+      key: {{ $ref.key }}
+{{- end }}
+{{- end }}
+{{- end }}
+
+{{/*
+The secretKeyRef of the database user or password: database.user or database.password when
+set, else the key of misp-db. Takes (list root "user"|"password").
+*/}}
+{{- define "misp.dbSecretKeyRef" -}}
+{{- $root := index . 0 }}
+{{- $ref := index $root.Values.database (index . 1) }}
+{{- if $ref }}
+name: {{ $ref.name }}
+key: {{ $ref.key }}
+{{- else }}
+name: misp-db
+key: {{ ternary "DB_USER" "DB_PASSWORD" (eq (index . 1) "user") }}
+{{- end }}
+{{- end }}
+
+{{/*
 Entries of an env file in files/: KEY=VALUE lines, comments and blank lines
 skipped, as a dict. Takes (list root path).
 */}}
@@ -231,6 +263,10 @@ spec:
               {{- include "misp.image" $root | nindent 14 }}
               command: ["/usr/bin/tini", "--", "python3", "-m", "misp_container.task", {{ .task | quote }}{{ range .args }}, {{ . | quote }}{{ end }}]
               {{- if $console }}
+              {{- with include "misp.dbEnv" $root }}
+              env:
+                {{- . | nindent 16 }}
+              {{- end }}
               envFrom:
                 - configMapRef:
                     name: misp-env

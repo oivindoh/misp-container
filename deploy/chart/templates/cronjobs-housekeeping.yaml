@@ -35,6 +35,10 @@ spec:
             - name: housekeeping
               {{- include "misp.image" $ | nindent 14 }}
               command: ["/usr/bin/tini", "--", "python3", "-m", "misp_container.housekeeping", {{ $table | quote }}]
+              {{- with include "misp.dbEnv" $ }}
+              env:
+                {{- . | nindent 16 }}
+              {{- end }}
               envFrom:
                 - configMapRef:
                     name: misp-env

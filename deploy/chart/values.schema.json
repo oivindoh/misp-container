@@ -25,6 +25,15 @@
       "type": "object",
       "additionalProperties": {"type": ["string", "number", "boolean", "null"]}
     },
+    "secretKeyRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "key": {"type": "string", "minLength": 1}
+      },
+      "anyOf": [{"maxProperties": 0}, {"required": ["name", "key"]}]
+    },
     "database": {
       "type": "object",
       "additionalProperties": false,
@@ -72,6 +81,14 @@
         "db": {"$ref": "#/definitions/scalars"},
         "app": {"$ref": "#/definitions/scalars"},
         "admin": {"$ref": "#/definitions/scalars"}
+      }
+    },
+    "database": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "user": {"$ref": "#/definitions/secretKeyRef"},
+        "password": {"$ref": "#/definitions/secretKeyRef"}
       }
     },
     "configure": {
