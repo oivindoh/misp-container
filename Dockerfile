@@ -9,7 +9,7 @@
 # Build through compose: podman compose build
 #
 
-ARG CORE_TAG=v2.5.47
+ARG CORE_TAG=v2.5.48
 ARG CORE_COMMIT
 ARG PHP_VER=20240924
 # The runtime packages of the final image. php-base, which the build stages
