@@ -10,6 +10,7 @@ are volumes.
 import os
 import shutil
 import subprocess
+import uuid
 from pathlib import Path
 
 from . import MISP_BASE, CONFIG_DEFAULTS
@@ -128,7 +129,8 @@ def prepare_config():
 
 def _replace(path: Path, text: str) -> None:
     """Write a file whole: a reader sees the old content or the new, never part of it."""
-    partial = path.with_name(f".{path.name}.{os.getpid()}")
+    # Compose containers share app/Config, and their process IDs can be equal
+    partial = path.with_name(f".{path.name}.{uuid.uuid4().hex}")
     partial.write_text(text)
     os.replace(partial, path)
 
