@@ -30,6 +30,9 @@ def renders() -> dict[str, list[str]]:
     cases = {"default": [], **{c: [f"{c}.enabled=true"] for c in parts},
              "all": [f"{c}.enabled=true" for c in parts],
              "secrets-supplied": ["secrets.create=false"],
+             "database-secret": [f"{c}.enabled=true" for c in parts] + [
+                 "database.user.name=pg-app", "database.user.key=username",
+                 "database.password.name=pg-app", "database.password.key=password"],
              "attachments-in-s3": ["attachments.claim=false", "env.PLUGIN_S3_BUCKET_NAME=misp"],
              "workflow-cronjob": ["cronjobs.enabled=true", "cronjobs.workflows.7=0 4 * * *"]}
     return cases

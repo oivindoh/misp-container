@@ -40,7 +40,7 @@ Container-level defaults (database and Redis hosts, PHP limits, worker counts) a
 |----------|-------------|
 | `DB_ENGINE` | `mysql` (MariaDB or MySQL, the default) or `postgres` |
 | `DB_HOST`, `DB_PORT` | The server; the port defaults to the engine's |
-| `DB_NAME`, `DB_USER`, `DB_PASSWORD` | The database and its owner (`misp-db` holds the credentials) |
+| `DB_NAME`, `DB_USER`, `DB_PASSWORD` | The database and its owner (`misp-db` holds the credentials, or the Secret that the chart's `database` value names) |
 | `DB_TLS` | `true` for a TLS connection |
 
 The `MYSQL_*` names stay as aliases of `DB_*`. On PostgreSQL the database must exist with

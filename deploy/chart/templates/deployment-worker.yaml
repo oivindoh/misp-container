@@ -30,6 +30,10 @@ spec:
         - name: worker
           {{- include "misp.image" . | nindent 10 }}
           command: ["/usr/bin/tini", "--", "python3", "/entrypoint-worker.py"]
+          {{- with include "misp.dbEnv" . }}
+          env:
+            {{- . | nindent 12 }}
+          {{- end }}
           envFrom:
             - configMapRef:
                 name: misp-env
