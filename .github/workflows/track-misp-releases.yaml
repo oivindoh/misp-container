@@ -55,8 +55,8 @@ jobs:
       # CI's strict coverage check can pass.
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
         if: steps.misp.outputs.changed == 'true' && steps.bump.outputs.skip != 'true'
-      # Warm the layer cache the CI job fills (scope misp): the PECL stage does
-      # not change between MISP releases, only the source and later stages rebuild.
+      # Warm the layer cache the CI job fills (scope misp): the extension stage
+      # does not change between MISP releases, only the source and later stages rebuild.
       - name: Build misp image (cached)
         if: steps.misp.outputs.changed == 'true' && steps.bump.outputs.skip != 'true'
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0

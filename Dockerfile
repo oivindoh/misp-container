@@ -13,12 +13,12 @@ ARG CORE_TAG=v2.5.50
 ARG CORE_COMMIT
 ARG PHP_VER=20240924
 # The runtime packages of the final image. php-base, which the build stages
-# start from, installs the same set, so composer and pecl see the extensions
-# MISP runs with.
+# start from, installs the same set, so composer and the extension builds see
+# the extensions MISP runs with.
 ARG RUNTIME_PACKAGES="ca-certificates tini gettext procps openssl gpg gpg-agent \
     php8.4 php8.4-apcu php8.4-curl php8.4-xml php8.4-intl php8.4-bcmath php8.4-mbstring \
     php8.4-mysql php8.4-pgsql php8.4-redis php8.4-gd php8.4-fpm php8.4-zip php8.4-ldap \
-    libmagic1 libldap-common librdkafka1 libbrotli1 libsimdjson25 libzstd1 ssdeep libfuzzy2 \
+    libmagic1 libldap-common librdkafka1 libbrotli1 libzstd1 ssdeep libfuzzy2 \
     unzip zip curl uuid-runtime jq python3-minimal libpython3.13-stdlib"
 
 # =============================================================================
@@ -78,7 +78,7 @@ RUN --mount=type=cache,target=/root/.composer/cache \
     composer install --no-interaction
 
 # =============================================================================
-# Stage 3: php-build - Native PHP PECL extensions
+# Stage 3: php-build - Native PHP extensions, built from pinned sources
 # =============================================================================
 FROM php-base AS php-build
 ARG PHP_VER
@@ -87,24 +87,34 @@ ENV TZ=Etc/UTC
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
     rm -f /etc/apt/apt.conf.d/docker-clean && apt-get update && apt-get install -y --no-install-recommends \
-        gcc g++ git make php8.4-dev php-pear \
-        libbrotli-dev libfuzzy-dev librdkafka-dev libsimdjson-dev libzstd-dev \
+        gcc g++ git make php8.4-dev \
+        libbrotli-dev libfuzzy-dev librdkafka-dev libzstd-dev \
     && apt-get autoremove -y
 
 RUN update-alternatives --set php /usr/bin/php8.4 && \
     update-alternatives --set php-config /usr/bin/php-config8.4 && \
     update-alternatives --set phpize /usr/bin/phpize8.4
 
-RUN pecl channel-update pecl.php.net && \
-    cp "/usr/lib/$(gcc -dumpmachine)"/libfuzzy.* /usr/lib && \
-    pecl install rdkafka-6.0.5 && \
-    pecl install simdjson-4.0.0 && \
-    pecl install zstd-0.18.0 && \
-    pecl install brotli-0.21.0 && \
-    git clone --recursive https://github.com/JakubOnderka/pecl-text-ssdeep.git /tmp/pecl-text-ssdeep && \
-    git -C /tmp/pecl-text-ssdeep checkout aa7ea7045a294548aedc3ccdfbb3936e1716bebd && \
-    cd /tmp/pecl-text-ssdeep && phpize && ./configure && make && make install && \
-    tar -czf /pecl_libs.tar.gz \
+# Each extension builds from its GitHub repository at a pinned commit, so the
+# build reaches no host but GitHub:
+#   rdkafka   arnaud-lb/php-rdkafka         6.0.5
+#   zstd      kjdev/php-ext-zstd            0.18.0, its zstd library a submodule
+#   brotli    kjdev/php-ext-brotli          0.21.0, its brotli library a submodule
+#   simdjson  JakubOnderka/simdjson_php     the fork with the encoder MISP's JsonTool calls
+#   ssdeep    JakubOnderka/pecl-text-ssdeep
+RUN cp "/usr/lib/$(gcc -dumpmachine)"/libfuzzy.* /usr/lib && \
+    build() ( \
+        mkdir "/tmp/$1" && cd "/tmp/$1" && git init -q && \
+        git fetch -q --depth 1 "https://github.com/$2.git" "$3" && git checkout -q FETCH_HEAD && \
+        git submodule -q update --init --recursive --depth 1 && \
+        phpize && ./configure && make -j"$(nproc)" && make install \
+    ) && \
+    build rdkafka arnaud-lb/php-rdkafka 2df0c74170d95d027e6773d3a9afb1fab5917558 && \
+    build zstd kjdev/php-ext-zstd c2593a4ce2457b23e7fa7f81ddf0dd9bbdd89b47 && \
+    build brotli kjdev/php-ext-brotli ced23f5b6f52ef58a3a96d4731db4bee40a82736 && \
+    build simdjson JakubOnderka/simdjson_php ab23d7e5f0edd23b49cf1385f52dc6e300a25fd4 && \
+    build ssdeep JakubOnderka/pecl-text-ssdeep aa7ea7045a294548aedc3ccdfbb3936e1716bebd && \
+    tar -czf /php-extensions.tar.gz \
         /usr/lib/php/${PHP_VER}/ssdeep.so \
         /usr/lib/php/${PHP_VER}/rdkafka.so \
         /usr/lib/php/${PHP_VER}/brotli.so \
@@ -231,9 +241,9 @@ RUN groupadd -g ${MISP_GID} misp && \
     useradd -u ${MISP_UID} -g ${MISP_GID} -m -s /bin/bash misp && \
     update-alternatives --set php /usr/bin/php8.4
 
-# Install PHP PECL extensions
-COPY --from=php-build /pecl_libs.tar.gz /
-RUN tar -xzf /pecl_libs.tar.gz && rm /pecl_libs.tar.gz && \
+# Install the native PHP extensions
+COPY --from=php-build /php-extensions.tar.gz /
+RUN tar -xzf /php-extensions.tar.gz && rm /php-extensions.tar.gz && \
     for mod in ssdeep rdkafka brotli simdjson zstd; do \
         for dir in /etc/php/*/; do \
             echo "extension=${mod}.so" > "${dir}mods-available/${mod}.ini"; \
