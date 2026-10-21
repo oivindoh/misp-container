@@ -25,7 +25,7 @@ The `Dockerfile` builds the images from these stages:
 |---|---|
 | php-base | Common runtime packages |
 | composer | PHP dependencies, pinned by files/composer.lock |
-| php-build | Native PHP PECL extensions |
+| php-build | Native PHP extensions, built from pinned sources |
 | misp-source | Clone MISP, set permissions |
 | uv | Python package installer (pinned) |
 | final | Runtime image (non-root) |

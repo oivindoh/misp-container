@@ -226,6 +226,17 @@ def test_fpm_php_ini_turns_upload_progress_off(stack):
     assert (rc, out) == (0, 'string(1) "0"'), out
 
 
+@pytest.mark.parametrize("extension", ["rdkafka", "zstd", "brotli", "simdjson", "ssdeep"])
+def test_php_loads_the_built_extension(stack, extension):
+    # PHP skips an extension it cannot load with a warning and runs on without it
+    assert extension in stack.exec("web", "php -m 2>/dev/null").split()
+
+
+def test_simdjson_has_the_encoder_misp_calls(stack):
+    # MISP's JsonTool encodes with simdjson_encode when it exists, else with json_encode
+    assert stack.exec("web", "php -r 'var_dump(function_exists(\"simdjson_encode\"));' 2>/dev/null") == "bool(true)"
+
+
 # -- distribution files and app/Config rendering -------------------------------------
 
 def test_taxonomies_ship_in_the_image(stack):

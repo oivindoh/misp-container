@@ -47,7 +47,9 @@ jobs:
 
   # Builds each image into its own layer cache scope, in parallel. The suite
   # jobs rebuild from those caches in seconds and run against the images they
-  # loaded.
+  # loaded. The misp image's final stage never comes from the cache: its apt
+  # layer takes the current Debian packages, security updates included, which
+  # the suites, the scan and the release then all use.
   build:
     needs: gate
     if: needs.gate.outputs.release_commit != 'true'
@@ -61,6 +63,7 @@ jobs:
             target: final
             image: ghcr.io/oivindoh/misp-container
             scope: misp
+            no-cache-filters: final
           - name: caddy
             target: caddy
             image: ghcr.io/oivindoh/misp-container-caddy
@@ -79,6 +82,7 @@ jobs:
           target: ${{ matrix.target }}
           load: true
           tags: ${{ matrix.image }}:ci
+          no-cache-filters: ${{ matrix.no-cache-filters }}
           cache-from: |
             type=gha,scope=misp
             type=gha,scope=${{ matrix.scope }}
