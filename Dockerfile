@@ -9,7 +9,7 @@
 # Build through compose: podman compose build
 #
 
-ARG CORE_TAG=v2.5.47
+ARG CORE_TAG=v2.5.50
 ARG CORE_COMMIT
 ARG PHP_VER=20240924
 # The runtime packages of the final image. php-base, which the build stages
@@ -24,8 +24,8 @@ ARG RUNTIME_PACKAGES="ca-certificates tini gettext procps openssl gpg gpg-agent 
 # =============================================================================
 # Stage 1: php-base - Common runtime packages
 # =============================================================================
-# debian:trixie-20260505-slim
-FROM debian:trixie-slim@sha256:b6e2a152f22a40ff69d92cb397223c906017e1391a73c952b588e51af8883bf8 AS php-base
+# debian:trixie-20261020-slim
+FROM debian:trixie-slim@sha256:62bd423aeee912639ca8ee681c2b762cb3e25137e0a92b20be455898a9f034ad AS php-base
 ENV DEBIAN_FRONTEND=noninteractive
 ARG RUNTIME_PACKAGES
 
@@ -114,8 +114,8 @@ RUN pecl channel-update pecl.php.net && \
 # =============================================================================
 # Stage 4: misp-source - Clone MISP, set permissions
 # =============================================================================
-# debian:trixie-20260505-slim
-FROM debian:trixie-slim@sha256:b6e2a152f22a40ff69d92cb397223c906017e1391a73c952b588e51af8883bf8 AS misp-source
+# debian:trixie-20261020-slim
+FROM debian:trixie-slim@sha256:62bd423aeee912639ca8ee681c2b762cb3e25137e0a92b20be455898a9f034ad AS misp-source
 ARG CORE_TAG
 ARG CORE_COMMIT
 ARG MISP_UID=1000
@@ -191,8 +191,8 @@ FROM ghcr.io/astral-sh/uv:latest@sha256:b46b03ddfcfbf8f547af7e9eaefdf8a39c8cebcb
 # install, so what it removes (perl from adduser and debconf, gconv, the systemd
 # libraries, the Python test suite, docs and man pages) never enters a layer.
 # Deleted in a later layer on top of php-base, those files would still be pulled.
-# debian:trixie-20260505-slim
-FROM debian:trixie-slim@sha256:b6e2a152f22a40ff69d92cb397223c906017e1391a73c952b588e51af8883bf8 AS final
+# debian:trixie-20261020-slim
+FROM debian:trixie-slim@sha256:62bd423aeee912639ca8ee681c2b762cb3e25137e0a92b20be455898a9f034ad AS final
 ENV DEBIAN_FRONTEND=noninteractive
 
 ARG RUNTIME_PACKAGES
@@ -342,7 +342,7 @@ CMD ["caddy", "run", "--config", "/etc/caddy/Caddyfile"]
 #   misp-modules[all]      -- everything including numpy, pandas, opencv
 #   misp-modules           -- core only (~89 modules, 106 MB)
 
-FROM debian:trixie-slim@sha256:b6e2a152f22a40ff69d92cb397223c906017e1391a73c952b588e51af8883bf8 AS modules-build
+FROM debian:trixie-slim@sha256:62bd423aeee912639ca8ee681c2b762cb3e25137e0a92b20be455898a9f034ad AS modules-build
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \

@@ -206,12 +206,6 @@ settings:
     file_only: true
     sensitive: true
     track_only: true
-  MISP.discussion_disable:
-    value: false
-    description: Completely disable ability for user to add discussion to events.
-    type: boolean
-    level: 1
-    track_only: true
   MISP.email_from_name:
     value: ''
     description: Notification e-mail sender name.
@@ -423,12 +417,6 @@ settings:
   MISP.publish_alerts_summary_only:
     value: false
     description: This setting is deprecated. Please use `MISP.event_alert_metadata_only` instead.
-    type: boolean
-    level: 1
-    track_only: true
-  MISP.showDiscussionsCountOnIndex:
-    value: false
-    description: When enabled, the aggregate number of discussion posts for the event becomes visible to the currently logged in user on the event index UI.
     type: boolean
     level: 1
     track_only: true
@@ -4456,12 +4444,6 @@ settings:
   Plugin.Workflow_triggers_object-after-save:
     value: false
     description: Enable/disable the `object-after-save` trigger
-    type: boolean
-    level: 1
-    track_only: true
-  Plugin.Workflow_triggers_post-after-save:
-    value: false
-    description: Enable/disable the `post-after-save` trigger
     type: boolean
     level: 1
     track_only: true

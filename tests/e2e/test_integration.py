@@ -218,6 +218,14 @@ def test_fpm_listens_on_9002(stack):
     assert ":232A" in stack.exec("web", "cat /proc/net/tcp6")
 
 
+def test_fpm_php_ini_turns_upload_progress_off(stack):
+    # PHP-FPM starts with -c /tmp/misp-php.ini; the CLI reads the same file here, and its
+    # startup notices go to stderr
+    rc, out = stack.exec_rc("web", "php -c /tmp/misp-php.ini "
+                                   "-r 'var_dump(ini_get(\"session.upload_progress.enabled\"));' 2>/dev/null")
+    assert (rc, out) == (0, 'string(1) "0"'), out
+
+
 # -- distribution files and app/Config rendering -------------------------------------
 
 def test_taxonomies_ship_in_the_image(stack):

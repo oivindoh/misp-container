@@ -306,13 +306,31 @@ class TestIndexes:
 
 
 class TestCrossEngineGate:
-    def test_schema_mismatch_exits_5(self, monkeypatch):
-        monkeypatch.setattr(db, "init_schema", lambda: None)
+    @pytest.fixture
+    def steps(self, monkeypatch):
+        steps = []
+        monkeypatch.setattr(db, "init_schema", lambda: steps.append("baseline"))
+        monkeypatch.setattr(migrate, "setup_tmp", lambda: None)
+        monkeypatch.setattr(migrate, "prepare_config", lambda: steps.append("app/Config"))
+        monkeypatch.setattr(migrate.cake, "run_updates", lambda: steps.append("updates"))
+        return steps
+
+    def test_schema_mismatch_exits_5(self, monkeypatch, steps):
         monkeypatch.setattr(migrate, "source_schema_state", lambda c: ("120", set()))
         monkeypatch.setattr(migrate, "target_schema_state", lambda c, e: ("159", {"m1"}))
         with pytest.raises(SystemExit) as exc:
             migrate.migrate_cross_engine(object(), object())
         assert exc.value.code == migrate.EXIT_SCHEMA
+
+    def test_the_target_takes_misps_updates_before_the_check(self, monkeypatch, steps):
+        # A release can ship ledger migrations its PostgreSQL baseline does not record
+        monkeypatch.setattr(migrate, "source_schema_state", lambda c: steps.append("check") or ("159", {"m1", "m2"}))
+        monkeypatch.setattr(migrate, "target_schema_state", lambda c, e: ("159", {"m1", "m2"}))
+        monkeypatch.setattr(migrate, "target_tables", lambda c, e: [])
+        monkeypatch.setattr(migrate, "source_tables", lambda c: [])
+        monkeypatch.setattr(migrate, "reset_sequences", lambda c, t: None)
+        assert migrate.migrate_cross_engine(object(), object()) == 0
+        assert steps == ["baseline", "app/Config", "updates", "check"]
 
 
 class TestConfig:

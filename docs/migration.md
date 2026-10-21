@@ -41,7 +41,7 @@ flowchart LR
 |------|------------------------------|----------------------------------|
 | Identity | `MISP.uuid` and the salt and key, where the source stores them, must equal this deployment's values (exit 4) | same |
 | Target | must be empty (exit 3), or `MIGRATE_FORCE=true` drops every table first. A copy the migration made stays (exit 0) unless `MIGRATE_REPLACE_COPY=true` as well | same |
-| Schema | each table created from the source's own `CREATE TABLE` (MySQL 8 collations mapped for MariaDB) | this image's PostgreSQL baseline; the source must be at the same `db_version` and ledger state (exit 5) |
+| Schema | each table created from the source's own `CREATE TABLE` (MySQL 8 collations mapped for MariaDB) | this image's PostgreSQL baseline, then `cake Admin runUpdates` on it; the source must be at the same `db_version` and ledger state (exit 5) |
 | Rows | every table, whole | every table the baseline has, by column name, in multi-row inserts with the table's secondary indexes dropped, then built once; flags become booleans, zero dates become NULL; the id sequences move past the copied ids |
 | After | `MISP.live=false` on the copy, so web and worker wait for the configure Job | same |
 | Files | the attachments of `MIGRATE_SOURCE_FILES` or `MIGRATE_SOURCE_S3_BUCKET` into the deployment's bucket or attachments volume (see [Attachments](#attachments)) | same |
