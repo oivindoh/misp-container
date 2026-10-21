@@ -81,9 +81,6 @@ settings:
       sensitive: true
 
     # Background jobs Redis + supervisor
-    SimpleBackgroundJobs.enabled:
-      description: "Enables or disables background jobs with Supervisor backend. <span class=\"red bold\">Please read <a href=\"https://gith..."
-      value: true
     SimpleBackgroundJobs.supervisor_host:
       description: "The host where the Supervisor XML-RPC API is running"
       value: "127.0.0.1"
@@ -419,10 +416,6 @@ settings:
     MISP.disablerestalert:
       description: "This setting controls whether notification e-mails will be sent when an event is created via the REST interface. It m..."
       value: true
-    MISP.disable_cached_exports:
-      description: "Cached exports can take up a considerable amount of space and can be disabled instance wide using this setting. Even ..."
-      value: true
-      force: true
     MISP.download_attachments_on_load:
       description: "Always download attachments when loaded by a user in a browser. It is highly recommended to leave this setting on tru..."
       value: true
@@ -439,9 +432,6 @@ settings:
     MISP.log_client_ip_header:
       description: "If log_client_ip is enabled, you can customize which header field contains the client's IP address. This is generally..."
       value: HTTP_X_FORWARDED_FOR
-    MISP.log_errors_ndjson_path:
-      description: "Path for the ndjson error log file - defaults to /var/www/MISP/app//app/tmp/logs/error.log.ndjson"
-      value: /var/www/MISP/app/tmp/logs/error.log.ndjson
     MISP.attachment_scan_timeout:
       description: "How long to wait for scan results in seconds"
       value: 30
@@ -620,9 +610,6 @@ settings:
       value: 259200
 
     # External lookups
-    Plugin.CyCat_url:
-      description: "URL to use for CyCat lookups, if enabled"
-      value: "https://api.cycat.org"
     Plugin.Geolocation_url:
       description: "The base URL of the tile server used for geolocation maps. Defaults to https://geo.circl.lu if not set"
       value: "https://geo.circl.lu"
@@ -706,9 +693,6 @@ settings:
   # -- s3: S3 attachment storage (only applied when PLUGIN_S3_BUCKET_NAME is set)
   s3:
 
-    Plugin.S3_enable:
-      description: "Enables or disables uploading of malware samples to S3 rather than to disk (WARNING: Get permission from amazon first!)"
-      value: true
     Plugin.S3_aws_compatible:
       description: "Use external AWS compatible system such as MinIO"
       value: true

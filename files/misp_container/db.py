@@ -8,6 +8,7 @@ engine-neutral or built through the helpers below, so callers never branch.
 
 from __future__ import annotations
 
+import os
 import sys
 import time
 from contextlib import closing
@@ -210,6 +211,15 @@ def execute(sql: str, params=None) -> int:
         conn.close()
 
 
+def has_column(table: str, column: str) -> bool:
+    """Whether a table of the database DB_* points at has this column, on either engine."""
+    schema = "current_schema()" if is_postgres() else "DATABASE()"
+    rows = dict_query("SELECT 1 AS present FROM information_schema.columns "
+                      f"WHERE table_schema = {schema} AND table_name = %s AND column_name = %s",
+                      (table, column))
+    return bool(rows)
+
+
 def query_ok(sql: str) -> bool:
     """Run a statement, return True if it succeeded."""
     try:
@@ -286,6 +296,15 @@ SCHEMA_FILES = {
     MYSQL: "/var/www/MISP/INSTALL/MYSQL.sql",
     POSTGRES: "/var/www/MISP/INSTALL/POSTGRESQL.sql",
 }
+# MISP 3.0 ships a MariaDB baseline: its collations are not MySQL's
+MARIADB_SCHEMA_FILE = "/var/www/MISP/INSTALL/MARIADB.sql"
+
+
+def schema_file() -> str:
+    """The install baseline for the server DB_* points at."""
+    if engine() == MYSQL and os.path.exists(MARIADB_SCHEMA_FILE) and "mariadb" in query("SELECT VERSION()").lower():
+        return MARIADB_SCHEMA_FILE
+    return SCHEMA_FILES[engine()]
 
 
 def init_schema() -> None:
@@ -293,7 +312,7 @@ def init_schema() -> None:
     if query_ok("SELECT 1 FROM attributes LIMIT 1"):
         log.info("database already initialized")
         return
-    path = SCHEMA_FILES[engine()]
+    path = schema_file()
     log.info("importing MISP database schema from %s", path)
     with open(path) as f:
         sql = f.read()

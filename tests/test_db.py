@@ -155,3 +155,32 @@ class TestWaitForLive:
         monkeypatch.setattr(db, "query", lambda sql, check=False: "\n".join(f"{k}\t{v}" for k, v in next(outputs)))
         monkeypatch.setattr(db.time, "sleep", lambda s: None)
         db.wait_for_live(retries=1, wait_seconds=0)
+
+
+class TestSchemaFile:
+    @pytest.fixture
+    def mariadb_sql(self, tmp_path, monkeypatch):
+        path = tmp_path / "MARIADB.sql"
+        path.write_text("-- baseline\n")
+        monkeypatch.setattr(db, "MARIADB_SCHEMA_FILE", str(path))
+        return str(path)
+
+    def test_mariadb_takes_the_mariadb_baseline(self, monkeypatch, mariadb_sql):
+        monkeypatch.setattr(db, "engine", lambda: db.MYSQL)
+        monkeypatch.setattr(db, "query", lambda sql, **kw: "11.8.3-MariaDB-ubu2404")
+        assert db.schema_file() == mariadb_sql
+
+    def test_mysql_takes_the_mysql_baseline(self, monkeypatch, mariadb_sql):
+        monkeypatch.setattr(db, "engine", lambda: db.MYSQL)
+        monkeypatch.setattr(db, "query", lambda sql, **kw: "8.4.6")
+        assert db.schema_file() == db.SCHEMA_FILES[db.MYSQL]
+
+    def test_a_misp_without_a_mariadb_baseline_takes_the_mysql_one(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(db, "MARIADB_SCHEMA_FILE", str(tmp_path / "absent.sql"))
+        monkeypatch.setattr(db, "engine", lambda: db.MYSQL)
+        monkeypatch.setattr(db, "query", lambda sql, **kw: "11.8.3-MariaDB")
+        assert db.schema_file() == db.SCHEMA_FILES[db.MYSQL]
+
+    def test_postgres_takes_the_postgres_baseline(self, monkeypatch, mariadb_sql):
+        monkeypatch.setattr(db, "engine", lambda: db.POSTGRES)
+        assert db.schema_file() == db.SCHEMA_FILES[db.POSTGRES]

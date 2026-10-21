@@ -30,8 +30,6 @@ from check_upstream import NOT_RELAYED  # noqa: E402
 
 TEST_ENV = env_file(TESTS / "test-compose.env")
 ADMIN_EMAIL = TEST_ENV["ADMIN_EMAIL"]
-MISP_VERSION = next(line.split("=", 1)[1].strip() for line in (REPO / "Dockerfile").read_text().splitlines()
-                    if line.startswith("ARG CORE_TAG="))
 METRICS = "http://localhost:19191"
 MODULES = "http://localhost:16666"
 SYNC_ORG_UUID = "4f1ed2b2-1821-49da-bf2c-b7ab639d9b19"
@@ -285,7 +283,9 @@ def test_gpg_key_generated(stack):
 # -- MISP API ------------------------------------------------------------------------
 
 def test_version_reported(stack):
-    assert "2.5" in (stack.api("GET", "/servers/getVersion.json", stack.key) or {}).get("version", "")
+    shipped = json.loads(stack.exec("web", "cat /var/www/MISP/VERSION.json"))
+    expected = f"{shipped['major']}.{shipped['minor']}.{shipped['hotfix']}"
+    assert (stack.api("GET", "/servers/getVersion.json", stack.key) or {}).get("version", "").startswith(expected)
 
 
 def test_event_created_through_the_api(stack):
@@ -346,7 +346,13 @@ def restore():
 """
 
 
-def test_defaults_version_saved_after_configure(stack):
+@pytest.fixture(scope="module")
+def image_version(stack):
+    # The marker the Dockerfile writes: CORE_TAG, and +CORE_COMMIT when the build pins one
+    return stack.exec("web", "cat /srv/misp-dist-version")
+
+
+def test_defaults_version_saved_after_configure(stack, image_version):
     stack.python(GATE_PRELUDE + """
 db.query("DELETE FROM system_settings WHERE setting='misp_docker.defaults_version';")
 specs = load_settings_yaml()
@@ -355,14 +361,14 @@ for g in ('minimum_config', 'db_enable', 'initialisation', 'critical', 'optional
     apply_settings_fast(g, c, specs)
 c.save_defaults_version()
 """)
-    assert stack.sql("SELECT value FROM system_settings WHERE setting='misp_docker.defaults_version';") == f'"{MISP_VERSION}"'
+    assert stack.sql("SELECT value FROM system_settings WHERE setting='misp_docker.defaults_version';") == f'"{image_version}"'
 
 
-def test_version_gate_applies_once_then_stays(stack):
+def test_version_gate_applies_once_then_stays(stack, image_version):
     stack.python(GATE_PRELUDE + f"""
 cake.set_setting('Security.csp_enforce', 'false')
 db.query("DELETE FROM system_settings WHERE setting='misp_docker.defaults_version';")
-specs = patched('Security.csp_enforce', '{MISP_VERSION}', True)
+specs = patched('Security.csp_enforce', '{image_version}', True)
 c = SettingsCache(); c.load(); c.load_defaults_version(); apply_settings_fast('critical', c, specs); c.save_defaults_version()
 # A second run after an operator set it back applies nothing: the version is saved
 cake.set_setting('Security.csp_enforce', 'false')
@@ -372,10 +378,10 @@ restore()
     assert stack.sql("SELECT value FROM system_settings WHERE setting='Security.csp_enforce';") == "false"
 
 
-def test_env_var_wins_over_a_version_gated_default(stack):
+def test_env_var_wins_over_a_version_gated_default(stack, image_version):
     stack.python(GATE_PRELUDE + f"""
 db.query("DELETE FROM system_settings WHERE setting='misp_docker.defaults_version';")
-specs = patched('MISP.external_baseurl', '{MISP_VERSION}', 'https://should-not-win')
+specs = patched('MISP.external_baseurl', '{image_version}', 'https://should-not-win')
 c = SettingsCache(); c.load(); c.load_defaults_version(); apply_settings_fast('critical', c, specs)
 restore()
 """)
@@ -389,7 +395,6 @@ def s3_event(stack):
     access, secret, _ = stack.s3
     stack.python(f"""
 from misp_container import cake
-cake.set_setting('Plugin.S3_enable', 'true')
 cake.set_setting('Plugin.S3_aws_compatible', 'true')
 cake.set_setting('Plugin.S3_bucket_name', 'misp-attachments')
 cake.set_setting('Plugin.S3_aws_endpoint', 'http://garage:3900')

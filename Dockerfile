@@ -9,8 +9,9 @@
 # Build through compose: podman compose build
 #
 
-ARG CORE_TAG=v2.5.50
-ARG CORE_COMMIT
+# MISP 3.0 Early Access: the 3.0_wip branch, pinned to a commit (DEVELOPING.md, MISP 3.0)
+ARG CORE_TAG=3.0_wip
+ARG CORE_COMMIT=8888b98919f3d4788be0b7dd2c652f1e85281029
 ARG PHP_VER=20240924
 # The runtime packages of the final image. php-base, which the build stages
 # start from, installs the same set, so composer and the extension builds see
@@ -49,13 +50,6 @@ ENV COMPOSER_ALLOW_SUPERUSER=1
 
 WORKDIR /tmp
 RUN curl -fsSL -o /tmp/composer.json https://raw.githubusercontent.com/MISP/MISP/${CORE_COMMIT:-${CORE_TAG}}/app/composer.json
-# SimpleBackgroundJobs replaces CakeResque; MISP loads the plugin only without
-# it (scripts/check_upstream.py, check cakeresque)
-RUN if ! jq -e '.require["iglocska/cake-resque"]' /tmp/composer.json >/dev/null; then \
-        echo "MISP's app/composer.json no longer requires iglocska/cake-resque: delete this RUN" >&2; exit 1; \
-    fi && \
-    jq 'del(.require["iglocska/cake-resque"], .suggest["iglocska/cake-resque"])' /tmp/composer.json > /tmp/composer.edited && \
-    mv /tmp/composer.edited /tmp/composer.json
 
 # composer:2.9.8
 COPY --from=composer:2@sha256:1364b5b9132ab4c42ea3be53e894572c32fe75a512cb3b1c3903fcc9bce53dcc /usr/bin/composer /usr/bin/composer
@@ -136,16 +130,19 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     rm -f /etc/apt/apt.conf.d/docker-clean && apt-get update && apt-get install -y --no-install-recommends git ca-certificates
 
 # Initialise only the submodules the image ships: PyMISP and the STIX helpers
-# under app/files/scripts are removed below, so they are never fetched.
+# under app/files/scripts are removed below, so they are never fetched. No
+# submodule is recursive: only misp-iconify nests any, the sources of its icon
+# exports, over SSH URLs.
 RUN if [ -n "${CORE_COMMIT}" ]; then \
-        git clone https://github.com/MISP/MISP.git /var/www/MISP && cd /var/www/MISP && git checkout "${CORE_COMMIT}"; \
+        mkdir -p /var/www/MISP && cd /var/www/MISP && git init -q && \
+        git fetch -q --depth 1 https://github.com/MISP/MISP.git "${CORE_COMMIT}" && git checkout -q FETCH_HEAD; \
     else \
         git clone --branch "${CORE_TAG}" --depth 1 https://github.com/MISP/MISP.git /var/www/MISP; \
     fi && \
     cd /var/www/MISP && \
     git config --file .gitmodules --get-regexp path | awk '{print $2}' \
         | grep -v -E '^(PyMISP|app/files/scripts/(cti-python-stix2|misp-stix|mixbox|python-cybox|python-maec|python-stix))$' \
-        | xargs git submodule update --init --recursive --depth 1 --
+        | xargs git submodule update --init --depth 1 --
 
 # CakePHP's Postgres::describe() reuses the $seq match of an earlier column
 # for every column with a NULL default, so the sequence map points each
@@ -164,8 +161,8 @@ RUN CAKE_PG=/var/www/MISP/app/Lib/cakephp/lib/Cake/Model/Datasource/Database/Pos
     fi
 
 # Clean and set permissions - all in one layer
-RUN find /var/www/MISP/INSTALL/* ! -name 'MYSQL.sql' ! -name 'POSTGRESQL.sql' -type f -exec rm {} + && \
-    find /var/www/MISP/INSTALL/* ! -name 'MYSQL.sql' ! -name 'POSTGRESQL.sql' -type l -exec rm {} + && \
+RUN find /var/www/MISP/INSTALL/* ! -name 'MYSQL.sql' ! -name 'MARIADB.sql' ! -name 'POSTGRESQL.sql' -type f -exec rm {} + && \
+    find /var/www/MISP/INSTALL/* ! -name 'MYSQL.sql' ! -name 'MARIADB.sql' ! -name 'POSTGRESQL.sql' -type l -exec rm {} + && \
     find /var/www/MISP/.git/* ! -name HEAD -exec rm -rf {} + 2>/dev/null || true && \
     rm -rf /var/www/MISP/PyMISP \
            /var/www/MISP/app/files/scripts/cti-python-stix2 \
@@ -174,7 +171,9 @@ RUN find /var/www/MISP/INSTALL/* ! -name 'MYSQL.sql' ! -name 'POSTGRESQL.sql' -t
            /var/www/MISP/app/files/scripts/python-cybox \
            /var/www/MISP/app/files/scripts/python-maec \
            /var/www/MISP/app/files/scripts/python-stix && \
-    echo "${CORE_COMMIT:-${CORE_TAG}}" > /tmp/misp-dist-version && \
+    # The configure step records this marker and the pods wait for it; the since
+    # gates of settings.yaml compare its leading numbers
+    echo "${CORE_TAG}${CORE_COMMIT:++${CORE_COMMIT}}" > /tmp/misp-dist-version && \
     # app/Config is a per-pod volume rendered at start from these defaults
     mkdir -p /srv/misp-config && \
     cp /var/www/MISP/app/Config/core.default.php /var/www/MISP/app/Config/bootstrap.default.php \

@@ -24,12 +24,6 @@ settings:
     type: boolean
     level: 2
     track_only: true
-  GnuPG.restrict_server_signing_to_host_org:
-    value: false
-    description: Restrict server signing via /encryptionKeys/serverSign to host org only users, even for users that otherwise meet role requirements. This setting defaults to false. Site admins are exempt from this requirement, even when the setting is enabled.
-    type: boolean
-    level: 1
-    track_only: true
   LinOTPAuth.mixedauth:
     value: false
     description: Set to true to enforce OTP usage
@@ -132,6 +126,12 @@ settings:
     type: boolean
     level: 1
     track_only: true
+  MISP.default_bootstrap_theme:
+    value: ''
+    description: The Bootstrap theme pages render with under the Overmind UI, for users who have not chosen one themselves.
+    type: string
+    level: 2
+    track_only: true
   MISP.default_restsearch_limit:
     value: 0
     description: Default number of attributes returned for the given restSearch API. For the Event and Object scopes, a divisor is used to further limit the given value (dividing by 10 and 3 respectively). Can be overriden via the role configurations. Leave empty(0) to set it as unlimited.
@@ -139,8 +139,8 @@ settings:
     level: 1
     track_only: true
   MISP.default_theme:
-    value: false
-    description: Set a default theme for the instance. This is mostly used for developer purposes for now, but will be more interesting in the future.
+    value: Overmind
+    description: The theme pages render with for users who have not chosen one. Only applies when MISP.enable_themes is on; Overmind otherwise, or when unset. Default, the classic interface, is deprecated and will be removed in a future release.
     type: string
     level: 2
     track_only: true
@@ -185,12 +185,6 @@ settings:
     description: '*WARNING* This will disable taxonomy tags conflict checks when browsing attributes and objects, does not impact checks when adding tags. It can dramatically increase the performance when loading events with lots of tagged attributes or objects.'
     type: boolean
     level: 0
-    track_only: true
-  MISP.disable_threat_level:
-    value: false
-    description: Disable displaying / modifications to the threat level altogether on the instance (deprecated field).
-    type: boolean
-    level: 1
     track_only: true
   MISP.disable_user_add:
     value: false
@@ -266,12 +260,6 @@ settings:
     type: boolean
     level: 1
     track_only: true
-  MISP.fetchAttributeLegacyStrategy:
-    value: false
-    description: Enabling this setting flip the attribute fetcher into using single joined queries rather than subqueries. This should be a performance downgrade for most, but could improve performance on older mysql versions.
-    type: boolean
-    level: 2
-    track_only: true
   MISP.footer_logo:
     value: ''
     description: If set, this setting allows you to display a logo on the right side of the footer. Upload it as a custom image in the file management tool.
@@ -315,12 +303,6 @@ settings:
     description: If set, this setting allows you to display a logo as the home icon. Upload it as a custom image in the file management tool.
     type: string
     level: 2
-    track_only: true
-  MISP.log_errors_ndjson:
-    value: false
-    description: Log errors in ndjson format additionally to error.log.)
-    type: boolean
-    level: 1
     track_only: true
   MISP.log_new_audit_compress:
     value: false
@@ -459,6 +441,12 @@ settings:
   MISP.use_uuids_in_urls:
     value: false
     description: Changes the urls on the event index to /UUID instead of /ID.
+    type: boolean
+    level: 1
+    track_only: true
+  MISP.value_hover_card:
+    value: false
+    description: "Hovering an attribute value shows a card summarising what this instance records about that value \u2014 its assessment, how widely it is reported, when it was last seen and how long it stays relevant. Each hover is a database read, so this is off by default; the card costs the same as the assessment on the Value Intelligence page and nothing more. Where Plugin.Enrichment_hover_enable is also on, this card takes over the hover and the enrichment popover is not shown; enrichment's click-to-open form, if configured, is unaffected."
     type: boolean
     level: 1
     track_only: true
@@ -620,6 +608,12 @@ settings:
     type: boolean
     level: 2
     track_only: true
+  Plugin.Benchmarking_retention:
+    value: 0
+    description: 'The number of days benchmark data is kept, today included. Default: 0 (kept forever)'
+    type: numeric
+    level: 2
+    track_only: true
   Plugin.Cortex_authkey:
     value: ''
     description: Set an authentication key to be passed to Cortex
@@ -636,12 +630,6 @@ settings:
     value: ''
     description: Set to the absolute path of the Certificate Authority file that you wish to use for verifying SSL certificates.
     type: string
-    level: 1
-    track_only: true
-  Plugin.CyCat_enable:
-    value: false
-    description: Enable lookups for additional relations via CyCat.
-    type: boolean
     level: 1
     track_only: true
   Plugin.ElasticSearch_connection_string:
@@ -4375,6 +4363,18 @@ settings:
     type: boolean
     level: 1
     track_only: true
+  Plugin.ValueIntelligence_enrichment_auto_run:
+    value: 'off'
+    description: 'Whether an Analyst Profile may run enrichment modules on the Value Intelligence page without a press. The profile decides which modules; this decides whether any of them may run here. Off by default: a module run spends the instance''s quota and tells whoever operates the module that somebody is looking at this value.'
+    type: string
+    level: 1
+    track_only: true
+  Plugin.ValueIntelligence_instance_profile:
+    value: 6e2679bc-ebb0-417f-90d8-16cb1d0144ba
+    description: The uuid of the Analyst Profile this instance scores values with, for every reader whose organisation and account have selected none. Defaults to the shipped default profile. It must name a profile MISP ships or one a site admin has shared; a profile owned by a user or an organisation cannot be put in force here.
+    type: string
+    level: 1
+    track_only: true
   Plugin.Workflow_triggers_analyst-data-after-save:
     value: false
     description: Enable/disable the `analyst-data-after-save` trigger
@@ -4561,12 +4561,6 @@ settings:
     type: boolean
     level: 2
     track_only: true
-  SMIME.email:
-    value: ''
-    description: The e-mail address that the instance's S/MIME key is tied to.
-    type: string
-    level: 2
-    track_only: true
   Security.advanced_authkeys_validity:
     value: ''
     description: Maximal key lifetime in days. Use can limit that validity even more. Just newly created keys will be affected. When not set, key validity is not limited.
@@ -4739,7 +4733,7 @@ settings:
     track_only: true
   Security.sanitise_attribute_on_delete:
     value: false
-    description: Enabling this setting will sanitise the contents of an attribute on a soft delete
+    description: "Enabling this setting will sanitise the contents of an attribute on a soft delete. The original text stays in the value dictionary: once nothing refers to it any more, a site admin can remove it with /values/delete/[id] (look the id up with /values/view?value=\u2026)."
     type: boolean
     level: 1
     track_only: true
