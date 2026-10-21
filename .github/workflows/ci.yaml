@@ -1,6 +1,7 @@
 # Tests, scans and releases the images and the Helm chart: unit tests, the chart
 # renders, the stack suites in Compose, the chart on kind and Trivy; on a tag,
 # pushes the images and the chart and creates the release (tests/README.md, CI).
+# On the misp-3.0 branch, pushes the MISP 3.0 Early Access images instead.
 name: CI
 
 on:
@@ -9,10 +10,10 @@ on:
     # Tag pushes: test + scan + release.
     # A release pushes master and its tag together, which starts two runs of one
     # commit: the gate job stops the master run, and the tag run tests and releases.
-    branches: [master]
+    branches: [master, misp-3.0]
     tags: ["v*"]
   pull_request:
-    branches: [master]
+    branches: [master, misp-3.0]
 
 # Drop all permissions by default. Grant per-job.
 permissions: {}
@@ -249,6 +250,48 @@ jobs:
           name: migration-report
           path: |
             ${{ runner.temp }}/migration-junit.xml
+            ${{ runner.temp }}/*-compose-logs.txt
+          if-no-files-found: ignore
+
+  # Seeds MISP 2.5 from the published images and converts it to MISP 3.0 with
+  # the upgrade step of the images from build, on MariaDB and on PostgreSQL
+  upgrade:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        database: [mariadb, postgres]
+    env:
+      MISP_IMAGE_TAG: ci
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Load the images
+        uses: ./.github/actions/load-images
+        with:
+          misp: ${{ env.IMAGE_MISP }}
+          caddy: ${{ env.IMAGE_CADDY }}
+          modules: ${{ env.IMAGE_MODULES }}
+
+      - name: Upgrade tests (${{ matrix.database }})
+        timeout-minutes: 30
+        env:
+          TMPDIR: ${{ runner.temp }}
+        run: |
+          pip install --quiet uv
+          uv sync
+          .venv/bin/python -m pytest tests/e2e/test_upgrade.py --skip-build --db-engine ${{ matrix.database }} \
+            -v --durations=5 --junitxml="$RUNNER_TEMP/upgrade-junit.xml"
+
+      - name: Upload the test report and the compose logs
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: upgrade-${{ matrix.database }}-report
+          path: |
+            ${{ runner.temp }}/upgrade-junit.xml
             ${{ runner.temp }}/*-compose-logs.txt
           if-no-files-found: ignore
 
@@ -495,3 +538,93 @@ jobs:
           Helm chart: \`oci://ghcr.io/${{ github.repository_owner }}/charts/misp\`, version \`${{ steps.chart.outputs.version }}\`"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # A push to misp-3.0 publishes the MISP 3.0 Early Access after every other
+  # job: the images as 3.0-wip-<MISP commit>-<commit>, which never moves, and
+  # 3.0-wip, the newest; the chart as 3.0.0-wip.<run>.<attempt>, with that image
+  # tag as appVersion. No GitHub Release: the Early Access is not for
+  # production (docs/misp-3.md).
+  prerelease:
+    needs: [unit, integration, integration-postgres, hub-spoke, migration, upgrade, kind, scan]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/misp-3.0'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker tags
+        id: tags
+        run: |
+          set -euo pipefail
+          MISP=$(grep '^ARG CORE_COMMIT=' Dockerfile | cut -d= -f2)
+          if [ -z "$MISP" ]; then
+            echo "ERROR: the Dockerfile pins no CORE_COMMIT: an Early Access image names the MISP commit it carries."
+            exit 1
+          fi
+          TAG="3.0-wip-${MISP::7}-${GITHUB_SHA::7}"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "misp_tags=${{ env.IMAGE_MISP }}:${TAG},${{ env.IMAGE_MISP }}:3.0-wip" >> "$GITHUB_OUTPUT"
+          echo "caddy_tags=${{ env.IMAGE_CADDY }}:${TAG},${{ env.IMAGE_CADDY }}:3.0-wip" >> "$GITHUB_OUTPUT"
+          echo "modules_tags=${{ env.IMAGE_MODULES }}:${TAG},${{ env.IMAGE_MODULES }}:3.0-wip" >> "$GITHUB_OUTPUT"
+          echo "Image tag: ${TAG}, MISP 3.0_wip at ${MISP}"
+
+      - name: Build and push misp (from cache)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          target: final
+          push: true
+          tags: ${{ steps.tags.outputs.misp_tags }}
+          provenance: true
+          sbom: true
+          cache-from: type=gha,scope=misp
+
+      - name: Build and push caddy (from cache)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          target: caddy
+          push: true
+          tags: ${{ steps.tags.outputs.caddy_tags }}
+          provenance: true
+          sbom: true
+          cache-from: |
+            type=gha,scope=misp
+            type=gha,scope=caddy
+
+      - name: Build and push modules (from cache)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          target: modules
+          push: true
+          tags: ${{ steps.tags.outputs.modules_tags }}
+          provenance: true
+          sbom: true
+          cache-from: type=gha,scope=modules
+
+      - name: Install helm
+        uses: ./.github/actions/install-helm
+
+      - name: Push the chart
+        run: |
+          set -euo pipefail
+          VERSION="3.0.0-wip.${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}"
+          echo "$REGISTRY_TOKEN" | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
+          helm package deploy/chart --version "$VERSION" --app-version "${{ steps.tags.outputs.tag }}" \
+            --destination "$RUNNER_TEMP"
+          helm push "$RUNNER_TEMP/misp-${VERSION}.tgz" "oci://ghcr.io/${{ github.repository_owner }}/charts"
+          echo "Chart: oci://ghcr.io/${{ github.repository_owner }}/charts/misp --version ${VERSION}"
+        env:
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
