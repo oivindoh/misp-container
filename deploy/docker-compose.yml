@@ -201,6 +201,10 @@ services:
     volumes:
       - misp-attachments:/var/www/MISP/app/attachments
       - migrate-tmp:/tmp
+      # A copy into postgres runs MISP's updates on the baseline first, with an
+      # app/Config of its own that points at the target
+      - migrate-config:/var/www/MISP/app/Config
+      - migrate-app-tmp:/var/www/MISP/app/tmp
       # - /srv/old-misp/app/files:/mnt/source:ro
     depends_on:
       mysql:
@@ -285,6 +289,8 @@ volumes:
   misp-gnupg:
   configure-tmp:
   migrate-tmp:
+  migrate-config:
+  migrate-app-tmp:
   php-tmp:
   worker-misp-tmp:
   worker-tmp:

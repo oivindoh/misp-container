@@ -19,6 +19,8 @@ services:
     volumes:
       - misp-attachments:/var/www/MISP/app/attachments
       - migrate-tmp:/tmp
+      - migrate-config:/var/www/MISP/app/Config
+      - migrate-app-tmp:/var/www/MISP/app/tmp
       - ${MIGRATE_FIXTURE_DIR:-/tmp}:/mnt/source:ro
 
   mysql-target:

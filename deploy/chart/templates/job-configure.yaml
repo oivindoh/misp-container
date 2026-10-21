@@ -54,6 +54,11 @@ spec:
               mountPath: /var/www/MISP/app/attachments
             - name: tmp
               mountPath: /tmp
+            # A copy into postgres runs MISP's updates on the baseline first
+            - name: misp-config
+              mountPath: /var/www/MISP/app/Config
+            - name: misp-tmp
+              mountPath: /var/www/MISP/app/tmp
             {{- with .Values.migrate.volumeMounts }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

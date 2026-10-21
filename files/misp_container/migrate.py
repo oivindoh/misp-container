@@ -16,8 +16,8 @@ volume otherwise. The Job checks both buckets before it copies the database.
 Same engine (target mysql): every table is created from the source's own
 CREATE TABLE and copied whole; the configure step then runs MISP's schema
 updates on it, as on any upgrade. Cross engine (target postgres): the target
-gets this image's PostgreSQL baseline, the source must be at the same schema
-version, and the rows are copied into it column by column.
+gets this image's PostgreSQL baseline and MISP's updates, the source must be at
+the same schema version, and the rows are copied into it column by column.
 
 Exit codes: 0 done, or the target holds a copy this Job made (it stays unless
 MIGRATE_FORCE=true and MIGRATE_REPLACE_COPY=true); 1 copy failed; 2
@@ -38,8 +38,9 @@ import time
 from pathlib import Path
 from typing import Iterator
 
-from . import MISP_BASE, db
-from .env import env
+from . import MISP_BASE, cake, db
+from .env import apply_defaults, env
+from .init import prepare_config, setup_tmp
 from .log import setup as setup_logging, get as getlog
 from .s3 import Bucket, S3Error
 
@@ -509,6 +510,11 @@ def migrate_same_engine(src, dst) -> int:
 
 def migrate_cross_engine(src, dst) -> int:
     db.init_schema()
+    # A MISP release can ship ledger migrations that its PostgreSQL baseline does
+    # not record; a source of the same release has them applied
+    setup_tmp()
+    prepare_config()
+    cake.run_updates()
     src_version, src_applied = source_schema_state(src)
     dst_version, dst_applied = target_schema_state(dst, db.POSTGRES)
     if src_version != dst_version or src_applied != dst_applied:
@@ -632,6 +638,7 @@ def run() -> None:
 
 def main() -> None:
     setup_logging("migrate")
+    apply_defaults()
     run()
 
 
