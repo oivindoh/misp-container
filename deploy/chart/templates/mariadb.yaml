@@ -47,13 +47,11 @@ spec:
             - name: MARIADB_USER
               valueFrom:
                 secretKeyRef:
-                  name: misp-db
-                  key: DB_USER
+                  {{- include "misp.dbSecretKeyRef" (list . "user") | nindent 18 }}
             - name: MARIADB_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: misp-db
-                  key: DB_PASSWORD
+                  {{- include "misp.dbSecretKeyRef" (list . "password") | nindent 18 }}
           volumeMounts:
             - name: mysql-data
               mountPath: /var/lib/mysql

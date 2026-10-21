@@ -74,6 +74,7 @@ below come from them.
 | `affinity` | Affinity for every pod of the release. |
 | `env` | The misp-env ConfigMap: these entries on top of files/base.env. Every MISP pod reads it. |
 | `secrets` | The misp-db, misp-app and misp-admin Secrets: these entries on top of files/secrets-*.env, whose placeholders the configure Job refuses. With create: false the chart renders none of them: supply Secrets with the same names and keys (SOPS, External Secrets, Sealed Secrets). |
+| `database` | DB_USER and DB_PASSWORD from a Secret the release does not make, such as the one a database operator (StackGres, CloudNativePG) keeps: a name and a key for each. They replace the same keys of misp-db in every pod, the mariadb and postgres components included. |
 | `configure` | The configure Job: schema, settings, admin user, GPG and auth, on every install and upgrade. |
 | `web` | MISP's web tier: PHP-FPM and the caddy sidecar in each pod. Replicas scale freely. |
 | `worker` | The background workers. Replicas scale freely; the web pods reach supervisord on TCP 9001. |
@@ -159,6 +160,28 @@ The files hold placeholders that the configure Job refuses. Set the real values 
 `secrets` value, or set `secrets.create: false` and supply Secrets with the same names and
 keys, for example through SOPS, External Secrets or Sealed Secrets. The pods roll when a
 Secret the chart makes changes; after a change to a Secret you supply, restart them.
+
+### Database credentials from a Secret of their own
+
+A database operator such as StackGres or CloudNativePG keeps the credentials of its database in
+a Secret. Name that Secret and its keys in `database`, and point `env` at the server:
+
+```yaml
+database:
+  user: {name: misp-pg, key: username}
+  password: {name: misp-pg, key: password}
+env:
+  DB_ENGINE: postgres
+  DB_HOST: misp-pg
+  DB_PORT: "5432"
+```
+
+Every pod then reads `DB_USER` and `DB_PASSWORD` from that Secret, and the same keys of
+`misp-db` go unused. The Secret must be in the release's namespace. Set `database.user` or
+`database.password` alone to take only that one from it. The configure Job refuses the
+placeholder of `MYSQL_ROOT_PASSWORD` in `misp-db` also without the mariadb component, so set
+`secrets.db.MYSQL_ROOT_PASSWORD` to any other value. A change in the Secret does not roll the
+pods: restart them.
 
 These Secrets are optional and copied into every pod at start:
 
