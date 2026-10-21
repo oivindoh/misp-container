@@ -4,10 +4,10 @@ description: MISP threat intelligence platform - web, workers, configure Job, pe
 type: application
 # The chart's own SemVer: mise run release hotfix raises the patch, normal the
 # minor, breaking the major (scripts/release.py).
-version: 1.0.0
+version: 2.0.0
 # The image tag of the release: the MISP version, with -rN for a hotfix. The
 # images default to it.
-appVersion: "2.5.47"
+appVersion: "2.5.50"
 home: https://github.com/oivindoh/misp-container
 sources:
   - https://github.com/oivindoh/misp-container

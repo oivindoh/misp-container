@@ -16,7 +16,7 @@
 Each release publishes the chart to GHCR:
 
 ```bash
-helm install misp oci://ghcr.io/oivindoh/charts/misp --version 1.0.0 \
+helm install misp oci://ghcr.io/oivindoh/charts/misp --version 2.0.0 \
     --namespace misp --create-namespace -f values.yaml
 ```
 
