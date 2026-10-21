@@ -155,6 +155,7 @@ Values:
 | `affinity` | Affinity for every pod of the release. |
 | `env` | The misp-env ConfigMap: these entries on top of files/base.env. Every MISP pod reads it. |
 | `secrets` | The misp-db, misp-app and misp-admin Secrets: these entries on top of files/secrets-*.env, whose placeholders the configure Job refuses. With create: false the chart renders none of them: supply Secrets with the same names and keys (SOPS, External Secrets, Sealed Secrets). |
+| `database` | DB_USER and DB_PASSWORD from a Secret the release does not make, such as the one a database operator (StackGres, CloudNativePG) keeps: a name and a key for each. They replace the same keys of misp-db in every pod, the mariadb and postgres components included. |
 | `configure` | The configure Job: schema, settings, admin user, GPG and auth, on every install and upgrade. |
 | `web` | MISP's web tier: PHP-FPM and the caddy sidecar in each pod. Replicas scale freely. |
 | `worker` | The background workers. Replicas scale freely; the web pods reach supervisord on TCP 9001. |
