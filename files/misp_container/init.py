@@ -96,6 +96,12 @@ def setup_tmp():
     log.info("creating tmp directory structure")
     for d in ("cache", "cache/models", "cache/persistent", "cache/views", "logs"):
         Path(MISP_TMP, d).mkdir(parents=True, exist_ok=True)
+    # CakePHP keeps each table's columns here for days, and a Compose volume keeps
+    # app/tmp across containers: a schema change since must not meet the old list
+    for d in ("cache/models", "cache/persistent"):
+        for cached in Path(MISP_TMP, d).iterdir():
+            if cached.is_file():
+                cached.unlink(missing_ok=True)
 
 
 def prepare_config():
