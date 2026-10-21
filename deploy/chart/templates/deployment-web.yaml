@@ -11,7 +11,8 @@ metadata:
     # After the configure Job (wave 1)
     argocd.argoproj.io/sync-wave: "2"
 spec:
-  replicas: {{ .Values.web.replicas }}
+  # None while the upgrade component converts the database
+  replicas: {{ ternary 0 .Values.web.replicas .Values.upgrade.enabled }}
   strategy:
     type: RollingUpdate
     rollingUpdate:

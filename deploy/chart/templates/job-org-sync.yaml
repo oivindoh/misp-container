@@ -2,6 +2,7 @@
 # the MISP API once the web Deployment serves. Exits 0 at once when ADMIN_KEY
 # is empty or orgs.yaml has nothing to apply. Each release revision has its
 # own Job; Argo CD: a Sync hook in wave 3, recreated on every sync.
+{{- if not .Values.upgrade.enabled }}
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -49,3 +50,4 @@ spec:
         - name: orgs
           configMap:
             name: misp-orgs
+{{- end }}

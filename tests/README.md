@@ -2,7 +2,7 @@
 
 ## TL;DR
 
-Unit tests on the Python library, an upstream guard that checks the MISP in the image against what this repository patches or depends on, and three stack suites in pytest (`tests/e2e/`): an integration suite on one Compose stack, a hub-spoke sync suite on three instances, and a migration suite that copies a seeded instance onto MariaDB and PostgreSQL. A smoke test checks any live MISP through its API. Two Kubernetes checks cover the Helm chart: every render validated against the schemas, and the chart installed and upgraded on a kind cluster with the smoke test.
+Unit tests on the Python library, an upstream guard that checks the MISP in the image against what this repository patches or depends on, and four stack suites in pytest (`tests/e2e/`): an integration suite on one Compose stack, a hub-spoke sync suite on three instances, a migration suite that copies a seeded instance onto MariaDB and PostgreSQL, and an upgrade suite that converts a seeded MISP 2.5 to MISP 3.0. A smoke test checks any live MISP through its API. Two Kubernetes checks cover the Helm chart: every render validated against the schemas, and the chart installed and upgraded on a kind cluster with the smoke test.
 
 ```bash
 mise run test                # unit tests (~0.2s)
@@ -11,6 +11,7 @@ mise run test-integration    # the upstream guard, then single-instance integrat
 mise run test-integration -- --db-engine postgres   # the same on PostgreSQL
 mise run test-sync           # hub-spoke sync test with 3 instances (~2min)
 mise run test-migration      # the migration: MariaDB to MariaDB, MariaDB to PostgreSQL (~3min)
+mise run test-upgrade        # MISP 2.5.50 converted to MISP 3.0 (-- --db-engine postgres for PostgreSQL)
 mise run smoketest https://misp.example.com   # a live MISP; asks for an API key
 mise run test-all            # every suite
 mise run test-chart          # helm lint, render the chart with each component, validate against the schemas (~10s)
@@ -207,6 +208,24 @@ copies that bucket into a second one and compares every key and byte.
 
 Run with: `mise run test-migration` (`-- --skip-build`, `-- --keep`)
 
+## Upgrade suite
+
+`e2e/test_upgrade.py` starts the integration stack on the published 2.5.50 images and seeds it:
+two events that share an IP address, values of five types with a non-ASCII one, an
+attachment and a sighting. It stops web and worker and checks two refusals: the 3.0
+configure step on the 2.5 database, and the upgrade step without a confirmed backup. Then it
+converts the database with the upgrade step of this tree's images, runs the step again to
+see it convert nothing, and starts the stack on the 3.0 images. The checks: MISP reports
+3.x, the text column is gone, every attribute keeps its type and value, the attachment
+downloads whole, the sightings stay, and the workers rebuild the correlation between the two
+events. `--db-engine postgres` runs it all on PostgreSQL.
+
+**Files:**
+- `e2e/test_upgrade.py` -- the suite; module fixtures carry each step's state to the next
+- `docker-compose.test.yml`, `docker-compose.postgres.yml` -- the upgrade service with the test env
+
+Run with: `mise run test-upgrade` (`-- --skip-build`, `-- --keep`, `-- --db-engine postgres`)
+
 ## Smoke test
 
 `e2e/test_smoke.py` checks a live MISP through its API: the login page, API auth,
@@ -257,9 +276,11 @@ GitHub Actions on every push to master and every PR:
 | `integration-postgres` | The same on PostgreSQL, in parallel |
 | `hub-spoke` | The sync suite, in parallel with `integration` |
 | `migration` | The migration suite (pytest), in parallel; uploads the JUnit report and, after a failure, the compose logs |
+| `upgrade` | The upgrade suite, once on MariaDB and once on PostgreSQL, in parallel; uploads the JUnit report and, after a failure, the compose logs |
 | `kind` | The chart on a kind cluster, once on MariaDB and once on PostgreSQL: install, smoke test, `helm test`, task runs, upgrade, rollback |
 | `scan` | Trivy on the three images: CRITICAL and HIGH findings go to the Security tab, and a CRITICAL one with a fix fails the job, which blocks `release` |
 | `release` | On a tag: push the images and the chart, and create the GitHub Release, after every other job |
+| `prerelease` | On a push to `misp-3.0`: push the MISP 3.0 Early Access images and chart, after every other job |
 
 ## Environment
 

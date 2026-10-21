@@ -210,6 +210,26 @@ services:
       mysql:
         condition: service_healthy
 
+  # -- Conversion of a MISP 2.5 database to MISP 3.0 (one-off, one-way): stop
+  #    web and worker, back the database up and check the restore, then
+  #    UPGRADE_BACKUP_CONFIRMED=true podman compose --profile upgrade run --rm upgrade
+  #    and start the stack again. See docs/misp-3.md.
+  upgrade:
+    <<: *misp-common
+    profiles: [upgrade]
+    command: ["python3", "-m", "misp_container.upgrade"]
+    environment:
+      UPGRADE_BACKUP_CONFIRMED: ${UPGRADE_BACKUP_CONFIRMED:-false}
+    volumes:
+      - misp-config:/var/www/MISP/app/Config
+      - misp-tmp:/var/www/MISP/app/tmp
+      - upgrade-tmp:/tmp
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
   # -- Tools (podman compose --profile tools run --rm composer-lock) ---------
   composer-lock:
     profiles: [tools]
@@ -291,6 +311,7 @@ volumes:
   migrate-tmp:
   migrate-config:
   migrate-app-tmp:
+  upgrade-tmp:
   php-tmp:
   worker-misp-tmp:
   worker-tmp:

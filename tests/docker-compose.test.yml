@@ -50,6 +50,10 @@ services:
     <<: *test-env-admin
     read_only: true
 
+  upgrade:
+    <<: *test-env
+    read_only: true
+
   metrics:
     <<: *test-env
     read_only: true

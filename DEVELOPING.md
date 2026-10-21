@@ -9,6 +9,7 @@
 - New MISP release: the tracking workflow opens a PR with the bump, `files/composer.lock` and
   the catalogue; CI's strict checks tell you what changed.
 - Release: `mise run release <hotfix|normal|breaking>`, then push master and the tag.
+- MISP 3.0 Early Access: the `misp-3.0` branch, images `3.0-wip` (see MISP 3.0).
 
 ## Setup
 
@@ -90,6 +91,33 @@ the build with the file and the reason when the anchor moved:
 - **CakePHP's `Postgres.php`:** `describe()` resets its sequence match per column
   ([MISP#11172](https://github.com/MISP/MISP/issues/11172)). On a failure, check whether
   the release carries the fix and drop the patch, or adapt it.
+
+## MISP 3.0
+
+The `misp-3.0` branch builds MISP 3.0 Early Access: `CORE_TAG=3.0_wip`, MISP's development
+branch, with `CORE_COMMIT` pinning the commit. Each push to the branch runs every suite, the
+upgrade suite among them, and the `prerelease` job pushes the images and the chart
+([docs/misp-3.md](docs/misp-3.md) lists the versions). No GitHub Release comes from the branch.
+
+To move to a newer 3.0_wip commit:
+
+1. Set `ARG CORE_COMMIT` in the `Dockerfile` to the commit.
+2. Run `mise run composer-lock` and `mise run settings-update`.
+3. Push the branch. Merge master into it for the fixes of the 2.5 line.
+
+The 3.0 image differs from the 2.5 image in four places:
+
+- MISP 3.0 requires no `iglocska/cake-resque`, so `composer-prep` patches nothing.
+- `db.init_schema()` imports `INSTALL/MARIADB.sql` on a MariaDB server: MISP ships a MariaDB
+  baseline with its own collations.
+- `settings.yaml` does not turn background jobs on: MISP 3.0 has no setting for it, they are
+  always on.
+- The version marker is `3.0_wip+<CORE_COMMIT>`, which sorts after every `since:` of 2.5.
+
+The upgrade step (`misp_container.upgrade`) converts a 2.5 database with MISP's one-way
+`cake Admin runUpgrade` ([MISP's upgrade guide](https://github.com/MISP/MISP/blob/3.0_wip/docs/UPGRADE.md)).
+It runs while `attributes` has the text column `value1`, which the conversion's last
+migration drops. The configure step of a 3.0 image refuses such a database.
 
 ## Releases
 

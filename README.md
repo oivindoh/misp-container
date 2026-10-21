@@ -3,6 +3,10 @@
 A container image for [MISP](https://www.misp-project.org/) 2.5, built for Kubernetes and
 usable with Compose (podman) for development.
 
+This branch, `misp-3.0`, builds MISP 3.0 Early Access from MISP's `3.0_wip` branch, pinned to
+a commit, and publishes its images and chart as pre-releases. It is not for production. The
+`upgrade` component converts a 2.5 database to 3.0. See [docs/misp-3.md](docs/misp-3.md).
+
 ## TL;DR
 
 - One image, one entrypoint per role: a `configure` Job sets the database and settings up,
@@ -94,6 +98,7 @@ storage, network policies and periodic tasks.
 | [docs/metrics.md](docs/metrics.md) | The Prometheus metrics and example alerts |
 | [docs/migration.md](docs/migration.md) | Copying an existing MISP database and its attachments into a deployment |
 | [docs/operations.md](docs/operations.md) | Backup and restore, keys and secrets, upgrades |
+| [docs/misp-3.md](docs/misp-3.md) | The MISP 3.0 Early Access images and chart, and the upgrade of a 2.5 instance |
 | [DEVELOPING.md](DEVELOPING.md) | The settings engine, the tests, new MISP releases, the release process |
 | [tests/README.md](tests/README.md) | The test suites |
 | [AGENTS.md](AGENTS.md) | A map of the tree for agents, generated from the tree (`mise run agents-md`) |

@@ -10,7 +10,8 @@ metadata:
     # After the configure Job (wave 1)
     argocd.argoproj.io/sync-wave: "2"
 spec:
-  replicas: {{ .Values.worker.replicas }}
+  # None while the upgrade component converts the database
+  replicas: {{ ternary 0 .Values.worker.replicas .Values.upgrade.enabled }}
   selector:
     matchLabels:
       app.kubernetes.io/name: worker

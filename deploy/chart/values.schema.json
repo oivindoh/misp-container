@@ -242,6 +242,15 @@
         "volumeMounts": {"type": "array", "items": {"type": "object"}},
         "resources": {"$ref": "#/definitions/resources"}
       }
+    },
+    "upgrade": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "backupConfirmed": {"type": "boolean"},
+        "resources": {"$ref": "#/definitions/resources"}
+      }
     }
   }
 }

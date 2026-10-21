@@ -239,3 +239,14 @@ migrate:
   resources:
     requests: {cpu: 100m, memory: 256Mi}
     limits: {cpu: 2000m, memory: 1Gi}
+
+# The conversion of a MISP 2.5 database to MISP 3.0 (cake Admin runUpgrade), in the configure Job
+# before configure runs (docs/misp-3.md). One-way: back the database up and check the restore,
+# then set backupConfirmed. While it is on, web and worker run 0 replicas and the CronJobs and the
+# org sync pause; turn it off once the configure Job has finished.
+upgrade:
+  enabled: false
+  backupConfirmed: false
+  resources:
+    requests: {cpu: 100m, memory: 512Mi}
+    limits: {cpu: 2000m, memory: 4Gi}

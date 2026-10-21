@@ -242,6 +242,7 @@ metadata:
     app.kubernetes.io/component: {{ $component }}
 spec:
   schedule: {{ .schedule | quote }}
+  suspend: {{ $root.Values.upgrade.enabled }}
   concurrencyPolicy: Forbid
   successfulJobsHistoryLimit: 1
   failedJobsHistoryLimit: 3

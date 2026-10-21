@@ -118,6 +118,7 @@ Each component is off by default:
 | `userValidity` | A daily check of every account against the OIDC or LDAP provider, through MISP's console. Needs the oidc or ldap group. check-user-validity reports; block-invalid-users disables the accounts the provider no longer backs. |
 | `housekeeping` | Nightly deletes of old rows in jobs, logs and audit_logs (HOUSEKEEPING_<TABLE>_DAYS in env, defaults 2, 30 and 90). |
 | `migrate` | A copy of an existing MySQL or MariaDB MISP into the database, before the configure Job runs (docs/migration.md). secret: entries on top of files/secrets-migrate.env for the misp-migrate Secret. volumes and volumeMounts: the source's attachments directory. |
+| `upgrade` | The conversion of a MISP 2.5 database to MISP 3.0 (cake Admin runUpgrade), in the configure Job before configure runs (docs/misp-3.md). One-way: back the database up and check the restore, then set backupConfirmed. While it is on, web and worker run 0 replicas and the CronJobs and the org sync pause; turn it off once the configure Job has finished. |
 <!-- end generated -->
 
 ## Client addresses
@@ -147,9 +148,9 @@ workload gets a whole Secret, or only the keys the table names:
 <!-- generated: secrets -->
 | Secret | File | Keys | Read by |
 |---|---|---|---|
-| `misp-db` | `deploy/chart/files/secrets-db.env` | `DB_USER`, `DB_PASSWORD`, `MYSQL_ROOT_PASSWORD` | configure, cronjobs, housekeeping, mariadb (`DB_PASSWORD`, `DB_USER`, `MYSQL_ROOT_PASSWORD`), metrics (`DB_PASSWORD`, `DB_USER`), migrate, org-sync, postgres (`DB_PASSWORD`, `DB_USER`), userValidity, web, worker |
-| `misp-app` | `deploy/chart/files/secrets-app.env` | `MISP_REDIS_PASSWORD`, `GNUPG_PASSWORD`, `SIMPLEBACKGROUNDJOBS_SUPERVISOR_PASSWORD`, `SECURITY_ENCRYPTION_KEY`, `SECURITY_SALT` | configure, cronjobs, metrics (`MISP_REDIS_PASSWORD`), migrate, redis (`MISP_REDIS_PASSWORD`), userValidity, web, worker |
-| `misp-admin` | `deploy/chart/files/secrets-admin.env` | `ADMIN_PASSWORD`, `ADMIN_KEY` | configure, cronjobs (`ADMIN_KEY`), misp-test (`ADMIN_KEY`), org-sync |
+| `misp-db` | `deploy/chart/files/secrets-db.env` | `DB_USER`, `DB_PASSWORD`, `MYSQL_ROOT_PASSWORD` | configure, cronjobs, housekeeping, mariadb (`DB_PASSWORD`, `DB_USER`, `MYSQL_ROOT_PASSWORD`), metrics (`DB_PASSWORD`, `DB_USER`), migrate, postgres (`DB_PASSWORD`, `DB_USER`), upgrade, userValidity, web, worker |
+| `misp-app` | `deploy/chart/files/secrets-app.env` | `MISP_REDIS_PASSWORD`, `GNUPG_PASSWORD`, `SIMPLEBACKGROUNDJOBS_SUPERVISOR_PASSWORD`, `SECURITY_ENCRYPTION_KEY`, `SECURITY_SALT` | configure, cronjobs, metrics (`MISP_REDIS_PASSWORD`), migrate, redis (`MISP_REDIS_PASSWORD`), upgrade, userValidity, web, worker |
+| `misp-admin` | `deploy/chart/files/secrets-admin.env` | `ADMIN_PASSWORD`, `ADMIN_KEY` | configure, cronjobs (`ADMIN_KEY`), misp-test (`ADMIN_KEY`) |
 | `misp-migrate` | `deploy/chart/files/secrets-migrate.env` | `MIGRATE_SOURCE_HOST`, `MIGRATE_SOURCE_USER`, `MIGRATE_SOURCE_PASSWORD`, `MIGRATE_FORCE`, `MIGRATE_REPLACE_COPY`, `MIGRATE_SOURCE_FILES`, `MIGRATE_SOURCE_S3_BUCKET`, `MIGRATE_SOURCE_S3_ENDPOINT`, `MIGRATE_SOURCE_S3_REGION`, `MIGRATE_SOURCE_S3_ACCESS_KEY`, `MIGRATE_SOURCE_S3_SECRET_KEY` | migrate |
 <!-- end generated -->
 

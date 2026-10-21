@@ -50,10 +50,15 @@ run = "python scripts/generate_agents_md.py"
 description = "Regenerate the generated regions of the docs and AGENTS.md from the code"
 run = ["python scripts/generate_docs.py", "python scripts/generate_agents_md.py"]
 
+[tasks.test-upgrade]
+description = "Run the upgrade suite: MISP 2.5.50 converted to this tree's MISP 3.0 (requires podman)"
+run = "python -m pytest tests/e2e/test_upgrade.py -v ${@}"
+
 [tasks.test-all]
-description = "Run unit + integration + sync + migration tests"
-# One after the other: the integration and migration suites share a compose project
-run = ["mise run test", "mise run test-integration", "mise run test-sync", "mise run test-migration"]
+description = "Run unit + integration + sync + migration + upgrade tests"
+# One after the other: the integration, migration and upgrade suites share a compose project
+run = ["mise run test", "mise run test-integration", "mise run test-sync", "mise run test-migration",
+       "mise run test-upgrade"]
 
 [tasks.smoketest]
 description = "Run smoke test against a live MISP instance"

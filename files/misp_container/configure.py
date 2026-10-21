@@ -5,13 +5,15 @@ before any web or worker starts. Sets MISP.live=true when done; web and
 worker entrypoints wait for that flag.
 """
 
+import json
 import os
 import sys
 from pathlib import Path
 
-from . import admin
+from . import MISP_BASE, admin
 from . import cake
 from . import db
+from .upgrade import needs_conversion
 from .config import CONDITIONAL_CONFIG_PHP_GROUPS, SettingsCache, apply_settings_fast, load_settings_yaml
 from .env import env
 from .log import get as getlog
@@ -79,6 +81,20 @@ def check_identity() -> None:
         sys.exit(1)
 
 
+def misp_major() -> int:
+    """The major version of the MISP this image ships."""
+    return int(json.loads(Path(MISP_BASE, "VERSION.json").read_text())["major"])
+
+
+def check_layout() -> None:
+    """A MISP 3.0 image refuses a database that still holds attribute values as text, as 2.5 does."""
+    if misp_major() >= 3 and needs_conversion():
+        log.error("the database has MISP 2.5's layout. MISP 3.0 converts it one-way, offline, through the "
+                  "upgrade step: the chart's upgrade component, or podman compose --profile upgrade run --rm "
+                  "upgrade, after a backup (docs/misp-3.md)")
+        sys.exit(1)
+
+
 def configure_misp() -> None:
     """Run the full MISP configuration (settings, admin, GPG, auth) under the lock."""
     db.acquire_config_lock()
@@ -136,6 +152,7 @@ def run() -> None:
     check_identity()
     db.wait_for_db()
     db.init_schema()
+    check_layout()
 
     # Early custom hook: after the DB is ready, before MISP configuration.
     run_custom_script(CUSTOM_SETUP_SCRIPT, "setup")

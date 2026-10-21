@@ -200,10 +200,9 @@ def test_the_helm_test_reaches_web_through_the_network_policy():
 
 
 def test_every_component_renders_and_the_default_renders_none():
-    default = {(d["kind"], d["metadata"]["name"]) for d in chart.objects()}
     for component in chart.components():
-        added = {(d["kind"], d["metadata"]["name"]) for d in chart.objects(f"{component}.enabled=true")} - default
-        assert added, f"{component}.enabled=true renders nothing more"
+        assert chart.render_text(*chart.component_sets(component)) != chart.render_text(), (
+            f"{component}.enabled=true changes nothing in the render")
     assert not any(d["kind"] in ("StatefulSet", "CronJob", "Ingress", "HTTPRoute", "PodDisruptionBudget", "CiliumNetworkPolicy")
                    for d in chart.objects())
 
@@ -238,3 +237,36 @@ def test_every_volume_mount_names_a_volume_of_its_pod():
                 mounts = {m["name"] for m in container.get("volumeMounts", [])}
                 assert mounts <= volumes, (f"{doc['kind']} {doc['metadata']['name']} ({' '.join(sets) or 'defaults'}): "
                                            f"{container['name']} mounts {sorted(mounts - volumes)}, which the pod lacks")
+
+
+UPGRADE = ("upgrade.enabled=true", "upgrade.backupConfirmed=true")
+
+
+def test_the_upgrade_needs_a_confirmed_backup():
+    import pytest
+    with pytest.raises(RuntimeError, match="upgrade.backupConfirmed"):
+        chart.objects("upgrade.enabled=true")
+
+
+def test_the_upgrade_runs_after_the_migration_and_before_configure_and_is_not_retried():
+    job = chart.find("Job", "configure", "migrate.enabled=true", *UPGRADE)
+    spec = chart.pod_spec(job)
+    assert [c["name"] for c in spec["initContainers"]] == ["migrate", "upgrade"]
+    upgrade = spec["initContainers"][1]
+    assert upgrade["command"][-1] == "misp_container.upgrade"
+    assert {"name": "UPGRADE_BACKUP_CONFIRMED", "value": "true"} in upgrade["env"]
+    assert {m["mountPath"] for m in upgrade["volumeMounts"]} >= {"/var/www/MISP/app/Config", "/var/www/MISP/app/tmp"}
+    assert job["spec"]["backoffLimit"] == 0
+
+
+def test_nothing_else_touches_misp_while_the_upgrade_converts_it():
+    """No 2.5 pod may write to the tables runUpgrade alters, and nothing may call the API meanwhile."""
+    for name in ("web", "worker"):
+        assert chart.find("Deployment", name, *UPGRADE)["spec"]["replicas"] == 0
+        assert chart.find("Deployment", name)["spec"]["replicas"] >= 1
+    cronjobs = [d for d in chart.objects(*UPGRADE, every_component=True) if d["kind"] == "CronJob"]
+    assert cronjobs and all(d["spec"]["suspend"] is True for d in cronjobs)
+    assert all(d["spec"]["suspend"] is False for d in kinds(
+        "cronjobs.enabled=true", "housekeeping.enabled=true", "userValidity.enabled=true")["CronJob"])
+    assert not [d for d in chart.objects(*UPGRADE) if d["metadata"]["name"].startswith("org-sync-")]
+

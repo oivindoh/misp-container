@@ -21,6 +21,15 @@ SOURCE = re.compile(r"^# Source: [\w-]+/(templates/[\w./-]+)$", re.M)
 TOP_KEY = re.compile(r"^([A-Za-z]\w*):")
 
 
+# The values a component refuses to render without
+COMPONENT_VALUES = {"upgrade": ["upgrade.backupConfirmed=true"]}
+
+
+def component_sets(component: str) -> list[str]:
+    """The --set values that switch a component on."""
+    return [f"{component}.enabled=true", *COMPONENT_VALUES.get(component, [])]
+
+
 def components() -> list[str]:
     """The top-level keys of values.yaml with an enabled flag, in file order."""
     values = yaml.safe_load((CHART / "values.yaml").read_text())
@@ -81,7 +90,7 @@ def _render(args: tuple[str, ...]) -> tuple[tuple[str, dict], ...]:
 
 def _args(sets: tuple[str, ...], every_component: bool) -> tuple[str, ...]:
     args: list[str] = []
-    for value in [*(f"{c}.enabled=true" for c in components() if every_component), *sets]:
+    for value in [*(v for c in components() if every_component for v in component_sets(c)), *sets]:
         args += ["--set", value]
     return tuple(args)
 
