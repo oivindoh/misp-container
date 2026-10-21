@@ -67,6 +67,7 @@ def stack(options, failed_in_module):
         base = ("postgres",)
     s = Stack(files, profiles=(*base, "upgrade"))
     s.base_profiles = base
+    s.schema = "current_schema()" if options["db_engine"] == "postgres" else "DATABASE()"
     previous = os.environ.get("MISP_IMAGE_TAG")
     s.compose("down", "-v")
     if not options["skip_build"]:
@@ -122,9 +123,9 @@ def on_30(stack, upgraded):
 
 
 def has_text_values(stack):
-    rc, out = stack.python("from misp_container import db\nprint(db.has_column('attributes', 'value1'))")
-    assert rc == 0, out
-    return out.strip() == "True"
+    # Plain SQL: the 2.5.50 image has no db.has_column
+    return stack.sql("SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = "
+                     f"{stack.schema} AND table_name = 'attributes' AND column_name = 'value1'") == "1"
 
 
 # -- MISP 2.5 ------------------------------------------------------------------------
@@ -177,7 +178,8 @@ def test_every_attribute_keeps_its_type_and_value(on_30, seed):
 
 
 def test_the_attachment_downloads_whole(on_30, seed):
-    status, body = on_30.http("GET", f"/attributes/download/{seed['attachment']}", on_30.key, json_api=False)
+    # Without a JSON Accept header MISP does not take the key as an API login
+    status, body = on_30.http("GET", f"/attributes/download/{seed['attachment']}", on_30.key)
     assert (status, body.encode()) == (200, ATTACHMENT)
 
 

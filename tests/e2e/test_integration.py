@@ -515,7 +515,11 @@ def test_oidc_dex_offers_its_password_form(oidc):
     assert "form=http://dex:5556/dex/auth/local/login" in oidc["out"]
 
 
-def test_oidc_callback_lands_on_misp(oidc):
+def test_oidc_callback_lands_on_misp(oidc, stack, request):
+    if stack.engine_under_test == "postgres":
+        # MISP 3.0's EventIndexStatsBehavior::aggregate() writes the alias Event unquoted;
+        # PostgreSQL folds it to event, and the page after the login answers 500
+        request.applymarker(pytest.mark.xfail(strict=True, reason="MISP 3.0 event index stats fail on PostgreSQL"))
     assert "final=http://caddy:8080/ 200" in oidc["out"]
 
 
