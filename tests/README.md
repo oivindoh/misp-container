@@ -269,7 +269,7 @@ GitHub Actions on every push to master and every PR:
 
 | Job | Runs |
 |-----|------|
-| `gate` | Stops a master run whose commit carries a release tag, since the tag run tests and releases that commit |
+| `gate` | Stops a master run whose commit carries a release tag, since the tag run tests and releases that commit. On a push to `misp-3.0` that merges a pull request, skips `unit` and the suites: the pull request ran them on the same tree |
 | `master-merged` | On `misp-3.0` and its pull requests: fails while master has commits the branch lacks |
 | `build` | The three images into the layer cache. The misp image's final stage is built fresh each run, so it carries the current Debian packages |
 | `unit` | The unit tests, the chart lint and every chart render validated against the schemas |
@@ -281,7 +281,7 @@ GitHub Actions on every push to master and every PR:
 | `kind` | The chart on a kind cluster, once on MariaDB and once on PostgreSQL: install, smoke test, `helm test`, task runs, upgrade, rollback |
 | `scan` | Trivy on the three images: CRITICAL and HIGH findings go to the Security tab, and a CRITICAL one with a fix fails the job, which blocks `release` |
 | `release` | On a tag: push the images and the chart, and create the GitHub Release, after every other job |
-| `prerelease` | On a push to `misp-3.0`: push the MISP 3.0 Early Access images and chart, after every other job |
+| `prerelease` | On a push to `misp-3.0`: push the MISP 3.0 Early Access images and chart, after `build`, `scan`, `master-merged` and every suite the gate did not skip |
 
 ## Environment
 

@@ -31,11 +31,19 @@ jobs:
   # Stops a master run whose commit carries a release tag: the run of the tag
   # tests the same commit and releases it. build and unit wait for it, and every
   # other job waits for them. When the lookup fails, both runs go ahead.
+  #
+  # Also skips the suites on a push to misp-3.0 that merges a pull request: the
+  # ruleset requires them on the pull request and requires it to be up to date,
+  # so the merge commit has the tree they tested. When the lookup fails, the
+  # suites run.
   gate:
     runs-on: ubuntu-latest
-    permissions: {}
+    permissions:
+      contents: read
+      pull-requests: read
     outputs:
       release_commit: ${{ steps.tag.outputs.release_commit }}
+      tested: ${{ steps.pr.outputs.tested }}
     steps:
       - name: Look for a release tag on the commit
         id: tag
@@ -44,6 +52,18 @@ jobs:
              git ls-remote --tags "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git" 'v*' 2>/dev/null | grep -q "^$GITHUB_SHA"; then
             echo "release_commit=true" >> "$GITHUB_OUTPUT"
             echo "A release tag points at $GITHUB_SHA: its tag run tests and releases it."
+          fi
+      - name: Look for the pull request the push merges
+        id: pr
+        if: github.event_name == 'push' && github.ref == 'refs/heads/misp-3.0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          PR=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/pulls" \
+            --jq "[.[] | select(.merge_commit_sha == \"$GITHUB_SHA\")][0].number // empty" 2>/dev/null || true)
+          if [ -n "$PR" ]; then
+            echo "tested=true" >> "$GITHUB_OUTPUT"
+            echo "$GITHUB_SHA merges pull request #$PR, whose run passed the suites on this tree."
           fi
 
   # Fails while master has commits misp-3.0 lacks, so no 3.0 build ships without
@@ -112,7 +132,7 @@ jobs:
 
   unit:
     needs: gate
-    if: needs.gate.outputs.release_commit != 'true'
+    if: needs.gate.outputs.release_commit != 'true' && needs.gate.outputs.tested != 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -131,7 +151,8 @@ jobs:
           PYTHONPATH=files .venv/bin/python -m pytest tests/ -v --ignore=tests/e2e
 
   integration:
-    needs: build
+    needs: [gate, build]
+    if: needs.gate.outputs.tested != 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -167,7 +188,8 @@ jobs:
           if-no-files-found: ignore
 
   integration-postgres:
-    needs: build
+    needs: [gate, build]
+    if: needs.gate.outputs.tested != 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -203,7 +225,8 @@ jobs:
           if-no-files-found: ignore
 
   hub-spoke:
-    needs: build
+    needs: [gate, build]
+    if: needs.gate.outputs.tested != 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -239,7 +262,8 @@ jobs:
           if-no-files-found: ignore
 
   migration:
-    needs: build
+    needs: [gate, build]
+    if: needs.gate.outputs.tested != 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -277,7 +301,8 @@ jobs:
   # Seeds MISP 2.5 from the published images and converts it to MISP 3.0 with
   # the upgrade step of the images from build, on MariaDB and on PostgreSQL
   upgrade:
-    needs: build
+    needs: [gate, build]
+    if: needs.gate.outputs.tested != 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -319,7 +344,8 @@ jobs:
   # Installs the Helm chart with the mariadb and redis components on a kind
   # cluster, runs the smoke test, upgrades the release and runs it again
   kind:
-    needs: build
+    needs: [gate, build]
+    if: needs.gate.outputs.tested != 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -564,10 +590,15 @@ jobs:
   # job: the images as 3.0-wip-<MISP commit>-<commit>, which never moves, and
   # 3.0-wip, the newest; the chart as 3.0.0-wip.<run>.<attempt>, with that image
   # tag as appVersion. No GitHub Release: the Early Access is not for
-  # production (docs/misp-3.md).
+  # production (docs/misp-3.md). A suite may be skipped only when the gate found
+  # the merged pull request that ran it.
   prerelease:
-    needs: [master-merged, unit, integration, integration-postgres, hub-spoke, migration, upgrade, kind, scan]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/misp-3.0'
+    needs: [gate, master-merged, build, unit, integration, integration-postgres, hub-spoke, migration, upgrade, kind, scan]
+    if: >-
+      always() && github.event_name == 'push' && github.ref == 'refs/heads/misp-3.0' &&
+      needs.build.result == 'success' && needs.scan.result == 'success' && needs.master-merged.result == 'success' &&
+      !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') &&
+      (needs.gate.outputs.tested == 'true' || !contains(needs.*.result, 'skipped'))
     runs-on: ubuntu-latest
     permissions:
       contents: read
