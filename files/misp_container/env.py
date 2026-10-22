@@ -108,6 +108,10 @@ def apply_defaults():
         if value:
             os.environ.setdefault(target, value)
     os.environ.setdefault("DB_ENGINE", "mysql")
+    # MISP stores attachments in S3 only when attachments_dir starts with s3; the
+    # bucket name is the one switch, so it overrides the path base.env sets
+    if os.environ.get("PLUGIN_S3_BUCKET_NAME"):
+        os.environ["MISP_ATTACHMENTS_DIR"] = "s3://"
     misp_email = os.environ.get("MISP_EMAIL") or os.environ.get("ADMIN_EMAIL", "")
     if misp_email:
         os.environ.setdefault("MISP_CONTACT", misp_email)

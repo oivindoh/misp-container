@@ -382,10 +382,11 @@ class TestVersionGate:
 def test_no_setting_is_in_two_groups():
     """The group applied first would win, and the other group's value would never land.
 
-    Two names live in more than one config.php group on purpose: Security.auth,
-    which the render merges across the auth plugins, and MISP.attachments_dir,
-    which the s3 group overrides. A group the configure step writes to the
-    database shares no name with any other group.
+    One name lives in more than one config.php group on purpose: Security.auth,
+    which the render merges across the auth plugins. For any other name, one env
+    var feeds both specs, so a value set in env overrides the group meant to win.
+    A group the configure step writes to the database shares no name with any
+    other group.
     """
     import collections
     from misp_container import configure
@@ -398,4 +399,4 @@ def test_no_setting_is_in_two_groups():
             homes[spec.name].add(group)
     shared = {name: sorted(where) for name, where in homes.items() if len(where) > 1}
     assert all(not (where & database) for where in map(set, shared.values())), shared
-    assert set(shared) <= {"Security.auth", "MISP.attachments_dir"}, shared
+    assert set(shared) <= {"Security.auth"}, shared
