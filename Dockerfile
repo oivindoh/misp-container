@@ -69,7 +69,7 @@ COPY files/composer.lock /tmp/composer.lock
 # The composer download cache survives across builds (buildah and BuildKit)
 RUN --mount=type=cache,target=/root/.composer/cache \
     composer validate --no-check-all --no-check-publish --no-interaction && \
-    composer install --no-interaction
+    composer install --no-interaction --no-dev
 
 # =============================================================================
 # Stage 3: php-build - Native PHP extensions, built from pinned sources
@@ -260,7 +260,6 @@ RUN tar -xzf /php-extensions.tar.gz && rm /php-extensions.tar.gz && \
 COPY --from=misp-source --chown=${MISP_UID}:${MISP_GID} /var/www/MISP /var/www/MISP
 COPY --from=composer-build --chown=${MISP_UID}:${MISP_GID} /tmp/composer.lock /var/www/MISP/app/composer.lock
 COPY --from=composer-build --chown=${MISP_UID}:${MISP_GID} /tmp/Vendor /var/www/MISP/app/Vendor
-COPY --from=composer-build --chown=${MISP_UID}:${MISP_GID} /tmp/Plugin /var/www/MISP/app/Plugin
 
 # app/Config defaults (rendered into the per-pod Config volume at start) and the version marker
 COPY --from=misp-source --chown=${MISP_UID}:${MISP_GID} /srv/misp-config /srv/misp-config
