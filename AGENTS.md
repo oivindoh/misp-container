@@ -249,6 +249,7 @@ Fail when MISP no longer matches what this image patches or depends on. A failur
 | `check_upstream.py` | Fail when MISP no longer matches what this image patches or depends on. |
 | `generate_agents_md.py` | Write AGENTS.md: a map of the repository, read from the tree itself. |
 | `generate_docs.py` | Fill the generated regions of the docs from the code. |
+| `merge_into_misp3.py` | Merge master into the misp-3.0 branch, as the sync workflow does. |
 | `release.py` | Prepare a release of one kind: hotfix, normal or breaking. |
 | `update-composer-lock.sh` | Resolve MISP's composer dependencies for the current CORE_TAG plus this image's extra packages, and write the result to files/composer.lock. The image build installs exactly that lock and fails when it is out of date with upstream's composer.json (a new MISP release), so run this on every bump. |
 | `update_settings.py` | Keep files/misp-config in step with the settings a live MISP knows. |
@@ -288,6 +289,7 @@ Unit tests (`tests/`, no containers):
 | `test_init.py` | Unit tests for init container logic (file operations, no containers needed). |
 | `test_log.py` | Unit tests for the container log formats (LOG_FORMAT json or text). |
 | `test_logrelay.py` | Unit tests for the log relay (misp_container.logrelay). |
+| `test_merge_into_misp3.py` | The merge of master into misp-3.0 (scripts/merge_into_misp3.py), on real git repositories. |
 | `test_metrics.py` | Unit tests for the Prometheus metrics exporter. |
 | `test_migrate.py` | Unit tests for the migration Job (misp_container.migrate). |
 | `test_release.py` | Unit tests for the release tool (scripts/release.py): the next tag and chart version. |

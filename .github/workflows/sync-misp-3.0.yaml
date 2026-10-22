@@ -1,0 +1,100 @@
+# Merges master into the misp-3.0 branch (MISP 3.0 Early Access) after each push
+# to master, through a pull request that CI tests, so the 2.5 fixes reach the 3.0
+# images. A GitHub App token opens it: a push or a pull request made with
+# GITHUB_TOKEN starts no workflow and may not change workflow files. A conflict
+# beyond the pinned MISP version opens an issue (DEVELOPING.md, The misp-3.0 branch).
+name: Sync misp-3.0
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: sync-misp-3.0
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    permissions: {}
+    env:
+      BRANCH: sync/master-into-misp-3.0
+      ISSUE_TITLE: master does not merge into misp-3.0
+    steps:
+      - name: App token
+        id: app
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.MISP3_SYNC_CLIENT_ID }}
+          private-key: ${{ secrets.MISP3_SYNC_PRIVATE_KEY }}
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          token: ${{ steps.app.outputs.token }}
+
+      - name: Merge master into misp-3.0
+        id: merge
+        run: |
+          set -uo pipefail
+          # The script of this commit: misp-3.0 may not carry it yet
+          cp scripts/merge_into_misp3.py "$RUNNER_TEMP/"
+          git config user.name "${{ steps.app.outputs.app-slug }}[bot]"
+          git config user.email "${{ steps.app.outputs.app-slug }}[bot]@users.noreply.github.com"
+          git checkout --quiet -B "$BRANCH" origin/misp-3.0
+          python3 "$RUNNER_TEMP/merge_into_misp3.py" "$GITHUB_SHA" | tee "$RUNNER_TEMP/merge.txt"
+          echo "code=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+
+      - name: Open the pull request
+        if: steps.merge.outputs.code == '0'
+        run: |
+          set -euo pipefail
+          git push --force origin "$BRANCH"
+          if [ -z "$(gh pr list --head "$BRANCH" --base misp-3.0 --state open --json number --jq '.[].number')" ]; then
+            gh pr create --head "$BRANCH" --base misp-3.0 --title "merge master into misp-3.0" \
+              --body "The commits of master that misp-3.0 lacks, merged by the sync workflow: $(cat "$RUNNER_TEMP/merge.txt")"
+          fi
+          # Auto-merge waits for the checks only when a rule requires them; without
+          # one it would merge before CI, so the pull request then waits for a person
+          if [ "$(gh api "repos/$GITHUB_REPOSITORY/rules/branches/misp-3.0" --jq '[.[] | select(.type == "required_status_checks")] | length')" -gt 0 ]; then
+            gh pr merge "$BRANCH" --auto --merge
+          else
+            echo "misp-3.0 requires no status checks: the pull request waits for a person to merge it"
+          fi
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+
+      - name: Open an issue for the conflict
+        if: steps.merge.outputs.code == '1'
+        run: |
+          set -euo pipefail
+          BODY="Merging master ($GITHUB_SHA) into misp-3.0 stops at a conflict the sync workflow does not resolve:
+
+          \`\`\`
+          $(cat "$RUNNER_TEMP/merge.txt")
+          \`\`\`
+
+          Resolve it on a branch from misp-3.0:
+
+          \`\`\`
+          git fetch origin && git checkout -b merge-master origin/misp-3.0
+          git -c merge.ours.driver=true merge origin/master   # resolve, commit, push, open a pull request to misp-3.0
+          \`\`\`"
+          ISSUE=$(gh issue list --state open --search "in:title \"$ISSUE_TITLE\"" --json number --jq '.[0].number // empty')
+          if [ -n "$ISSUE" ]; then
+            gh issue comment "$ISSUE" --body "$BODY"
+          else
+            gh issue create --title "$ISSUE_TITLE" --body "$BODY"
+          fi
+          exit 1
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+
+      - name: Fail on an unexpected exit
+        if: steps.merge.outputs.code != '0' && steps.merge.outputs.code != '1' && steps.merge.outputs.code != '3'
+        run: |
+          echo "merge_into_misp3.py exited ${{ steps.merge.outputs.code }}"
+          exit 1
