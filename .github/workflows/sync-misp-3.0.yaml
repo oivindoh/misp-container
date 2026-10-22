@@ -39,14 +39,17 @@ jobs:
       - name: Merge master into misp-3.0
         id: merge
         run: |
-          set -uo pipefail
+          set -euo pipefail
           # The script of this commit: misp-3.0 may not carry it yet
           cp scripts/merge_into_misp3.py "$RUNNER_TEMP/"
           git config user.name "${{ steps.app.outputs.app-slug }}[bot]"
           git config user.email "${{ steps.app.outputs.app-slug }}[bot]@users.noreply.github.com"
           git checkout --quiet -B "$BRANCH" origin/misp-3.0
-          python3 "$RUNNER_TEMP/merge_into_misp3.py" "$GITHUB_SHA" | tee "$RUNNER_TEMP/merge.txt"
-          echo "code=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+          # The later steps act on the exit code, so a conflict must not end this step
+          code=0
+          python3 "$RUNNER_TEMP/merge_into_misp3.py" "$GITHUB_SHA" > "$RUNNER_TEMP/merge.txt" 2>&1 || code=$?
+          cat "$RUNNER_TEMP/merge.txt"
+          echo "code=$code" >> "$GITHUB_OUTPUT"
 
       - name: Open the pull request
         if: steps.merge.outputs.code == '0'
