@@ -76,6 +76,9 @@ def test_a_clean_fix_merges(repo):
     write(repo, {"README.md": "readme with a fix\n"})
     assert merge_master(repo) == 0
     assert (repo / "README.md").read_text() == "readme with a fix\n"
+    # The message names the merged commit, whatever ref names it
+    assert git(repo, "log", "-1", "--format=%s").strip() == \
+        f"merge master into misp-3.0 ({git(repo, 'rev-parse', '--short=12', 'master').strip()})"
 
 
 def test_a_conflict_beyond_the_pins_aborts_and_leaves_the_branch(repo):
