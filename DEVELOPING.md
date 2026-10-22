@@ -162,11 +162,37 @@ that GHCR already holds, and a chart version that GHCR already holds.
 
 ## The misp-3.0 branch
 
-`misp-3.0` builds MISP 3.0 Early Access and publishes it as pre-releases
-([its guide](https://github.com/oivindoh/misp-container/blob/misp-3.0/docs/misp-3.md)). A fix lands on master first. After each push to master, the `Sync misp-3.0`
-workflow (`.github/workflows/sync-misp-3.0.yaml`) merges master into the branch through a pull
-request that CI tests. CI on the branch fails while master has commits the branch lacks, so
-no 3.0 build ships without them.
+The repository builds two lines of MISP, one per branch:
+
+| Line | Branch | MISP | Publishes |
+|------|--------|------|-----------|
+| Release | `master` | 2.5, at the release tag `CORE_TAG` | on a release tag (`mise run release`): images `2.5.x`, a chart `x.y.z`, a GitHub Release |
+| Early Access | `misp-3.0` | 3.0, MISP's `3.0_wip` branch at `CORE_COMMIT` | on every push: images `3.0-wip-<MISP commit>-<commit>` and `3.0-wip`, a chart `3.0.0-wip.<run>.<attempt>` ([its guide](https://github.com/oivindoh/misp-container/blob/misp-3.0/docs/misp-3.md)) |
+
+Where a change goes:
+
+| Change | Pull request to | Then |
+|--------|-----------------|------|
+| A fix or a feature for both lines | `master` | the sync carries it to `misp-3.0` |
+| A new MISP 2.5 release | `master` (the tracking workflow opens it) | the sync keeps the 3.0 pins |
+| A change only MISP 3.0 needs, or a newer `3.0_wip` commit | `misp-3.0` | CI publishes a pre-release after the merge |
+
+A change for both lines that lands only on `misp-3.0` never reaches master.
+
+```mermaid
+flowchart LR
+    M[push to master] --> S[Sync misp-3.0 workflow]
+    S -->|clean, or the pins only| P[pull request to misp-3.0<br/>opened by the App, auto-merge on]
+    S -->|any other conflict| I[issue: master does not<br/>merge into misp-3.0]
+    P --> C[CI: the required checks]
+    C -->|all pass| G[GitHub merges it]
+    G --> B[CI on misp-3.0]
+    B --> R[prerelease: images and chart]
+```
+
+CI on `misp-3.0` fails its `master-merged` job while master has commits the branch lacks, and
+`prerelease` needs that job: no 3.0 build ships without the fixes of master. A sync pull
+request whose checks fail stays open; the next push to master merges again and updates it.
 
 `scripts/merge_into_misp3.py` does the merge. Where the branch pins MISP 3.0 and master pins
 2.5, the merge keeps the branch's side:
@@ -176,16 +202,45 @@ no 3.0 build ships without them.
 | `ARG CORE_TAG` and `ARG CORE_COMMIT` in the `Dockerfile` | the script: a conflict of only these lines takes the branch's side |
 | `files/composer.lock`, `files/misp-config/settings-upstream.yaml` | the branch's `.gitattributes` (`merge=ours`): the files stay whole |
 
-Any other conflict opens the issue "master does not merge into misp-3.0", with the commands
-to resolve it by hand.
+### Moving to a newer 3.0_wip commit
 
-The workflow needs a GitHub App installed on the repository, with read and write access to
-contents, pull requests, issues and workflows: a pull request made with `GITHUB_TOKEN` starts
-no CI, and `GITHUB_TOKEN` may not push a change to a workflow file. Set the App's client ID as
-the repository variable `MISP3_SYNC_CLIENT_ID` and a private key as the secret
-`MISP3_SYNC_PRIVATE_KEY`. With a ruleset on `misp-3.0` that requires CI's checks, and
-auto-merge allowed for the repository, the pull request merges itself once CI passes.
-Without one it waits for a person.
+1. On a branch from `misp-3.0`, set `ARG CORE_COMMIT` in the `Dockerfile` to the commit.
+2. Run `mise run composer-lock`.
+3. Run `mise run settings-update`. Remove from `settings.yaml` each setting the summary names
+   as stale.
+4. Open a pull request to `misp-3.0`. The upgrade suite and the upstream guard report what
+   MISP changed.
+
+### When the sync stops at a conflict
+
+The issue "master does not merge into misp-3.0" names the files. Resolve them on a branch from
+`misp-3.0`:
+
+```bash
+git fetch origin && git switch --no-track -c merge-master origin/misp-3.0
+python3 scripts/merge_into_misp3.py origin/master   # merges, or names the files it cannot
+git -c merge.ours.driver=true merge origin/master   # resolve those files, then commit
+```
+
+Open a pull request to `misp-3.0`, then close the issue.
+
+### Setup
+
+The sync needs these pieces of the repository's settings:
+
+| Piece | Is |
+|-------|----|
+| GitHub App `misp-v3-sync` | Installed on this repository, with read and write access to contents, pull requests, issues and workflows. It opens the pull requests: a pull request made with `GITHUB_TOKEN` starts no CI, and `GITHUB_TOKEN` may not push a change to a workflow file. |
+| Variable `MISP3_SYNC_CLIENT_ID` | The App's client ID |
+| Secret `MISP3_SYNC_PRIVATE_KEY` | A private key of the App |
+| Ruleset "misp-3.0 requires CI" | Requires the checks below before a merge into `misp-3.0`. Repository admins bypass it. |
+| Auto-merge | Allowed for the repository. The workflow turns it on for its pull request only while a rule requires checks; without one, the pull request waits for a person. |
+
+The required checks are the jobs `prerelease` needs: `master-merged`, `unit`, `integration`,
+`integration-postgres`, `hub-spoke`, `migration`, `upgrade (mariadb)`, `upgrade (postgres)`,
+`kind (mariadb)`, `kind (postgres)` and the three `scan` jobs. Rename a job of the branch's
+`ci.yaml` in the ruleset as well: a required check that never reports holds every sync pull
+request open.
 
 ## Settings Engine
 
