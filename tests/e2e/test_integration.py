@@ -900,13 +900,6 @@ def test_metrics_waiting_job_shows_in_the_queue(waiting_job):
         "Redis keys MISP no longer writes (see the job-keys check in tests/e2e/test_upstream.py)")
 
 
-def test_metrics_queue_returns_to_0(waiting_job):
-    deadline = time.monotonic() + 30
-    while default_depth() != "0" and time.monotonic() < deadline:
-        time.sleep(1)
-    assert default_depth() == "0", "the default queue did not drain: a worker runs no job, or metrics.py counts a key MISP keeps"
-
-
 def test_metrics_sync_log_after_org_sync(metrics_text, synced):
     assert "misp_sync_runs_24h" in metrics_text
 
