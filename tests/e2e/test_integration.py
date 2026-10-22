@@ -141,6 +141,11 @@ def test_admin_org_uuid(stack):
     assert me(stack).get("Organisation", {}).get("uuid") == TEST_ENV["ADMIN_ORG_UUID"]
 
 
+def test_misp_org_is_the_admin_org(stack):
+    # stack.sql drops the whitespace of its output
+    assert stack.sql("SELECT value FROM system_settings WHERE setting='MISP.org'") == '"TestOrg"'
+
+
 def test_last_pw_change_is_set(stack):
     assert "NULL" not in stack.sql("SELECT last_pw_change FROM users WHERE id=1;")
 

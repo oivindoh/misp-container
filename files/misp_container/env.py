@@ -21,9 +21,12 @@ def env(key, default=None):
 
 
 # Settings that inherit from a primary env var unless set explicitly.
-# Users set MISP_BASEURL, ADMIN_EMAIL, MISP_REDIS_* and the module URL once.
+# Users set MISP_BASEURL, ADMIN_ORG, MISP_REDIS_* and the module URL once.
 DERIVED = {
     "MISP_BASEURL": ("MISP_EXTERNAL_BASEURL", "SECURITY_REST_CLIENT_BASEURL"),
+    # MISP.org names the hosting organisation in e-mail subjects and STIX 1 exports;
+    # MISP 3.0 cannot frame a STIX 1 package for an empty one
+    "ADMIN_ORG": ("MISP_ORG",),
     "MISP_REDIS_HOST": ("SIMPLEBACKGROUNDJOBS_REDIS_HOST", "PLUGIN_ZEROMQ_REDIS_HOST"),
     "MISP_REDIS_PORT": ("SIMPLEBACKGROUNDJOBS_REDIS_PORT", "PLUGIN_ZEROMQ_REDIS_PORT"),
     "MISP_REDIS_PASSWORD": ("SIMPLEBACKGROUNDJOBS_REDIS_PASSWORD", "PLUGIN_ZEROMQ_REDIS_PASSWORD"),
