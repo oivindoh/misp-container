@@ -231,9 +231,10 @@ def test_stix2_export_runs_misp_stix(stack, stix_event):
 
 
 def test_stix1_export_runs_python_stix(stack, stix_event):
-    # MISP runs app/files/scripts/misp2stix.py, which imports python-stix and cybox
+    # MISP runs app/files/scripts/misp2stix.py, which imports python-stix and cybox; a JSON
+    # request gets the package as STIX 1 JSON
     status, body = stack.http("POST", "/events/restSearch", stack.key, {"returnFormat": "stix", "eventid": stix_event})
-    assert status == 200 and "STIX_Package" in body and "198.51.100.7" in body, body[-2000:]
+    assert status == 200 and ":STIXPackage-" in body and "198.51.100.7" in body, body[-2000:]
 
 
 # -- PHP-FPM -------------------------------------------------------------------------
