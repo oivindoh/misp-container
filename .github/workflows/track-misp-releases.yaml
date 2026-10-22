@@ -1,6 +1,6 @@
 # Opens a pull request for each new MISP release: bumps CORE_TAG, resolves
-# files/composer.lock and regenerates the settings catalogue (DEVELOPING.md,
-# New MISP releases).
+# files/composer.lock and files/requirements-misp.txt, and regenerates the
+# settings catalogue (DEVELOPING.md, New MISP releases).
 name: Track MISP releases
 
 on:
@@ -74,8 +74,9 @@ jobs:
           COMPOSE_CMD: docker compose
           CONTAINER_CMD: docker
         run: |
-          pip install --quiet pyyaml
+          pip install --quiet pyyaml uv
           scripts/update-composer-lock.sh
+          python3 scripts/update_misp_requirements.py
           python3 scripts/update_settings.py --stack --write --summary "$RUNNER_TEMP/settings-summary.md"
 
       - name: Commit and open PR
@@ -88,11 +89,11 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git checkout -b "${BRANCH}"
-          git add Dockerfile files/composer.lock files/misp-config/settings-upstream.yaml
+          git add Dockerfile files/composer.lock files/requirements-misp.txt files/misp-config/settings-upstream.yaml
           git commit -m "bump MISP to ${NEW}"
           git push --force-with-lease origin "${BRANCH}"
 
-          BODY="MISP released ${NEW} (was ${OLD}). files/composer.lock and the settings catalogue were regenerated from ${NEW}: review the diffs of files/composer.lock and files/misp-config/settings-upstream.yaml."
+          BODY="MISP released ${NEW} (was ${OLD}). files/composer.lock, files/requirements-misp.txt and the settings catalogue were regenerated from ${NEW}: review their diffs."
           BODY="${BODY}
 
           CI builds and tests automatically. After merging, release from master: a new MISP

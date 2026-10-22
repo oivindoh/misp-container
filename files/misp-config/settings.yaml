@@ -690,7 +690,7 @@ settings:
       sensitive: true
       blank_protection: true
 
-  # -- s3: S3 attachment storage (only applied when PLUGIN_S3_BUCKET_NAME is set)
+  # -- s3: S3 attachment storage (only applied when PLUGIN_S3_BUCKET_NAME is set, which also sets MISP.attachments_dir to s3://, env.py)
   s3:
 
     Plugin.S3_aws_compatible:
@@ -710,10 +710,6 @@ settings:
     Plugin.S3_region:
       description: "S3 region for the bucket"
       value: ""
-    MISP.attachments_dir:
-      description: "Directory where attachments are stored. MISP will NOT migrate the existing data if you change this setting. The only ..."
-      value: "s3://"
-      force: true
 
   # -- proxy: HTTP proxy settings (only applied when PROXY_HOST is set)
   proxy:
