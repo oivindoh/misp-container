@@ -186,13 +186,18 @@ flowchart LR
     S -->|any other conflict| I[issue: master does not<br/>merge into misp-3.0]
     P --> C[CI: the required checks]
     C -->|all pass| G[GitHub merges it]
-    G --> B[CI on misp-3.0]
+    G --> B[CI on misp-3.0: build, scan, master-merged]
     B --> R[prerelease: images and chart]
 ```
 
 CI on `misp-3.0` fails its `master-merged` job while master has commits the branch lacks, and
 `prerelease` needs that job: no 3.0 build ships without the fixes of master. A sync pull
 request whose checks fail stays open; the next push to master merges again and updates it.
+
+The ruleset requires a pull request to be up to date with `misp-3.0`, so its merge commit has
+the tree its checks ran on. The push run of that merge commit skips `unit` and the suites, and
+builds, scans and publishes. A push that merges no pull request runs every job. A sync pull
+request that falls behind `misp-3.0` waits for the next push to master, which merges again.
 
 `scripts/merge_into_misp3.py` does the merge. Where the branch pins MISP 3.0 and master pins
 2.5, the merge keeps the branch's side:
@@ -236,10 +241,10 @@ The sync needs these pieces of the repository's settings:
 | GitHub App `misp-v3-sync` | Installed on this repository, with read and write access to contents, pull requests, issues and workflows. It opens the pull requests: a pull request made with `GITHUB_TOKEN` starts no CI, and `GITHUB_TOKEN` may not push a change to a workflow file. |
 | Variable `MISP3_SYNC_CLIENT_ID` | The App's client ID |
 | Secret `MISP3_SYNC_PRIVATE_KEY` | A private key of the App |
-| Ruleset "misp-3.0 requires CI" | Requires the checks below before a merge into `misp-3.0`. Repository admins bypass it. |
+| Ruleset "misp-3.0 requires CI" | Requires the checks below, on a pull request that is up to date with `misp-3.0`, before a merge into `misp-3.0`. Repository admins bypass it. |
 | Auto-merge | Allowed for the repository. The workflow turns it on for its pull request only while a rule requires checks; without one, the pull request waits for a person. |
 
-The required checks are the jobs `prerelease` needs: `master-merged`, `unit`, `integration`,
+The required checks are `master-merged`, `unit`, `integration`,
 `integration-postgres`, `hub-spoke`, `migration`, `upgrade (mariadb)`, `upgrade (postgres)`,
 `kind (mariadb)`, `kind (postgres)` and the three `scan` jobs. Rename a job of the branch's
 `ci.yaml` in the ruleset as well: a required check that never reports holds every sync pull
