@@ -193,7 +193,7 @@ into a second MariaDB and checks the refusals (a non-empty target, an identity m
 org, the server, the event, the attachment download, the fixture attachments under MISP's
 keys, `MISP.live` set by the configure step, and the run in the sync log. The same copy and
 checks then run onto PostgreSQL with the attachments uploaded into an S3 bucket in garage,
-plus the id sequences. One parametrized list of checks runs against both copies. A last run
+plus the id sequences and a new attachment that MISP must write to the bucket. One parametrized list of checks runs against both copies. A last run
 copies that bucket into a second one and compares every key and byte.
 
 **Files:**
