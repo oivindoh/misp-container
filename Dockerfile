@@ -195,7 +195,30 @@ RUN find /var/www/MISP/INSTALL/* ! -name 'MYSQL.sql' ! -name 'POSTGRESQL.sql' -t
 FROM ghcr.io/astral-sh/uv:latest@sha256:b46b03ddfcfbf8f547af7e9eaefdf8a39c8cebcba7c98858d3162bd28cf536f6 AS uv
 
 # =============================================================================
-# Stage 6: final - Runtime image (non-root)
+# Stage 6: python - Python packages of misp_container and of MISP's scripts
+# =============================================================================
+# files/requirements-final.txt holds the packages of this repository's code,
+# files/requirements-misp.txt those MISP's own scripts import (STIX, TAXII,
+# ZeroMQ, sample extraction). pydeep2 and weakrefmethod ship no wheels: they
+# build here, with a compiler the final image does not carry. One install
+# resolves both files together. The bind mount keeps the uv binary out of
+# every layer.
+# debian:trixie-20261020-slim
+FROM debian:trixie-slim@sha256:62bd423aeee912639ca8ee681c2b762cb3e25137e0a92b20be455898a9f034ad AS python
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
+    rm -f /etc/apt/apt.conf.d/docker-clean && apt-get update && apt-get install -y --no-install-recommends \
+        python3-minimal libpython3.13-stdlib python3-dev gcc libfuzzy-dev
+
+COPY files/requirements-final.txt files/requirements-misp.txt /tmp/
+RUN --mount=type=bind,from=uv,source=/uv,target=/tmp/uv \
+    /tmp/uv pip install --system --break-system-packages --no-cache \
+        -r /tmp/requirements-final.txt -r /tmp/requirements-misp.txt
+
+# =============================================================================
+# Stage 7: final - Runtime image (non-root)
 # =============================================================================
 # A fresh FROM, not php-base: the strip below runs in the same layer as the
 # install, so what it removes (perl from adduser and debconf, gconv, the systemd
@@ -229,12 +252,9 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
               /usr/share/doc \
               /usr/share/man
 
-# Install pinned Python packages via uv (no pip in final image). The bind
-# mount keeps the uv binary out of every layer.
-COPY files/requirements-final.txt /tmp/requirements.txt
-RUN --mount=type=bind,from=uv,source=/uv,target=/tmp/uv \
-    /tmp/uv pip install --system --break-system-packages --no-cache -r /tmp/requirements.txt \
-    && rm /tmp/requirements.txt
+# The pinned Python packages, and their commands such as supervisord: uv
+# installs both under /usr/local (no pip in the final image)
+COPY --from=python /usr/local /usr/local
 
 # Create non-root user
 RUN groupadd -g ${MISP_GID} misp && \
@@ -301,7 +321,7 @@ ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["python3", "/entrypoint-web.py"]
 
 # =============================================================================
-# Stage 7: caddy - Static files + FastCGI reverse proxy (scratch image)
+# Stage 8: caddy - Static files + FastCGI reverse proxy (scratch image)
 # =============================================================================
 # Build with: docker build --target caddy -t misp-caddy .
 # caddy:2.11.3
@@ -341,7 +361,7 @@ EXPOSE 443
 CMD ["caddy", "run", "--config", "/etc/caddy/Caddyfile"]
 
 # =============================================================================
-# Stage 8: modules - MISP enrichment/import/export/action modules
+# Stage 9: modules - MISP enrichment/import/export/action modules
 # =============================================================================
 # Build with: docker build --target modules -t misp-modules .
 # Distroless Python on Debian 13 (trixie). No shell, no package manager.

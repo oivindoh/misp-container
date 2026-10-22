@@ -52,8 +52,8 @@ Run with: `mise run test` or `PYTHONPATH=files python -m pytest tests/ -v`
 with the repository mounted, and reports each check as one test. A check reads MISP's own
 files and fails when MISP changed something this repository patches or depends on: the job
 queues, the Redis keys of the jobs, the scheduler's tasks, the API routes the image calls,
-the keys MISP gives attachments, what `bootstrap.php` loads and logs to, and the files MISP
-writes under `app/tmp/logs`. The
+the keys MISP gives attachments, what `bootstrap.php` loads and logs to, the files MISP
+writes under `app/tmp/logs`, and the Python packages its own scripts need. The
 last check runs the logging block that `init.py` renders through PHP, in both formats. A
 failure names the change, the MISP file and the file of ours to revisit; DEVELOPING.md lists
 the checks. No stack starts, so the guard reports even when MISP no longer starts.

@@ -28,6 +28,7 @@ The `Dockerfile` builds the images from these stages:
 | php-build | Native PHP extensions, built from pinned sources |
 | misp-source | Clone MISP, set permissions |
 | uv | Python package installer (pinned) |
+| python | Python packages of misp_container and of MISP's scripts |
 | final | Runtime image (non-root) |
 | caddy | Static files + FastCGI reverse proxy (scratch image) |
 | modules | MISP enrichment/import/export/action modules |
@@ -238,6 +239,7 @@ Fail when MISP no longer matches what this image patches or depends on. A failur
 | `shell-streams` | app/Lib/cakephp/lib/Cake/Console/Shell.php | files/misp_container/init.py LOG_BLOCK |
 | `relayed-files` | app/Model, app/Lib, app/Controller, app/Console, app/Plugin | files/misp_container/logrelay.py FILES |
 | `image-paths` | app/Model/Server.php, app/View/Helper/OrgImgHelper.php | deploy/chart/templates/_helpers.tpl misp.appVolumeMounts, deploy/docker-compose.yml |
+| `python-requirements` | requirements.txt | files/requirements-misp.txt |
 | `log-block-php` | php | files/misp_container/init.py LOG_BLOCK |
 
 ## Scripts: `scripts/`
@@ -252,6 +254,7 @@ Fail when MISP no longer matches what this image patches or depends on. A failur
 | `merge_into_misp3.py` | Merge master into the misp-3.0 branch, as the sync workflow does. |
 | `release.py` | Prepare a release of one kind: hotfix, normal or breaking. |
 | `update-composer-lock.sh` | Resolve MISP's composer dependencies for the current CORE_TAG plus this image's extra packages, and write the result to files/composer.lock. The image build installs exactly that lock and fails when it is out of date with upstream's composer.json (a new MISP release), so run this on every bump. |
+| `update_misp_requirements.py` | Resolve the packages MISP's own scripts import into files/requirements-misp.txt. |
 | `update_settings.py` | Keep files/misp-config in step with the settings a live MISP knows. |
 
 ## Tests: `tests/`
@@ -332,6 +335,7 @@ Stack files and runners:
 | `mise run logs-sync` | Follow sync test compose logs |
 | `mise run settings-update` | Regenerate files/misp-config/settings-upstream.yaml from a live MISP (builds and runs the test stack) |
 | `mise run composer-lock` | Resolve MISP's PHP dependencies for the current CORE_TAG into files/composer.lock |
+| `mise run misp-requirements` | Resolve the Python packages of MISP's own scripts for the current CORE_TAG into files/requirements-misp.txt |
 | `mise run release` | Prepare a release of one kind (hotfix, normal or breaking): tag, image tags, chart version |
 
 ## CI: `.github/workflows/ci.yaml`
@@ -355,4 +359,4 @@ Stack files and runners:
 |---|---|---|
 | `.github/workflows/ci.yaml` | push (master, tag v*), pull_request (master) | Tests, scans and releases the images and the Helm chart: unit tests, the chart renders, the stack suites in Compose, the chart on kind and Trivy; on a tag, pushes the images and the chart and creates the release (tests/README.md, CI). |
 | `.github/workflows/sync-misp-3.0.yaml` | push (master), workflow_dispatch | Merges master into the misp-3.0 branch (MISP 3.0 Early Access) after each push to master, through a pull request that CI tests, so the 2.5 fixes reach the 3.0 images. A GitHub App token opens it: a push or a pull request made with GITHUB_TOKEN starts no workflow and may not change workflow files. A conflict beyond the pinned MISP version opens an issue (DEVELOPING.md, The misp-3.0 branch). |
-| `.github/workflows/track-misp-releases.yaml` | schedule, workflow_dispatch | Opens a pull request for each new MISP release: bumps CORE_TAG, resolves files/composer.lock and regenerates the settings catalogue (DEVELOPING.md, New MISP releases). |
+| `.github/workflows/track-misp-releases.yaml` | schedule, workflow_dispatch | Opens a pull request for each new MISP release: bumps CORE_TAG, resolves files/composer.lock and files/requirements-misp.txt, and regenerates the settings catalogue (DEVELOPING.md, New MISP releases). |
