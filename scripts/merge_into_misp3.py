@@ -71,7 +71,8 @@ def merge(ref: str) -> int:
         for path in unresolved:
             print(f"  {path}")
         return EXIT_CONFLICT
-    git("commit", "--quiet", "-m", f"merge master into misp-3.0 ({ref[:12]})")
+    short = git("rev-parse", "--short=12", ref).stdout.strip()
+    git("commit", "--quiet", "-m", f"merge master into misp-3.0 ({short})")
     print(f"merged {ref} into misp-3.0" + (", the Dockerfile pin lines kept" if conflicted else ""))
     return 0
 
