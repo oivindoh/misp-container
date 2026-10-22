@@ -212,7 +212,7 @@ MISP settings in groups; each setting's env var is its name in upper case with d
 | `critical` | always-enforced settings |
 | `optional` | nice-to-have defaults |
 | `gpg` | GnuPG settings |
-| `s3` | S3 attachment storage (only applied when PLUGIN_S3_BUCKET_NAME is set) |
+| `s3` | S3 attachment storage (only applied when PLUGIN_S3_BUCKET_NAME is set, which also sets MISP.attachments_dir to s3://, env.py) |
 | `proxy` | HTTP proxy settings (only applied when PROXY_HOST is set) |
 | `custom_auth` | header authentication from a reverse proxy, no directory lookup (only applied when CUSTOM_AUTH_ENABLE=true; the CUSTOM_AUTH_* names are aliases, env.py) |
 | `kafka` | Kafka pub/sub integration (only applied when PLUGIN_KAFKA_ENABLE=true) |
