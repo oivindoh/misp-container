@@ -211,6 +211,31 @@ def test_a_published_event_runs_a_job(stack):
     assert done > 0, f"no job reached status 4 (completed) in 60 s; {queued} job(s) in the table: no worker ran it"
 
 
+# -- MISP's own Python scripts -------------------------------------------------------
+
+@pytest.fixture(scope="module")
+def stix_event(stack):
+    event = stack.api("POST", "/events/add", stack.key, {"Event": {"info": "STIX export test", "distribution": 0}}) or {}
+    eid = event.get("Event", {}).get("id")
+    assert eid, event
+    stack.api("POST", f"/attributes/add/{eid}", stack.key, {
+        "event_id": eid, "category": "Network activity", "type": "ip-dst", "value": "198.51.100.7"})
+    yield eid
+    stack.http("POST", f"/events/delete/{eid}", stack.key, {})
+
+
+def test_stix2_export_runs_misp_stix(stack, stix_event):
+    # MISP runs app/files/scripts/stix2/misp2stix2.py, which imports misp-stix
+    status, body = stack.http("POST", "/events/restSearch", stack.key, {"returnFormat": "stix2", "eventid": stix_event})
+    assert status == 200 and '"bundle"' in body and "198.51.100.7" in body, body[-2000:]
+
+
+def test_stix1_export_runs_python_stix(stack, stix_event):
+    # MISP runs app/files/scripts/misp2stix.py, which imports python-stix and cybox
+    status, body = stack.http("POST", "/events/restSearch", stack.key, {"returnFormat": "stix", "eventid": stix_event})
+    assert status == 200 and "STIX_Package" in body and "198.51.100.7" in body, body[-2000:]
+
+
 # -- PHP-FPM -------------------------------------------------------------------------
 
 def test_fpm_listens_on_9002(stack):

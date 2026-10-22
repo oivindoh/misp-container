@@ -22,11 +22,12 @@ One Dockerfile, three targets:
 
 | Target | Image | On disk | Pull (compressed) | Purpose |
 |--------|-------|---------|-------------------|---------|
-| `final` | `misp-container` | 890 MB | 250 MB | PHP-FPM, workers, configure, org sync, metrics exporter, task runner, migrate; `app/files` (360 MB of lists, galaxies and geolocation data) ships in the image |
+| `final` | `misp-container` | 950 MB | 260 MB | PHP-FPM, workers, configure, org sync, metrics exporter, task runner, migrate, and the Python packages MISP's own scripts import (STIX, TAXII, ZeroMQ, sample extraction); `app/files` (360 MB of lists, galaxies and geolocation data) ships in the image |
 | `caddy` | `misp-container-caddy` | 76 MB | 29 MB | Static files and FastCGI reverse proxy (scratch image) |
 | `modules` | `misp-container-modules` | 360 MB | 98 MB | MISP enrichment, import, export and action modules (distroless) |
 
-Sizes are the arm64 build of MISP 2.5.47; amd64 is within a few percent.
+Sizes are arm64 builds, `final` of MISP 2.5.50, `caddy` and `modules` of MISP 2.5.47; amd64 is
+within a few percent.
 
 Image tags match the MISP version (`2.5.47`, hotfixes `2.5.47-r1`). See
 [DEVELOPING.md](DEVELOPING.md) for releases.

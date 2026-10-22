@@ -191,6 +191,20 @@ class OrgImgHelper extends AppHelper
 }
 """
 
+REQUIREMENTS = """jsonschema>=4.19.1
+misp-stix>=2026.10.12
+pymisp==2.5.34.4
+python-magic>=0.4.27
+"""
+
+PINS = """# a comment
+jsonschema==4.26.0
+misp-stix==2026.10.12
+pymisp==2.5.34.4
+python_magic==0.4.27
+cffi==2.1.1 ; implementation_name == 'pypy'
+"""
+
 
 def write(root, rel, text):
     path = root / rel
@@ -199,9 +213,12 @@ def write(root, rel, text):
 
 
 @pytest.fixture
-def misp(tmp_path):
-    """A MISP tree that passes every check."""
+def misp(tmp_path, monkeypatch):
+    """A MISP tree that passes every check, with pins that meet its requirements."""
+    write(tmp_path, "requirements-misp.txt", PINS)
+    monkeypatch.setattr(cu, "OUR_REQUIREMENTS", tmp_path / "requirements-misp.txt")
     root = tmp_path / "MISP"
+    write(root, cu.MISP_REQUIREMENTS, REQUIREMENTS)
     write(root, cu.BACKGROUND_JOBS, BACKGROUND_JOBS)
     write(root, cu.SCHEDULER_SHELL, SCHEDULER_SHELL)
     write(root, cu.CONSOLE_SHELL, CONSOLE_SHELL)
@@ -405,3 +422,27 @@ class TestImagePaths:
     def test_rules_gone(self, misp):
         edit(misp, cu.SERVER_MODEL, "function getFileRules(", "function getUploadRules(")
         assert any("no getFileRules()" in p for p in problems(misp, "image-paths"))
+
+
+class TestPythonRequirements:
+    def test_a_raised_floor(self, misp):
+        edit(misp, cu.MISP_REQUIREMENTS, "misp-stix>=2026.10.12", "misp-stix>=2026.11.2")
+        [problem] = problems(misp, "python-requirements")
+        assert "need misp-stix>=2026.11.2, the pin is 2026.10.12" in problem
+
+    def test_a_new_exact_pin(self, misp):
+        edit(misp, cu.MISP_REQUIREMENTS, "pymisp==2.5.34.4", "pymisp==2.5.35")
+        assert any("need pymisp==2.5.35" in p for p in problems(misp, "python-requirements"))
+
+    def test_a_new_package(self, misp):
+        edit(misp, cu.MISP_REQUIREMENTS, "pymisp==2.5.34.4", "pymisp==2.5.34.4\nlief>=0.13.1")
+        assert any("need lief>=0.13.1, which no pin covers" in p for p in problems(misp, "python-requirements"))
+
+    def test_extras_markers_and_trailing_zeros(self, misp):
+        edit(misp, cu.MISP_REQUIREMENTS, "jsonschema>=4.19.1",
+             "jsonschema[format]>=4.26 ; python_version >= '3.10'")
+        assert problems(misp, "python-requirements") == []
+
+    def test_a_version_with_letters_is_checked_by_hand(self, misp):
+        edit(misp, cu.MISP_REQUIREMENTS, "jsonschema>=4.19.1", "jsonschema>=4.27rc1")
+        assert any("cannot compare the pin jsonschema==4.26.0" in p for p in problems(misp, "python-requirements"))
