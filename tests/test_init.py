@@ -313,3 +313,17 @@ class TestPopulateCerts:
         with patch.dict(os.environ, {"MISP_CERTS_SOURCE": str(tmp_path / "absent"), "MISP_CERTS_DIR": str(tmp_path / "certs")}):
             populate_certs()
         assert not (tmp_path / "certs").exists()
+
+
+class TestSetupTmp:
+    def test_the_cakephp_schema_caches_go_and_the_rest_stays(self, tmp_path, monkeypatch):
+        from misp_container import init
+        monkeypatch.setattr(init, "MISP_TMP", str(tmp_path))
+        for name in ("cache/models/myapp_cake_model_default_misp_attributes", "cache/persistent/myapp_cake_core_file_map",
+                     "cache/views/page", "logs/error.log"):
+            (tmp_path / name).parent.mkdir(parents=True, exist_ok=True)
+            (tmp_path / name).write_text("cached")
+        init.setup_tmp()
+        assert not any((tmp_path / "cache/models").iterdir())
+        assert not any((tmp_path / "cache/persistent").iterdir())
+        assert (tmp_path / "cache/views/page").exists() and (tmp_path / "logs/error.log").exists()
