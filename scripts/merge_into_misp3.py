@@ -5,8 +5,9 @@ Usage: merge_into_misp3.py <ref>   (in a checkout of misp-3.0)
 
 The branch pins MISP 3.0 where master pins 2.5: the ARG CORE_TAG and
 CORE_COMMIT lines of the Dockerfile, files/composer.lock and the settings
-catalogue. The branch's .gitattributes keeps its own lock and catalogue whole
-(merge=ours; this script sets merge.ours.driver for the merge). A Dockerfile
+catalogue. The branch's .gitattributes keeps its own lock, catalogue and
+generated AGENTS.md whole (merge=ours; this script sets merge.ours.driver for
+the merge); the sync workflow then regenerates the generated files. A Dockerfile
 conflict that touches only the pin lines takes the branch's side. Any other
 conflict aborts the merge and names the files.
 

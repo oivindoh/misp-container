@@ -51,6 +51,25 @@ jobs:
           cat "$RUNNER_TEMP/merge.txt"
           echo "code=$code" >> "$GITHUB_OUTPUT"
 
+      - name: Install helm
+        if: steps.merge.outputs.code == '0'
+        uses: ./.github/actions/install-helm
+
+      # The generated files differ between the lines: the branch's .gitattributes
+      # keeps its AGENTS.md through the merge, and the merged tree writes them anew
+      - name: Regenerate the generated files
+        if: steps.merge.outputs.code == '0'
+        run: |
+          set -euo pipefail
+          pip install --quiet uv
+          uv sync --quiet
+          .venv/bin/python scripts/generate_docs.py
+          .venv/bin/python scripts/generate_agents_md.py
+          if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
+            git status --short --untracked-files=no
+            git commit --quiet --all --amend --no-edit
+          fi
+
       - name: Open the pull request
         if: steps.merge.outputs.code == '0'
         run: |
