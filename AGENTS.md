@@ -358,3 +358,11 @@ Stack files and runners:
 | `scan` | `build` | Build ${{ matrix.target }} image (from cache); Trivy vulnerability scan (${{ matrix.target }}); Upload scan results; Fail on a fixable CRITICAL finding (${{ matrix.target }}) |
 | `release` | `unit`, `integration`, `integration-postgres`, `hub-spoke`, `migration`, `kind`, `scan` | Extract version info; Install helm; Check the chart version; Log in to GHCR; Check tag immutability; Docker tags; Build and push misp (from cache); Build and push caddy (from cache); Build and push modules (from cache); Push the chart; Create GitHub Release |
 | `prerelease` | `master-merged`, `unit`, `integration`, `integration-postgres`, `hub-spoke`, `migration`, `upgrade`, `kind`, `scan` | Log in to GHCR; Docker tags; Build and push misp (from cache); Build and push caddy (from cache); Build and push modules (from cache); Install helm; Push the chart |
+
+## Workflows: `.github/workflows/`
+
+| Workflow | Runs on | Does |
+|---|---|---|
+| `.github/workflows/ci.yaml` | push (master, misp-3.0, tag v*), pull_request (master, misp-3.0) | Tests, scans and releases the images and the Helm chart: unit tests, the chart renders, the stack suites in Compose, the chart on kind and Trivy; on a tag, pushes the images and the chart and creates the release (tests/README.md, CI). On the misp-3.0 branch, pushes the MISP 3.0 Early Access images instead. |
+| `.github/workflows/sync-misp-3.0.yaml` | push (master), workflow_dispatch | Merges master into the misp-3.0 branch (MISP 3.0 Early Access) after each push to master, through a pull request that CI tests, so the 2.5 fixes reach the 3.0 images. A GitHub App token opens it: a push or a pull request made with GITHUB_TOKEN starts no workflow and may not change workflow files. A conflict beyond the pinned MISP version opens an issue (DEVELOPING.md, The misp-3.0 branch). |
+| `.github/workflows/track-misp-releases.yaml` | schedule, workflow_dispatch | Opens a pull request for each new MISP release: bumps CORE_TAG, resolves files/composer.lock and regenerates the settings catalogue (DEVELOPING.md, New MISP releases). |
