@@ -95,34 +95,24 @@ the build with the file and the reason when the anchor moved:
 
 ## MISP 3.0
 
-The `misp-3.0` branch builds MISP 3.0 Early Access: `CORE_TAG=3.0_wip`, MISP's development
-branch, with `CORE_COMMIT` pinning the commit. Each push to the branch runs every suite, the
-upgrade suite among them, and the `prerelease` job pushes the images and the chart
-([docs/misp-3.md](docs/misp-3.md) lists the versions). No GitHub Release comes from the branch.
+This branch builds MISP 3.0 Early Access. The branch model, the sync from master and moving
+to a newer `3.0_wip` commit are in [The misp-3.0 branch](#the-misp-30-branch); the images, the
+chart and the upgrade of a 2.5 instance are in [docs/misp-3.md](docs/misp-3.md). The code here
+differs from master in these places:
 
-To move to a newer 3.0_wip commit:
+| Where | On this branch | Because |
+|-------|----------------|---------|
+| `Dockerfile` | `CORE_TAG=3.0_wip` with `CORE_COMMIT` pinned; no `cake-resque` patch in `composer-prep`; submodules without recursion; `INSTALL/MARIADB.sql` kept | MISP 3.0 requires no `iglocska/cake-resque`, and only `misp-iconify` nests submodules, over SSH URLs |
+| The version marker | `3.0_wip+<CORE_COMMIT>` | It sorts after every `since:` of 2.5 and changes with each pin |
+| `db.init_schema()` | Imports `MARIADB.sql` on a MariaDB server | MISP ships a MariaDB baseline with its own collations |
+| `settings.yaml` | No switch for background jobs, and four other settings fewer | MISP 3.0 defines none of them; an `s3://` attachments directory turns S3 on |
+| The upgrade step | `misp_container.upgrade`, the chart's `upgrade` component, the Compose `upgrade` profile | MISP converts a 2.5 database only with its one-way `cake Admin runUpgrade`; the step runs it while `attributes` has the text column `value1`, which the last migration drops, and the configure step refuses such a database |
+| CI | The `upgrade` suite, the `master-merged` job and the `prerelease` job | See The misp-3.0 branch |
+| `.gitattributes` | `merge=ours` for `composer.lock` and the settings catalogue | A merge of master keeps the 3.0 ones whole |
 
-1. Set `ARG CORE_COMMIT` in the `Dockerfile` to the commit.
-2. Run `mise run composer-lock` and `mise run settings-update`.
-3. Push the branch.
-
-The fixes of the 2.5 line come from master: the `Sync misp-3.0` workflow on master merges it
-into the branch through a pull request, and the `master-merged` job fails while the branch
-lacks a commit of master.
-
-The 3.0 image differs from the 2.5 image in four places:
-
-- MISP 3.0 requires no `iglocska/cake-resque`, so `composer-prep` patches nothing.
-- `db.init_schema()` imports `INSTALL/MARIADB.sql` on a MariaDB server: MISP ships a MariaDB
-  baseline with its own collations.
-- `settings.yaml` does not turn background jobs on: MISP 3.0 has no setting for it, they are
-  always on.
-- The version marker is `3.0_wip+<CORE_COMMIT>`, which sorts after every `since:` of 2.5.
-
-The upgrade step (`misp_container.upgrade`) converts a 2.5 database with MISP's one-way
-`cake Admin runUpgrade` ([MISP's upgrade guide](https://github.com/MISP/MISP/blob/3.0_wip/docs/UPGRADE.md)).
-It runs while `attributes` has the text column `value1`, which the conversion's last
-migration drops. The configure step of a 3.0 image refuses such a database.
+On PostgreSQL, MISP 3.0 answers 500 on the events index: `EventIndexStatsBehavior::aggregate()`
+names the alias `Event` unquoted. `test_oidc_callback_lands_on_misp` is a strict xfail on
+PostgreSQL. It fails once MISP fixes the bug; remove the marker then.
 
 ## Releases
 
