@@ -14,7 +14,68 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 
 import check_upstream as cu  # noqa: E402
-from test_scheduler_coverage import SHELL as SCHEDULER_SHELL  # noqa: E402
+from misp_container import task  # noqa: E402
+
+# The shape of MISP 2.5.47's SchedulerWorkerShell.php, reduced to the lines the
+# guard reads
+SCHEDULER_SHELL = """<?php
+class SchedulerWorkerShell extends AppShell
+{
+    public const ADMIN_ACTIONS = [
+        'updateGalaxies',
+        'updateTaxonomies',
+        'updateWarningLists',
+        'updateNoticeLists',
+        'updateObjectTemplates',
+        // Reconcile MISP accounts with the external identity provider.
+        'checkUserValidity',
+        'blockInvalidUsers'
+    ];
+
+    private function processTask(array $task)
+    {
+        if ($task['type'] == 'Server') {
+            $this->runServerTask($task);
+        } elseif ($task['type'] == 'Feed') {
+            if ($task['action'] === 'fetch') {
+                $this->runFeedFetchTask($task);
+            } elseif ($task['action'] === 'cache') {
+                $this->runFeedCacheTask($task);
+            }
+        } elseif ($task['type'] == 'TAXII') {
+            if ($task['action'] !== 'push') {
+                return;
+            }
+        } elseif ($task['type'] == 'Workflow') {
+            $this->runWorkflowAdHoc($task);
+        } elseif ($task['type'] == 'Periodic Summary') {
+            if ($task['action'] !== 'send') {
+                return;
+            }
+        } elseif ($task['type'] == 'Admin') {
+            $this->runAdminTask($task);
+        }
+    }
+
+    private function runServerTask($task)
+    {
+        if (!in_array($task['action'], ['pull', 'push', 'cache'], true)) {
+            return;
+        }
+    }
+
+    public function runAdminTask($task)
+    {
+        if ($task['action'] === 'updateGalaxies') {
+            $jobParams = [];
+        }
+        if ($task['action'] === 'updateObjectTemplates') {
+            $jobParams = [];
+        }
+    }
+}
+"""
+
 
 BACKGROUND_JOBS = """<?php
 class BackgroundJobsTool
@@ -446,3 +507,42 @@ class TestPythonRequirements:
     def test_a_version_with_letters_is_checked_by_hand(self, misp):
         edit(misp, cu.MISP_REQUIREMENTS, "jsonschema>=4.19.1", "jsonschema>=4.27rc1")
         assert any("cannot compare the pin jsonschema==4.26.0" in p for p in problems(misp, "python-requirements"))
+
+
+class TestOffered:
+    def test_reads_types_actions_and_admin_actions(self):
+        types, actions, admin = cu.offered(SCHEDULER_SHELL)
+        assert types == {"Server", "Feed", "TAXII", "Workflow", "Periodic Summary", "Admin"}
+        assert actions == {"pull", "push", "cache", "fetch", "send"}
+        assert "checkUserValidity" in admin and len(admin) == 7
+
+    def test_admin_comparisons_count_as_admin_actions(self):
+        _, actions, _ = cu.offered(SCHEDULER_SHELL)
+        assert "updateGalaxies" not in actions
+
+    def test_commented_type_is_ignored(self):
+        types, _, _ = cu.offered(SCHEDULER_SHELL + "\n// if ($task['type'] == 'Retired') {\n")
+        assert "Retired" not in types
+
+
+class TestUncovered:
+    def test_the_task_runner_covers_misp_2_5_47(self):
+        assert cu.uncovered(SCHEDULER_SHELL) == []
+
+    def test_new_task_type(self):
+        shell = SCHEDULER_SHELL.replace("$task['type'] == 'Admin'", "$task['type'] == 'Admin' || $task['type'] == 'Galaxy'")
+        assert cu.uncovered(shell) == ["task type 'Galaxy'"]
+
+    def test_new_action(self):
+        shell = SCHEDULER_SHELL.replace("['pull', 'push', 'cache']", "['pull', 'push', 'cache', 'purge']")
+        assert cu.uncovered(shell) == ["task action 'purge'"]
+
+    def test_new_admin_action(self):
+        shell = SCHEDULER_SHELL.replace("'blockInvalidUsers'\n", "'blockInvalidUsers',\n        'pruneLogs'\n")
+        assert cu.uncovered(shell) == ["admin action 'pruneLogs'"]
+
+    def test_changed_shape_is_reported(self):
+        assert "changed shape" in cu.uncovered("<?php class Empty {}")[0]
+
+    def test_every_covering_task_exists(self):
+        assert set(task.SCHEDULER_COVERAGE.values()) <= set(task.TASKS)

@@ -22,10 +22,6 @@ run = "python -m pytest tests/ -v --ignore=tests/e2e"
 description = "Run the upstream guard and the integration tests (requires podman)"
 run = "python -m pytest tests/e2e/test_upstream.py tests/e2e/test_integration.py -v"
 
-[tasks.test-upstream]
-description = "Check the MISP in the image against what this repository patches or depends on"
-run = "python -m pytest tests/e2e/test_upstream.py -v"
-
 [tasks.test-sync]
 description = "Run hub-spoke sync test (3 MISP instances)"
 run = "python -m pytest tests/e2e/test_sync.py -v"
@@ -33,10 +29,6 @@ run = "python -m pytest tests/e2e/test_sync.py -v"
 [tasks.test-migration]
 description = "Run the migration suite (MariaDB to MariaDB and to PostgreSQL)"
 run = "python -m pytest tests/e2e/test_migration.py -v"
-
-[tasks.test-chart]
-description = "Lint the Helm chart, render it with each component and validate against the schemas"
-run = "python -m pytest tests/test_chart_schema.py -v"
 
 [tasks.test-kind]
 description = "Install, test, upgrade and roll back the Helm chart on a kind cluster (build the images first)"
@@ -63,14 +55,6 @@ URL="${1:?Usage: mise run smoketest <url>}"
 read -rsp "API key: " KEY; echo
 python -m pytest tests/e2e/test_smoke.py -v --url "$URL" --key "$KEY"
 """
-
-[tasks.logs]
-description = "Follow integration test compose logs"
-run = "${COMPOSE_CMD:-podman compose} -f deploy/docker-compose.yml -f tests/docker-compose.test.yml logs -f"
-
-[tasks.logs-sync]
-description = "Follow sync test compose logs"
-run = "${COMPOSE_CMD:-podman compose} -f tests/docker-compose.sync-test.yml logs -f"
 
 [tasks.settings-update]
 description = "Regenerate files/misp-config/settings-upstream.yaml from a live MISP (builds and runs the test stack)"

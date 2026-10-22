@@ -5,15 +5,13 @@
 Unit tests on the Python library, an upstream guard that checks the MISP in the image against what this repository patches or depends on, and three stack suites in pytest (`tests/e2e/`): an integration suite on one Compose stack, a hub-spoke sync suite on three instances, and a migration suite that copies a seeded instance onto MariaDB and PostgreSQL. A smoke test checks any live MISP through its API. Two Kubernetes checks cover the Helm chart: every render validated against the schemas, and the chart installed and upgraded on a kind cluster with the smoke test.
 
 ```bash
-mise run test                # unit tests (~0.2s)
-mise run test-upstream       # the upstream guard in the image (~5s)
+mise run test                # unit tests, the chart lint and every chart render validated against the schemas
 mise run test-integration    # the upstream guard, then single-instance integration tests (~2min)
 mise run test-integration -- --db-engine postgres   # the same on PostgreSQL
 mise run test-sync           # hub-spoke sync test with 3 instances (~2min)
 mise run test-migration      # the migration: MariaDB to MariaDB, MariaDB to PostgreSQL (~3min)
 mise run smoketest https://misp.example.com   # a live MISP; asks for an API key
 mise run test-all            # every suite
-mise run test-chart          # helm lint, render the chart with each component, validate against the schemas (~10s)
 mise run test-kind           # the chart on a kind cluster: install, helm test, task runs, upgrade, rollback (build the images first)
 ```
 
@@ -28,7 +26,6 @@ Tests of the Python entrypoint library (`files/misp_container/`), the scripts an
 | `test_config.py` | Settings diff engine, version comparison, YAML loading, env var expansion, settings cache |
 | `test_env.py` | Environment variable defaults, `apply_defaults()`, worker config derivation, derived variables |
 | `test_task.py` | Periodic task runner: API tasks, index tasks, the workflow task, console tasks, the backlog guard |
-| `test_scheduler_coverage.py` | The guard that fails when MISP's scheduler offers work no task covers |
 | `test_check_upstream.py` | The upstream guard: every check on a MISP tree in the 2.5.47 shape, then on that tree changed the way a release could. The PHP run needs `php` and skips without it |
 | `test_log.py`, `test_logrelay.py` | The JSON and text log formats; the relay of MISP's log files and their size cap |
 | `test_metrics.py` | Metrics exporter: database metrics, the job queues in Redis (RESP client), network probes |
@@ -58,8 +55,8 @@ last check runs the logging block that `init.py` renders through PHP, in both fo
 failure names the change, the MISP file and the file of ours to revisit; DEVELOPING.md lists
 the checks. No stack starts, so the guard reports even when MISP no longer starts.
 
-Run with: `mise run test-upstream`. `mise run test-integration` and the CI job
-`integration` run it before the integration suite.
+`mise run test-integration` and the CI job `integration` run it before the integration suite;
+`python -m pytest tests/e2e/test_upstream.py` runs it alone.
 
 ## Integration tests
 
@@ -105,11 +102,11 @@ Run with: `mise run test-integration`
 
 ## Kubernetes checks
 
-**Render check** (`tests/test_chart_schema.py`, `mise run test-chart`): runs `helm lint
+**Render check** (`tests/test_chart_schema.py`, part of `mise run test`): runs `helm lint
 --strict`, renders the chart with the default values, with each component on, with every
 component on, and with supplied Secrets, attachments in S3 and a workflow CronJob. It
 validates each render with `kubeconform -strict` against the Kubernetes schemas and, for the
-Cilium policies and the HTTPRoute, the CRD catalog. It needs `helm` and `kubeconform` (`mise
+Cilium policies and the HTTPRoute, the copies of the datree CRD catalog in `tests/schemas/`. It needs `helm` and `kubeconform` (`mise
 install` in the repository); without `kubeconform` the render tests skip, and in CI they
 fail. It runs with the unit tests (CI job: `unit`). `test_chart.py` checks what the renders
 hold.
@@ -246,20 +243,20 @@ The suites behave the same under podman-compose, locally, and docker compose, in
 
 ## CI
 
-GitHub Actions on every push to master and every PR:
+GitHub Actions on every push to master and `misp-3.0`, every tag and every pull request. Both
+branches carry the same `ci.yaml`:
 
 | Job | Runs |
 |-----|------|
-| `gate` | Stops a master run whose commit carries a release tag, since the tag run tests and releases that commit |
+| `gate` | Decides what the run does: nothing on a master push whose commit carries a release tag, since the tag run tests and releases that commit; the unit tests only on a draft; no unit tests and no suites on a push to `misp-3.0` that merges a pull request, which ran them on the same tree |
+| `master-merged` | On `misp-3.0` and its pull requests: fails while master has commits the branch lacks |
 | `build` | The three images into the layer cache. The misp image's final stage is built fresh each run, so it carries the current Debian packages |
 | `unit` | The unit tests, the chart lint and every chart render validated against the schemas |
-| `integration` | The upstream guard, then the integration suite on MariaDB, against the images from `build` (`MISP_IMAGE_TAG=ci`); uploads the JUnit report and, after a failure, the compose logs |
-| `integration-postgres` | The same on PostgreSQL, in parallel |
-| `hub-spoke` | The sync suite, in parallel with `integration` |
-| `migration` | The migration suite (pytest), in parallel; uploads the JUnit report and, after a failure, the compose logs |
+| `suite` | The stack suites, one job each, in parallel, against the images from `build` (`MISP_IMAGE_TAG=ci`): `integration` (the upstream guard, then the integration suite), `integration-postgres`, `hub-spoke`, `migration`, and `upgrade (mariadb)` and `upgrade (postgres)` where the upgrade suite exists. Each uploads its JUnit report and, after a failure, the compose logs |
 | `kind` | The chart on a kind cluster, once on MariaDB and once on PostgreSQL: install, smoke test, `helm test`, task runs, upgrade, rollback |
-| `scan` | Trivy on the three images: CRITICAL and HIGH findings go to the Security tab, and a CRITICAL one with a fix fails the job, which blocks `release` |
-| `release` | On a tag: push the images and the chart, and create the GitHub Release, after every other job |
+| `scan` | Trivy on the three images, one scan each: CRITICAL and HIGH findings with a fix go to the Security tab, and a CRITICAL one fails the job, which blocks `publish` |
+| `ci-ok` | The one required check: fails when a job failed or was cancelled, and on a draft |
+| `publish` | After every other job: on a tag, the images, the chart and the GitHub Release; on a push to `misp-3.0`, the Early Access images and chart |
 
 ## Environment
 

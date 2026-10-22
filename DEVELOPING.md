@@ -9,6 +9,7 @@
 - New MISP release: the tracking workflow opens a PR with the bump, `files/composer.lock`,
   `files/requirements-misp.txt` and the catalogue; CI's strict checks tell you what changed.
 - Release: `mise run release <hotfix|normal|breaking>`, then push master and the tag.
+- Pull requests: a draft runs the unit tests only; marking it ready for review runs every suite.
 - MISP 3.0 Early Access lives on the `misp-3.0` branch; a workflow merges master into it.
 
 ## Setup
@@ -17,13 +18,11 @@
 
 ```bash
 cd misp-container      # mise creates .venv on enter
-mise run test          # unit tests (~0.3s)
-mise run test-upstream     # the MISP in the image against what the image patches or depends on (~5s)
+mise run test          # unit tests, the chart lint and every chart render validated against the schemas
 mise run test-integration  # the upstream guard, then the full Compose stack with podman (~2min)
 mise run test-integration -- --db-engine postgres   # the same suite on PostgreSQL
 mise run test-sync     # hub-spoke 3-instance sync (~2min)
 mise run test-all      # unit, the upstream guard, integration, sync, migration
-mise run test-chart     # helm lint, and every chart render validated against the schemas
 mise run test-kind      # the chart on a kind cluster: install, helm test, task runs, upgrade, rollback
 ```
 
@@ -131,7 +130,7 @@ The push starts two runs of the release commit. The `gate` job stops the master 
 tag run tests the commit and releases it.
 
 CI runs the tests and the scans, then pushes the images and the chart, and creates a GitHub
-Release. The release job refuses a tag whose image tag differs from `appVersion`, an image tag
+Release. The `publish` job refuses a tag whose image tag differs from `appVersion`, an image tag
 that GHCR already holds, and a chart version that GHCR already holds.
 
 | Artefact | Version |
@@ -165,13 +164,19 @@ flowchart LR
     S -->|any other conflict| I[issue: master does not<br/>merge into misp-3.0]
     P --> C[CI: the required checks]
     C -->|all pass| G[GitHub merges it]
-    G --> B[CI on misp-3.0]
-    B --> R[prerelease: images and chart]
+    G --> B[CI on misp-3.0: build, scan, master-merged]
+    B --> R[publish: images and chart]
 ```
 
 CI on `misp-3.0` fails its `master-merged` job while master has commits the branch lacks, and
-`prerelease` needs that job: no 3.0 build ships without the fixes of master. A sync pull
+`publish` needs that job: no 3.0 build ships without the fixes of master. A sync pull
 request whose checks fail stays open; the next push to master merges again and updates it.
+
+The ruleset requires a pull request to be up to date with `misp-3.0`, so its merge commit has
+the tree its checks ran on. The push run of that merge commit skips `unit` and the suites, and
+builds, scans and publishes. A push that merges no pull request runs every job. A sync pull
+request that falls behind `misp-3.0` waits for the next push to master, which merges again.
+Both branches carry the same `ci.yaml`: its `gate` job tells the branches apart.
 
 `scripts/merge_into_misp3.py` does the merge. Where the branch pins MISP 3.0 and master pins
 2.5, the merge keeps the branch's side:
@@ -216,14 +221,11 @@ The sync needs these pieces of the repository's settings:
 | GitHub App `misp-v3-sync` | Installed on this repository, with read and write access to contents, pull requests, issues and workflows. It opens the pull requests: a pull request made with `GITHUB_TOKEN` starts no CI, and `GITHUB_TOKEN` may not push a change to a workflow file. |
 | Variable `MISP3_SYNC_CLIENT_ID` | The App's client ID |
 | Secret `MISP3_SYNC_PRIVATE_KEY` | A private key of the App |
-| Ruleset "misp-3.0 requires CI" | Requires the checks below before a merge into `misp-3.0`. Repository admins bypass it. |
+| Ruleset "misp-3.0 requires CI" | Requires the check `ci-ok`, on a pull request that is up to date with `misp-3.0`, before a merge into `misp-3.0`. Repository admins bypass it. |
 | Auto-merge | Allowed for the repository. The workflow turns it on for its pull request only while a rule requires checks; without one, the pull request waits for a person. |
 
-The required checks are the jobs `prerelease` needs: `master-merged`, `unit`, `integration`,
-`integration-postgres`, `hub-spoke`, `migration`, `upgrade (mariadb)`, `upgrade (postgres)`,
-`kind (mariadb)`, `kind (postgres)` and the three `scan` jobs. Rename a job of the branch's
-`ci.yaml` in the ruleset as well: a required check that never reports holds every sync pull
-request open.
+`ci-ok` fails when any job of the run failed or was cancelled, and on a draft. Rename it in the
+ruleset as well: a required check that never reports holds every sync pull request open.
 
 ## Settings Engine
 
@@ -274,8 +276,8 @@ next run leaves the setting to the operator again. Env vars always take preceden
 `files/misp-config/settings-upstream.yaml` is generated, never edited: every setting the
 running MISP defines that `settings.yaml` does not name, with MISP's own default, description,
 type and level, all `track_only`. The source is `cake Admin getSetting all` inside the web
-container; the REST endpoint strips descriptions. The image never applies those values; the file documents
-them and makes every MISP setting overridable through its derived env var.
+container, which carries each setting's description. The image never applies those values; the file
+documents them and makes every MISP setting overridable through its derived env var.
 
 ```bash
 mise run settings-update              # build the stack, regenerate, tear down
@@ -366,7 +368,6 @@ files/
 scripts/
   release.py                # mise run release <hotfix|normal|breaking>
   update_settings.py        # The catalogue tool (--stack --write: mise run settings-update; --check in the integration suite)
-  check_scheduler_coverage.py  # Fails when MISP's scheduler offers work no task covers
   check_upstream.py         # Fails when MISP changed something the image patches or depends on
   generate_agents_md.py     # Writes AGENTS.md from the tree (mise run agents-md)
   generate_docs.py          # Fills the generated regions of the docs (mise run docs)
