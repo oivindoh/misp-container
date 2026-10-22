@@ -344,6 +344,7 @@ Stack files and runners:
 | Job | Needs | Steps |
 |---|---|---|
 | `gate` |  | Look for a release tag on the commit |
+| `master-merged` |  | Check that master is merged |
 | `build` | `gate` | Build ${{ matrix.name }} image |
 | `unit` | `gate` | Install helm and kubeconform; Unit tests |
 | `integration` | `build` | Load the images; Integration tests; Upload the test report and the compose logs |
@@ -354,4 +355,4 @@ Stack files and runners:
 | `kind` | `build` | Load the images; Install kind and helm; Python for the smoke test; Kubernetes test on kind (${{ matrix.database }}) |
 | `scan` | `build` | Build ${{ matrix.target }} image (from cache); Trivy vulnerability scan (${{ matrix.target }}); Upload scan results; Fail on a fixable CRITICAL finding (${{ matrix.target }}) |
 | `release` | `unit`, `integration`, `integration-postgres`, `hub-spoke`, `migration`, `kind`, `scan` | Extract version info; Install helm; Check the chart version; Log in to GHCR; Check tag immutability; Docker tags; Build and push misp (from cache); Build and push caddy (from cache); Build and push modules (from cache); Push the chart; Create GitHub Release |
-| `prerelease` | `unit`, `integration`, `integration-postgres`, `hub-spoke`, `migration`, `upgrade`, `kind`, `scan` | Log in to GHCR; Docker tags; Build and push misp (from cache); Build and push caddy (from cache); Build and push modules (from cache); Install helm; Push the chart |
+| `prerelease` | `master-merged`, `unit`, `integration`, `integration-postgres`, `hub-spoke`, `migration`, `upgrade`, `kind`, `scan` | Log in to GHCR; Docker tags; Build and push misp (from cache); Build and push caddy (from cache); Build and push modules (from cache); Install helm; Push the chart |

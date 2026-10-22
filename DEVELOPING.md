@@ -103,7 +103,11 @@ To move to a newer 3.0_wip commit:
 
 1. Set `ARG CORE_COMMIT` in the `Dockerfile` to the commit.
 2. Run `mise run composer-lock` and `mise run settings-update`.
-3. Push the branch. Merge master into it for the fixes of the 2.5 line.
+3. Push the branch.
+
+The fixes of the 2.5 line come from master: the `Sync misp-3.0` workflow on master merges it
+into the branch through a pull request, and the `master-merged` job fails while the branch
+lacks a commit of master.
 
 The 3.0 image differs from the 2.5 image in four places:
 

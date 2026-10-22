@@ -270,6 +270,7 @@ GitHub Actions on every push to master and every PR:
 | Job | Runs |
 |-----|------|
 | `gate` | Stops a master run whose commit carries a release tag, since the tag run tests and releases that commit |
+| `master-merged` | On `misp-3.0` and its pull requests: fails while master has commits the branch lacks |
 | `build` | The three images into the layer cache. The misp image's final stage is built fresh each run, so it carries the current Debian packages |
 | `unit` | The unit tests, the chart lint and every chart render validated against the schemas |
 | `integration` | The upstream guard, then the integration suite on MariaDB, against the images from `build` (`MISP_IMAGE_TAG=ci`); uploads the JUnit report and, after a failure, the compose logs |

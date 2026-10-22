@@ -46,6 +46,27 @@ jobs:
             echo "A release tag points at $GITHUB_SHA: its tag run tests and releases it."
           fi
 
+  # Fails while master has commits misp-3.0 lacks, so no 3.0 build ships without
+  # the 2.5 fixes. The Sync misp-3.0 workflow on master merges them.
+  master-merged:
+    if: github.ref == 'refs/heads/misp-3.0' || github.base_ref == 'misp-3.0'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Check that master is merged
+        run: |
+          set -euo pipefail
+          git fetch --quiet origin master
+          if ! git merge-base --is-ancestor origin/master HEAD; then
+            echo "ERROR: misp-3.0 lacks $(git rev-list --count HEAD..origin/master) commits of master; the Sync misp-3.0 workflow merges them:"
+            git log --oneline HEAD..origin/master | head -20
+            exit 1
+          fi
+
   # Builds each image into its own layer cache scope, in parallel. The suite
   # jobs rebuild from those caches in seconds and run against the images they
   # loaded. The misp image's final stage never comes from the cache: its apt
@@ -545,7 +566,7 @@ jobs:
   # tag as appVersion. No GitHub Release: the Early Access is not for
   # production (docs/misp-3.md).
   prerelease:
-    needs: [unit, integration, integration-postgres, hub-spoke, migration, upgrade, kind, scan]
+    needs: [master-merged, unit, integration, integration-postgres, hub-spoke, migration, upgrade, kind, scan]
     if: github.event_name == 'push' && github.ref == 'refs/heads/misp-3.0'
     runs-on: ubuntu-latest
     permissions:
