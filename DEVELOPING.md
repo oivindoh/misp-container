@@ -199,6 +199,8 @@ The issue "master does not merge into misp-3.0" names the files. Resolve them on
 git fetch origin && git switch --no-track -c merge-master origin/misp-3.0
 python3 scripts/merge_into_misp3.py origin/master   # merges, or names the files it cannot
 git -c merge.ours.driver=true merge origin/master   # resolve those files, then commit
+mise run docs                                       # the branch's generated files, into the merge
+git commit --all --amend --no-edit
 ```
 
 Open a pull request to `misp-3.0`, then close the issue.
