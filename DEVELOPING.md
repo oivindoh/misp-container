@@ -9,7 +9,8 @@
 - New MISP release: the tracking workflow opens a PR with the bump, `files/composer.lock` and
   the catalogue; CI's strict checks tell you what changed.
 - Release: `mise run release <hotfix|normal|breaking>`, then push master and the tag.
-- MISP 3.0 Early Access: the `misp-3.0` branch, images `3.0-wip` (see MISP 3.0).
+- MISP 3.0 Early Access lives on the `misp-3.0` branch, images `3.0-wip` (see MISP 3.0); a
+  workflow merges master into it.
 
 ## Setup
 
@@ -169,6 +170,33 @@ that GHCR already holds, and a chart version that GHCR already holds.
 | `ghcr.io/oivindoh/misp-container`, `-caddy`, `-modules` | the image tag: the git tag without the `v` |
 | `oci://ghcr.io/oivindoh/charts/misp` | the chart version of `Chart.yaml` |
 
+## The misp-3.0 branch
+
+`misp-3.0` builds MISP 3.0 Early Access and publishes it as pre-releases
+([its guide](https://github.com/oivindoh/misp-container/blob/misp-3.0/docs/misp-3.md)). A fix lands on master first. After each push to master, the `Sync misp-3.0`
+workflow (`.github/workflows/sync-misp-3.0.yaml`) merges master into the branch through a pull
+request that CI tests. CI on the branch fails while master has commits the branch lacks, so
+no 3.0 build ships without them.
+
+`scripts/merge_into_misp3.py` does the merge. Where the branch pins MISP 3.0 and master pins
+2.5, the merge keeps the branch's side:
+
+| Pin | Kept by |
+|-----|---------|
+| `ARG CORE_TAG` and `ARG CORE_COMMIT` in the `Dockerfile` | the script: a conflict of only these lines takes the branch's side |
+| `files/composer.lock`, `files/misp-config/settings-upstream.yaml` | the branch's `.gitattributes` (`merge=ours`): the files stay whole |
+
+Any other conflict opens the issue "master does not merge into misp-3.0", with the commands
+to resolve it by hand.
+
+The workflow needs a GitHub App installed on the repository, with read and write access to
+contents, pull requests, issues and workflows: a pull request made with `GITHUB_TOKEN` starts
+no CI, and `GITHUB_TOKEN` may not push a change to a workflow file. Set the App's client ID as
+the repository variable `MISP3_SYNC_CLIENT_ID` and a private key as the secret
+`MISP3_SYNC_PRIVATE_KEY`. With a ruleset on `misp-3.0` that requires CI's checks, and
+auto-merge allowed for the repository, the pull request merges itself once CI passes.
+Without one it waits for a person.
+
 ## Settings Engine
 
 `files/misp-config/settings.yaml` holds the defaults this image applies; each setting has a group and a value.
@@ -311,6 +339,7 @@ scripts/
   generate_docs.py          # Fills the generated regions of the docs (mise run docs)
   chart.py                  # Renders the Helm chart for the generators and the tests
   update-composer-lock.sh   # Resolves files/composer.lock through the composer-lock stage
+  merge_into_misp3.py       # Merges master into misp-3.0, keeping the branch's MISP 3.0 pins
 tests/
   test_*.py                 # Unit tests (see tests/README.md)
   e2e/                      # Stack suites and the smoke test in pytest (stack.py, conftest.py)
