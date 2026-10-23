@@ -214,10 +214,10 @@ MISP settings in groups; each setting's env var is its name in upper case with d
 | `optional` | nice-to-have defaults |
 | `gpg` | GnuPG settings |
 | `s3` | S3 attachment storage (only applied when PLUGIN_S3_BUCKET_NAME is set, which also sets MISP.attachments_dir to s3://, env.py) |
-| `proxy` | HTTP proxy settings (only applied when PROXY_HOST is set) |
-| `custom_auth` | header authentication from a reverse proxy, no directory lookup (only applied when CUSTOM_AUTH_ENABLE=true; the CUSTOM_AUTH_* names are aliases, env.py) |
-| `kafka` | Kafka pub/sub integration (only applied when PLUGIN_KAFKA_ENABLE=true) |
-| `linotp` | LinOTP two-factor authentication (only applied when LINOTPAUTH_ENABLED=true) |
+| `proxy` | HTTP proxy settings (an empty Proxy.host means no proxy) |
+| `custom_auth` | header authentication from a reverse proxy, no directory lookup (CUSTOM_AUTH_ENABLE=true turns it on; the CUSTOM_AUTH_* names are aliases, env.py) |
+| `kafka` | Kafka pub/sub integration (PLUGIN_KAFKA_ENABLE=true turns it on) |
+| `linotp` | LinOTP two-factor authentication, from env only: MISP refuses these settings while the plugin is off (LINOTPAUTH_ENABLED=true turns it on) |
 | `oidc` | OidcAuth plugin, rendered into config.php when OIDC_ENABLE=true. The documented OIDC_* names map onto these (env.py ALIASES). role_mapper and scopes take JSON in env; scopes also takes a comma-separated list. |
 | `ldap` | LdapAuth plugin, rendered into config.php when LDAPAUTH_ENABLE=true |
 | `apache_auth` | ApacheSecureAuth (header auth with LDAP lookup), rendered into config.php when APACHESECUREAUTH_LDAP_ENABLE=true |

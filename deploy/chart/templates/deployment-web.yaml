@@ -49,9 +49,10 @@ spec:
               protocol: TCP
           resources:
             {{- toYaml .Values.web.resources.caddy | nindent 12 }}
-          # Startup proves the application serves once. Readiness and liveness
-          # hit PHP-FPM's ping through caddy: no database round trip, so a
-          # database outage does not restart the pod.
+          # Startup proves the application serves once. Readiness hits PHP-FPM's
+          # ping through caddy, with no database round trip, so a database outage
+          # takes no pod out of the Service. Liveness checks caddy alone: the
+          # php-fpm container checks PHP-FPM, so a hung PHP-FPM restarts itself.
           startupProbe:
             httpGet:
               path: /users/login
@@ -64,8 +65,7 @@ spec:
               port: 8080
             periodSeconds: 5
           livenessProbe:
-            httpGet:
-              path: /fpm-ping
+            tcpSocket:
               port: 8080
             periodSeconds: 30
           {{- include "misp.containerSecurityContext" . | nindent 10 }}
@@ -78,38 +78,27 @@ spec:
             - name: php-fpm
               containerPort: 9002
               protocol: TCP
-          {{- with include "misp.dbEnv" . }}
-          env:
-            {{- . | nindent 12 }}
-          {{- end }}
-          envFrom:
-            - configMapRef:
-                name: misp-env
-            - secretRef:
-                name: misp-db
-            - secretRef:
-                name: misp-app
+          {{- include "misp.appEnv" (list . "misp-db" "misp-app") | nindent 10 }}
           volumeMounts:
             {{- include "misp.appVolumeMounts" . | nindent 12 }}
             - name: attachments
               mountPath: /var/www/MISP/app/attachments
           resources:
             {{- toYaml .Values.web.resources.phpFpm | nindent 12 }}
-          # PHP-FPM only listens after the configure Job has set MISP.live=true,
-          # so a TCP probe is enough. The startup budget covers a first install
-          # where the Job imports the schema and applies every setting.
+          # PHP-FPM only listens after the configure Job has set MISP.live=true;
+          # the startup budget covers a first install where the Job imports the
+          # schema and applies every setting. Liveness asks PHP-FPM itself for
+          # its ping, through caddy in the same pod: an open port does not show
+          # a hung PHP-FPM. caddy's readiness probe covers the pod's readiness.
           startupProbe:
             tcpSocket:
               port: 9002
             failureThreshold: 150
             periodSeconds: 4
-          readinessProbe:
-            tcpSocket:
-              port: 9002
-            periodSeconds: 5
           livenessProbe:
-            tcpSocket:
-              port: 9002
+            httpGet:
+              path: /fpm-ping
+              port: 8080
             periodSeconds: 30
           {{- include "misp.containerSecurityContext" . | nindent 10 }}
 

@@ -250,9 +250,9 @@ def test_fpm_listens_on_9002(stack):
 
 
 def test_fpm_php_ini_turns_upload_progress_off(stack):
-    # PHP-FPM starts with -c /tmp/misp-php.ini; the CLI reads the same file here, and its
-    # startup notices go to stderr
-    rc, out = stack.exec_rc("web", "php -c /tmp/misp-php.ini "
+    # PHP-FPM starts with -c /etc/misp-docker/php.ini; the CLI reads the same file here,
+    # and its startup notices go to stderr
+    rc, out = stack.exec_rc("web", "php -c /etc/misp-docker/php.ini "
                                    "-r 'var_dump(ini_get(\"session.upload_progress.enabled\"));' 2>/dev/null")
     assert (rc, out) == (0, 'string(1) "0"'), out
 
@@ -330,87 +330,47 @@ def test_event_created_through_the_api(stack):
 
 @pytest.fixture(scope="module")
 def warm_run(stack):
+    # A second configure run over the database groups, as the Job runs them
     return stack.python("""
 from misp_container.env import apply_defaults
-from misp_container.config import SettingsCache, apply_settings_fast
+from misp_container.config import SettingsCache, apply_settings_fast, load_settings_yaml
+from misp_container.configure import DB_GROUPS
 from misp_container import db
 apply_defaults()
 db.acquire_config_lock()
 try:
     cache = SettingsCache()
     cache.load()
-    cache.load_defaults_version()
-    apply_settings_fast('minimum_config', cache)
+    specs = load_settings_yaml()
+    for group in DB_GROUPS:
+        apply_settings_fast(group, cache, specs)
 finally:
     db.release_config_lock()
 """)[1]
 
 
 def test_warm_start_loads_the_database_settings(warm_run):
-    assert "DB settings" in warm_run
+    assert "settings from the database" in warm_run
 
 
-def test_warm_start_changes_no_minimum_config(warm_run):
-    assert "minimum_config: 0 changed" in warm_run
+def test_warm_start_changes_no_setting(warm_run):
+    changed = [line for line in warm_run.splitlines() if "updating " in line or "setting new default" in line]
+    assert changed == []
 
 
-# -- version-gated defaults ----------------------------------------------------------
-
-GATE_PRELUDE = """
-import os, shutil, yaml
-from misp_container.env import apply_defaults
-from misp_container import cake, db
-from misp_container.config import SettingsCache, apply_settings_fast, load_settings_yaml
-apply_defaults()
-SRC = '/etc/misp-docker/settings.yaml'
-def patched(setting, since, value):
-    os.chmod('/etc/misp-docker', 0o770); os.chmod(SRC, 0o660)
-    shutil.copy2(SRC, '/tmp/settings.yaml.bak')
-    with open(SRC) as f: data = yaml.safe_load(f)
-    data['settings']['critical'][setting]['since'] = since
-    data['settings']['critical'][setting]['value'] = value
-    with open(SRC, 'w') as f: yaml.dump(data, f)
-    return load_settings_yaml()
-def restore():
-    shutil.copy2('/tmp/settings.yaml.bak', SRC)
-    os.chmod(SRC, 0o440); os.chmod('/etc/misp-docker', 0o550)
-"""
-
+# -- the defaults version -----------------------------------------------------------
 
 def test_defaults_version_saved_after_configure(stack):
-    stack.python(GATE_PRELUDE + """
+    # Web and worker pods wait until the configure step recorded their image's version
+    stack.python("""
+from misp_container.env import apply_defaults
+from misp_container import db
+from misp_container.config import SettingsCache
+apply_defaults()
 db.query("DELETE FROM system_settings WHERE setting='misp_docker.defaults_version';")
-specs = load_settings_yaml()
-c = SettingsCache(); c.load(); c.load_defaults_version()
-for g in ('minimum_config', 'db_enable', 'initialisation', 'critical', 'optional', 'gpg'):
-    apply_settings_fast(g, c, specs)
-c.save_defaults_version()
+SettingsCache().save_defaults_version()
 """)
     assert stack.sql("SELECT value FROM system_settings WHERE setting='misp_docker.defaults_version';") == f'"{MISP_VERSION}"'
-
-
-def test_version_gate_applies_once_then_stays(stack):
-    stack.python(GATE_PRELUDE + f"""
-cake.set_setting('Security.csp_enforce', 'false')
-db.query("DELETE FROM system_settings WHERE setting='misp_docker.defaults_version';")
-specs = patched('Security.csp_enforce', '{MISP_VERSION}', True)
-c = SettingsCache(); c.load(); c.load_defaults_version(); apply_settings_fast('critical', c, specs); c.save_defaults_version()
-# A second run after an operator set it back applies nothing: the version is saved
-cake.set_setting('Security.csp_enforce', 'false')
-c2 = SettingsCache(); c2.load(); c2.load_defaults_version(); apply_settings_fast('critical', c2, specs)
-restore()
-""")
-    assert stack.sql("SELECT value FROM system_settings WHERE setting='Security.csp_enforce';") == "false"
-
-
-def test_env_var_wins_over_a_version_gated_default(stack):
-    stack.python(GATE_PRELUDE + f"""
-db.query("DELETE FROM system_settings WHERE setting='misp_docker.defaults_version';")
-specs = patched('MISP.external_baseurl', '{MISP_VERSION}', 'https://should-not-win')
-c = SettingsCache(); c.load(); c.load_defaults_version(); apply_settings_fast('critical', c, specs)
-restore()
-""")
-    assert stack.sql("SELECT value FROM system_settings WHERE setting='MISP.external_baseurl';") == '"http://caddy:8080"'
 
 
 # -- S3 attachment storage -----------------------------------------------------------

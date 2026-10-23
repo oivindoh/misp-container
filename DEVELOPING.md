@@ -19,26 +19,9 @@
 ```bash
 cd misp-container      # mise creates .venv on enter
 mise run test          # unit tests, the chart lint and every chart render validated against the schemas
-mise run test-integration  # the upstream guard, then the full Compose stack with podman (~2min)
-mise run test-integration -- --db-engine postgres   # the same suite on PostgreSQL
-mise run test-sync     # hub-spoke 3-instance sync (~2min)
-mise run test-all      # unit, the upstream guard, integration, sync, migration
-mise run test-kind      # the chart on a kind cluster: install, helm test, task runs, upgrade, rollback
 ```
 
-## Tests
-
-| Suite | What it covers |
-|-------|----------------|
-| Unit | Config engine, config.php rendering, advisory lock, database helpers, app/Config preparation, task runner, sync engine, metrics exporter, the Helm chart's renders |
-| Upstream guard | The MISP in the image against what the image patches or depends on (see below) |
-| Integration | Full Compose stack: HTTP, auth, settings, PHP-FPM, workers, S3, org sync, metrics, modules enrichment, logging |
-| Hub-spoke sync | 3 isolated MISP instances: pull, push, tag-filtered sync |
-| Migration | The migration: a seeded MariaDB copied onto a second MariaDB with the attachments on the volume, and onto PostgreSQL with the attachments in S3, refusals, the copy checked through the API, and a bucket copied into another |
-| Chart render | `helm lint`, then the default values, each component, every component and three more value sets, against the Kubernetes and CRD schemas |
-| Kubernetes (kind) | The chart on a kind cluster: install, smoke test, `helm test`, one task of each kind from its CronJob, an upgrade and a rollback, each with a new configure Job and the smoke test |
-
-The integration suite runs every container with `read_only: true` (except web, whose version-gate checks patch `settings.yaml` in place) to catch filesystem writes before Kubernetes does. Under podman the suite also turns off the writable tmpfs that podman gives a read-only container, so `/tmp` is read-only locally as it is under docker and in Kubernetes. `--durations=5` lists the slowest steps. Set `COMPOSE_CMD` and `CONTAINER_CMD` for another runner; CI uses `docker compose` and `docker`.
+[tests/README.md](tests/README.md) lists every suite, its command and what it covers.
 
 ## New MISP releases
 
@@ -55,29 +38,32 @@ about a change in MISP:
 | The rejected-`cake` check in the integration suite | MISP refuses a default this image applies |
 
 The PR body lists the new settings by level. A setting that appears there with a value this
-image should enforce moves to `settings.yaml`; when a release changes a secure default we
-already curate, give it `since: <that tag>` so existing instances pick the new value up once.
+image should enforce moves to `settings.yaml`. A default reaches new instances only; to change
+the value on existing instances too, set its env var in `base.env`, which the configure Job
+enforces on every run.
 
 ### What the image depends on in MISP
 
 A failure of the upstream guard names the change, the MISP file and the file of ours to
 revisit.
 
+<!-- generated: upstream-checks -->
 | Check | MISP file | Ours | Fails when MISP |
-| --- | --- | --- | --- |
-| `worker-queues` | `BackgroundJobsTool.php` | `WORKER_QUEUES` in `misp_container/__init__.py` | adds or drops a job queue |
-| `worker-group` | `BackgroundJobsTool.php` | `WORKER_GROUP` in `misp_container/__init__.py` | finds its workers in another supervisord group |
-| `job-keys` | `BackgroundJobsTool.php` | `misp_container/metrics.py` | keeps waiting or running jobs under other Redis keys |
-| `scheduler-tasks` | `SchedulerWorkerShell.php` | `SCHEDULER_COVERAGE` in `misp_container/task.py` | offers periodic work that no task covers |
-| `api-routes` | `app/Controller/` | the file and line that calls the route | drops a controller or an action the image calls |
-| `attachment-keys` | `AttachmentTool.php`, `AWSS3Client.php` | `attachment_key()` in `misp_container/migrate.py`, `misp_container/s3.py` | keys attachments another way, or stops sending path-style S3 requests |
-| `cakeresque` | `bootstrap.default.php` | the `composer-prep` stage of the `Dockerfile` | loads CakeResque while SimpleBackgroundJobs is on |
-| `cakelog-streams` | `bootstrap.default.php` | `LOG_BLOCK` in `misp_container/init.py` | configures a CakeLog file stream that the logging block does not drop |
-| `shell-streams` | CakePHP's `Shell.php` | `LOG_BLOCK` in `misp_container/init.py` | checks other stream names before it adds its console streams |
-| `relayed-files` | MISP's PHP code | `FILES` in `misp_container/logrelay.py` | writes a new file under `app/tmp/logs`, or stops writing one the relay follows |
-| `image-paths` | `Server.php`, `OrgImgHelper.php` | `misp.appVolumeMounts` in `deploy/chart/templates/_helpers.tpl`, `deploy/docker-compose.yml` | uploads org logos or custom images to, or reads them from, a directory the volumes do not mount |
-| `python-requirements` | `requirements.txt` | `files/requirements-misp.txt` | needs a Python package, or a version of one, that the pins do not give (`mise run misp-requirements`) |
-| `log-block-php` | PHP in the image | `LOG_BLOCK` in `misp_container/init.py` | cannot run the logging block, in either format |
+|---|---|---|---|
+| `worker-queues` | app/Lib/Tools/BackgroundJobsTool.php | files/misp_container/__init__.py WORKER_QUEUES | adds or drops a job queue |
+| `worker-group` | app/Lib/Tools/BackgroundJobsTool.php | files/misp_container/__init__.py WORKER_GROUP | finds its workers in another supervisord group |
+| `job-keys` | app/Lib/Tools/BackgroundJobsTool.php | files/misp_container/metrics.py _collect_queue_metrics() | keeps waiting or running jobs under other Redis keys |
+| `scheduler-tasks` | app/Console/Command/SchedulerWorkerShell.php | files/misp_container/task.py SCHEDULER_COVERAGE | offers periodic work that no task covers |
+| `api-routes` | app/Controller | the file and line named in each problem | drops a controller or an action the image calls |
+| `attachment-keys` | app/Lib/Tools/AttachmentTool.php, app/Lib/Tools/AWSS3Client.php | files/misp_container/migrate.py attachment_key(), files/misp_container/s3.py | keys attachments another way, or stops sending path-style S3 requests |
+| `cakeresque` | app/Config/bootstrap.default.php | Dockerfile stage composer-prep | loads CakeResque while SimpleBackgroundJobs is on |
+| `cakelog-streams` | app/Config/bootstrap.default.php | files/misp_container/init.py LOG_BLOCK | configures a CakeLog file stream that the logging block does not drop |
+| `shell-streams` | app/Lib/cakephp/lib/Cake/Console/Shell.php | files/misp_container/init.py LOG_BLOCK | checks other stream names before it adds its console streams |
+| `relayed-files` | app/Model, app/Lib, app/Controller, app/Console, app/Plugin | files/misp_container/logrelay.py FILES | writes a new file under app/tmp/logs, or stops writing one the relay follows |
+| `image-paths` | app/Model/Server.php, app/View/Helper/OrgImgHelper.php | deploy/chart/templates/_helpers.tpl misp.appVolumeMounts, deploy/docker-compose.yml | uploads org logos or custom images to, or reads them from, a directory the volumes do not mount |
+| `python-requirements` | requirements.txt | files/requirements-misp.txt | needs a Python package, or a version of one, that the pins do not give (mise run misp-requirements) |
+| `log-block-php` | php | files/misp_container/init.py LOG_BLOCK | cannot run the logging block, in either format |
+<!-- end generated -->
 
 A new queue needs its name in `WORKER_QUEUES` and `NUM_WORKERS_<QUEUE>` in
 `deploy/chart/files/base.env`. New periodic work needs a task in `misp_container/task.py`
@@ -115,9 +101,8 @@ as `normal`.
 3. Reads the chart version that the previous release published, from the `Chart.yaml` of its
    tag, and raises the part the kind names. The first release with a chart publishes the
    version `Chart.yaml` has.
-4. Sets `version` and `appVersion` in `deploy/chart/Chart.yaml`, the `MISP_IMAGE_TAG`
-   default of the Compose files, and the chart version in the `helm install` examples of
-   `README.md` and `docs/kubernetes.md`.
+4. Sets `version` and `appVersion` in `deploy/chart/Chart.yaml` and the `MISP_IMAGE_TAG`
+   default of the Compose files.
 5. Shows the plan and the diff. On a yes it commits and tags; on a no it restores the files.
 
 Publish the release. `--atomic` lands the branch and the tag together:
@@ -156,6 +141,10 @@ Where a change goes:
 | A change only MISP 3.0 needs, or a newer `3.0_wip` commit | `misp-3.0` | CI publishes a pre-release after the merge |
 
 A change for both lines that lands only on `misp-3.0` never reaches master.
+
+The branch ends when MISP releases 3.0: master then moves to the 3.0 release, and the sync
+workflow, `scripts/merge_into_misp3.py`, the `master-merged` job, the branch's
+`.gitattributes` and its ruleset go.
 
 ```mermaid
 flowchart LR
@@ -233,43 +222,26 @@ ruleset as well: a required check that never reports holds every sync pull reque
 
 ### Adding a setting
 
-Every setting has a group and a default value. The env var that overrides it is derived from
-its name (`MISP.my_setting` -> `MISP_MY_SETTING`); nothing else to declare.
-
-```yaml
-MISP.my_setting:
-  group: optional
-  value: some-default
-```
-
-- With the env var set and non-empty, the value is enforced on every configure run.
-- Without it, the default is applied once when the setting is missing; the user then owns it
-  through the MISP UI.
-
-The YAML type of `value` (bool, int, string) is the type rendered into `config.php` for the
-`minimum_config` and `db_enable` groups; env overrides are cast to it.
-
-### Version-gated defaults
-
-Re-apply a default once more on the first configure run of an image at or past a version:
+Every setting sits in a group and has a default value. The env var that overrides it is
+derived from its name (`MISP.my_setting` -> `MISP_MY_SETTING`); nothing else to declare.
+[docs/configuration.md](docs/configuration.md#settings) gives the rule for a set and an unset
+env var.
 
 ```yaml
 settings:
-  critical:
+  optional:
     MISP.my_setting:
-      value: new-secure-value
-      since: v2.5.40
+      value: some-default
 ```
 
-The run that applies it records the image version (`misp_docker.defaults_version`), so the
-next run leaves the setting to the operator again. Env vars always take precedence.
+The YAML type of `value` (bool, int, string) is the type rendered into `config.php` for the
+`minimum_config` and `db_enable` groups; env overrides are cast to it.
 
 ### Optional fields
 
 - `force: true` -- pass `-f` to `cake Admin setSetting`
 - `blank_protection: true` -- skip if the value is empty (and leave the key out of `config.php`)
 - `sensitive: true` -- redact the value in logs
-- `since: v2.5.40` -- version-gated default
 
 ### The upstream catalogue
 
@@ -319,7 +291,7 @@ tests fail while either is out of step:
 
 | Mechanism | Covers |
 | --- | --- |
-| Generated regions, between `<!-- generated: <name> -->` and `<!-- end generated -->`, filled by `scripts/generate_docs.py` | The periodic tasks table, the Secrets table, the value and component tables of the chart |
+| Generated regions, between `<!-- generated: <name> -->` and `<!-- end generated -->`, filled by `scripts/generate_docs.py` | The periodic tasks table, the Secrets table, the value and component tables of the chart, the upstream guard's checks, the unit test modules |
 | `tests/test_docs.py` | Every env var, setting, repository path, file name and mise task a doc names exists; the component, task, upstream check, metric, exit code and OIDC tables are complete; the sizes, requests, sync waves, defaults and ports quoted in sentences match the manifests and the code |
 
 Change the source, not the doc: a task description lives in `misp_container/task.py`
@@ -332,61 +304,3 @@ times) have no source in the code; they carry the version they were measured on.
 `AGENTS.md` holds the full map, generated from the docstrings, header comments, manifests,
 tasks and CI jobs by `scripts/generate_agents_md.py`. After a change to one of them, run
 `mise run agents-md`; a unit test fails while the file is stale.
-
-```
-files/
-  misp_container/           # Python entrypoint library
-    __init__.py
-    admin.py                # Admin user, GPG, auth configuration
-    api.py                  # MISP REST API client (urllib)
-    cake.py                 # CakePHP CLI wrapper
-    config.py               # Settings diff engine (SettingSpec, SettingsCache)
-    db.py                   # Engine-neutral database layer (pymysql or pg8000), lock, schema import
-    housekeeping.py         # Nightly deletes (housekeeping component)
-    migrate.py              # Copy of an existing MySQL/MariaDB MISP database (migrate component)
-    env.py                  # Environment variable defaults
-    init.py                 # Per-pod preparation: app/Config rendering, GPG key import
-    configure.py            # One-shot configuration (configure Job)
-    log.py                  # Logging setup: LOG_FORMAT json or text
-    logrelay.py             # Relays the log files MISP writes directly to stdout, and caps them
-    metrics.py              # Prometheus metrics collection
-    s3.py                   # Minimal S3 client of the migrate Job (Signature Version 4, urllib)
-    sync.py                 # Declarative org/team/server sync engine
-    task.py                 # Periodic task runner (cronjobs component)
-  misp-config/
-    settings.yaml           # Curated defaults this image applies
-    settings-upstream.yaml  # Generated catalogue of every other MISP setting (track_only)
-  entrypoint-configure.py   # Configure Job entrypoint
-  entrypoint-web.py         # PHP-FPM entrypoint
-  entrypoint-worker.py      # Worker entrypoint
-  entrypoint-sync.py        # Org sync entrypoint (org-sync Job)
-  entrypoint-metrics.py     # Prometheus metrics HTTP server (metrics Deployment)
-  Caddyfile                 # Caddy configuration
-  php.ini.template, php-fpm-pool.conf.template
-  requirements-*.txt        # Pinned Python dependencies (final, modules; misp: generated)
-  composer.lock             # Resolved PHP dependencies for the current CORE_TAG (generated)
-scripts/
-  release.py                # mise run release <hotfix|normal|breaking>
-  update_settings.py        # The catalogue tool (--stack --write: mise run settings-update; --check in the integration suite)
-  check_upstream.py         # Fails when MISP changed something the image patches or depends on
-  generate_agents_md.py     # Writes AGENTS.md from the tree (mise run agents-md)
-  generate_docs.py          # Fills the generated regions of the docs (mise run docs)
-  chart.py                  # Renders the Helm chart for the generators and the tests
-  update-composer-lock.sh   # Resolves files/composer.lock through the composer-lock stage
-  update_misp_requirements.py  # Resolves files/requirements-misp.txt (mise run misp-requirements)
-  merge_into_misp3.py       # Merges master into misp-3.0, keeping the branch's MISP 3.0 pins
-tests/
-  test_*.py                 # Unit tests (see tests/README.md)
-  e2e/                      # Stack suites and the smoke test in pytest (stack.py, conftest.py)
-  run-kind-test.sh          # The chart on a kind cluster, then the smoke test
-  kind/values.yaml          # The values of the kind test
-  docker-compose.test.yml   # Test overlay on deploy/docker-compose.yml
-  docker-compose.postgres.yml  # Second overlay for --db-engine postgres
-  docker-compose.sync-test.yml
-deploy/
-  docker-compose.yml        # Local development stack (podman compose)
-  chart/                    # Helm chart: MISP itself, and components for the optional parts
-    files/                  # The env defaults the chart and Compose both read
-docs/
-  migration.md              # Migration guide from existing MISP
-```

@@ -14,6 +14,7 @@ import urllib.error
 
 import yaml
 
+from misp_container.admin import has_authkey
 from misp_container.api import MISPClient, APIError
 from misp_container.env import env
 from misp_container.log import get as getlog
@@ -549,24 +550,6 @@ def _apply_one_user(client: MISPClient, state: MISPState,
     return "updated" if changes else "unchanged"
 
 
-def _has_authkey(user_id: int, authkey: str) -> bool:
-    """Whether a live auth_keys row of the user already holds this key."""
-    import bcrypt
-    from . import db
-
-    rows = db.dict_query(
-        "SELECT authkey FROM auth_keys WHERE user_id = %s AND authkey_start = %s AND authkey_end = %s "
-        f"AND (expiration = 0 OR expiration > {db.now_epoch()})",
-        (user_id, authkey[:4], authkey[-4:]),
-    )
-    for row in rows:
-        # MISP writes PHP's $2y$ prefix; the bcrypt module checks $2b$
-        stored = str(row["authkey"]).replace("$2y$", "$2b$", 1).encode()
-        if bcrypt.checkpw(authkey.encode(), stored):
-            return True
-    return False
-
-
 def _set_user_authkey(user_id: int, authkey: str):
     """Set a specific authkey for a user by writing directly to the DB.
 
@@ -581,7 +564,7 @@ def _set_user_authkey(user_id: int, authkey: str):
         import uuid as uuid_mod
         from . import db
 
-        if _has_authkey(user_id, authkey):
+        if has_authkey(user_id, authkey):
             return
 
         # Use $2y$ prefix (PHP bcrypt) instead of Python's $2b$ for compatibility
@@ -633,13 +616,13 @@ def _apply_servers(client: MISPClient, state: MISPState,
                     authkey = secrets.token_hex(20)
 
             pull_rules = _build_rules(
-                server.get("pull_tags", []),
-                server.get("pull_tags_exclude", []),
+                server["pull_tags"],
+                server["pull_tags_exclude"],
                 pull=True, state=state,
             )
             push_rules = _build_rules(
-                server.get("push_tags", []),
-                server.get("push_tags_exclude", []),
+                server["push_tags"],
+                server["push_tags_exclude"],
                 pull=False, state=state,
             )
 
@@ -648,11 +631,12 @@ def _apply_servers(client: MISPClient, state: MISPState,
                 "url": server["url"].rstrip("/"),
                 "authkey": authkey,
                 "remote_org_id": org_id,
-                "push": server.get("push", False),
-                "pull": server.get("pull", True),
-                "internal": server.get("internal", False),
-                "self_signed": server.get("self_signed", False),
-                "caching_enabled": server.get("caching_enabled", False),
+                # _normalize gave every field its SERVER_DEFAULTS value
+                "push": server["push"],
+                "pull": server["pull"],
+                "internal": server["internal"],
+                "self_signed": server["self_signed"],
+                "caching_enabled": server["caching_enabled"],
                 "pull_rules": json.dumps(pull_rules),
                 "push_rules": json.dumps(push_rules),
             }
@@ -988,22 +972,11 @@ def _disable_unmanaged_servers(client: MISPClient, state: MISPState,
 # Orchestrator
 # ---------------------------------------------------------------------------
 
-def apply(client: MISPClient | None = None, config: dict | None = None) -> dict:
+def apply(client: MISPClient, config: dict) -> dict:
     """Apply declarative org/team config to MISP. Returns summary dict."""
-    if not config:
-        config = load_config()
-
     if is_empty(config):
         log.info("no org config to apply")
         return {}
-
-    if not client:
-        base_url = env("MISP_BASEURL")
-        api_key = env("ADMIN_KEY")
-        if not api_key:
-            log.error("ADMIN_KEY not set, cannot run org sync")
-            return {"error": "ADMIN_KEY not set"}
-        client = MISPClient(base_url, api_key)
 
     log.info("fetching current MISP state")
     state = MISPState(client)

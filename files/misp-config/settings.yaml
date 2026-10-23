@@ -7,7 +7,6 @@
 #         value: <default value>
 #         force: true          # optional: pass -f to cake
 #         blank_protection: true  # optional: skip if env var is empty
-#         since: v2.5.40       # optional: re-apply on image upgrade past this version
 #
 # Env var override convention:
 #   Any setting can be overridden by an env var derived from the setting name:
@@ -506,10 +505,12 @@ settings:
     MISP.welcome_text_top:
       description: "Used on the login page, before the MISP logo"
       value: ""
+      blank_protection: true
       force: true
     MISP.welcome_text_bottom:
       description: "Used on the login page, after the MISP logo"
       value: ""
+      blank_protection: true
       force: true
     MISP.log_client_ip:
       description: "If enabled, all log entries will include the IP address of the user"
@@ -727,32 +728,37 @@ settings:
       description: "S3 region for the bucket"
       value: ""
 
-  # -- proxy: HTTP proxy settings (only applied when PROXY_HOST is set)
+  # -- proxy: HTTP proxy settings (an empty Proxy.host means no proxy)
   proxy:
 
     Proxy.host:
       description: "The hostname of an HTTP proxy for outgoing sync requests. Leave empty to not use a proxy"
       value: ""
+      blank_protection: true
     Proxy.port:
       description: "The TCP port for the HTTP proxy"
       value: ""
+      blank_protection: true
     Proxy.method:
       description: "The authentication method for the HTTP proxy. Currently supported are Basic or Digest. Leave empty for no proxy authe..."
       value: ""
+      blank_protection: true
     Proxy.user:
       description: "The authentication username for the HTTP proxy"
       value: ""
+      blank_protection: true
     Proxy.password:
       value: ""
       sensitive: true
+      blank_protection: true
 
   # -- custom_auth: header authentication from a reverse proxy, no directory lookup
-  # (only applied when CUSTOM_AUTH_ENABLE=true; the CUSTOM_AUTH_* names are aliases, env.py)
+  # (CUSTOM_AUTH_ENABLE=true turns it on; the CUSTOM_AUTH_* names are aliases, env.py)
   custom_auth:
 
     Plugin.CustomAuth_enable:
       description: "Enable this functionality if you would like to handle the authentication via an external tool and authenticate with MISP using a custom header."
-      value: true
+      value: false
     Plugin.CustomAuth_header:
       description: "Set the header that MISP should look for here. If left empty it will default to the Authorization header."
       value: "X_FORWARDED_EMAIL"
@@ -780,7 +786,7 @@ settings:
       value: ""
       blank_protection: true
 
-  # -- kafka: Kafka pub/sub integration (only applied when PLUGIN_KAFKA_ENABLE=true)
+  # -- kafka: Kafka pub/sub integration (PLUGIN_KAFKA_ENABLE=true turns it on)
   kafka:
 
     Plugin.Kafka_enable:
@@ -826,21 +832,26 @@ settings:
       description: "Topic for publishing log entries"
       value: misp_audit
 
-  # -- linotp: LinOTP two-factor authentication (only applied when LINOTPAUTH_ENABLED=true)
+  # -- linotp: LinOTP two-factor authentication, from env only: MISP refuses these settings
+  # while the plugin is off (LINOTPAUTH_ENABLED=true turns it on)
   linotp:
 
     LinOTPAuth.enabled:
       description: "Enable / Disable LinOTP"
-      value: false
+      value: ""
+      blank_protection: true
     LinOTPAuth.baseUrl:
       description: "The default LinOTP URL"
-      value: "https://<your-linotp-baseUrl>"
+      value: ""
+      blank_protection: true
     LinOTPAuth.realm:
       description: "The LinOTP realm to authenticate against"
-      value: lino
+      value: ""
+      blank_protection: true
     LinOTPAuth.verifyssl:
       description: "Set to false to skip SSL/TLS verify"
-      value: true
+      value: ""
+      blank_protection: true
 
   # -- oidc: OidcAuth plugin, rendered into config.php when OIDC_ENABLE=true ---
   # The documented OIDC_* names map onto these (env.py ALIASES). role_mapper and

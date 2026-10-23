@@ -36,19 +36,7 @@ spec:
         - name: migrate
           {{- include "misp.image" . | nindent 10 }}
           command: ["/usr/bin/tini", "--", "python3", "-m", "misp_container.migrate"]
-          {{- with include "misp.dbEnv" . }}
-          env:
-            {{- . | nindent 12 }}
-          {{- end }}
-          envFrom:
-            - configMapRef:
-                name: misp-env
-            - secretRef:
-                name: misp-db
-            - secretRef:
-                name: misp-app
-            - secretRef:
-                name: misp-migrate
+          {{- include "misp.appEnv" (list . "misp-db" "misp-app" "misp-migrate") | nindent 10 }}
           volumeMounts:
             - name: attachments
               mountPath: /var/www/MISP/app/attachments
@@ -70,19 +58,7 @@ spec:
         - name: configure
           {{- include "misp.image" . | nindent 10 }}
           command: ["/usr/bin/tini", "--", "python3", "/entrypoint-configure.py"]
-          {{- with include "misp.dbEnv" . }}
-          env:
-            {{- . | nindent 12 }}
-          {{- end }}
-          envFrom:
-            - configMapRef:
-                name: misp-env
-            - secretRef:
-                name: misp-db
-            - secretRef:
-                name: misp-app
-            - secretRef:
-                name: misp-admin
+          {{- include "misp.appEnv" (list . "misp-db" "misp-app" "misp-admin") | nindent 10 }}
           volumeMounts:
             {{- include "misp.appVolumeMounts" . | nindent 12 }}
           resources:

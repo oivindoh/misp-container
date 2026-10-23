@@ -116,22 +116,25 @@ class Stack:
             self._ids[service] = ids[0]
         return self._ids[service]
 
-    def exec_rc(self, service: str, script: str, env: dict | None = None) -> tuple[int, str]:
-        """Run a shell script in a service's container: the exit code and stdout plus stderr."""
+    def exec_rc(self, service: str, script: str, env: dict | None = None, timeout: int = 300) -> tuple[int, str]:
+        """Run a shell script in a service's container: the exit code and stdout plus stderr.
+
+        A script that outlives the timeout raises TimeoutExpired: a hang fails the test.
+        """
         cmd = [self.engine, "exec"]
         for key, value in (env or {}).items():
             cmd += ["-e", f"{key}={value}"]
         cmd += [self.container_id(service), "sh", "-c", script]
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
         return result.returncode, (result.stdout + result.stderr).strip()
 
-    def exec(self, service: str, script: str, env: dict | None = None) -> str:
+    def exec(self, service: str, script: str, env: dict | None = None, timeout: int = 300) -> str:
         """Run a shell script in a service's container; returns stdout, stripped."""
         cmd = [self.engine, "exec"]
         for key, value in (env or {}).items():
             cmd += ["-e", f"{key}={value}"]
         cmd += [self.container_id(service), "sh", "-c", script]
-        return subprocess.run(cmd, capture_output=True, text=True).stdout.strip()
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout).stdout.strip()
 
     def python(self, code: str, service: str = "web", env: dict | None = None) -> tuple[int, str]:
         """Python in a service's container with the image's library importable.
