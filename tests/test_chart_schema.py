@@ -2,10 +2,11 @@
 
 The renders: the default values, each component on, every component on, and the
 values a release changes most. kubeconform validates each against the Kubernetes
-schemas and, for the Cilium policies and the HTTPRoute, the datree CRD catalog
-(a schema cache under the user's cache directory). Needs helm and kubeconform
-on PATH (mise install); without kubeconform the tests skip, except in CI, where
-they fail.
+schemas (a cache under the user's cache directory) and, for the Cilium policies
+and the HTTPRoute, the copies of the datree CRD catalog in tests/schemas: take a
+new copy when the chart moves to another API version of either. Needs helm and
+kubeconform on PATH (mise install); without kubeconform the tests skip, except in
+CI, where they fail.
 """
 
 import os
@@ -21,7 +22,7 @@ sys.path.insert(0, str(REPO / "scripts"))
 
 import chart  # noqa: E402
 
-CRD_SCHEMAS = "https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json"
+CRD_SCHEMAS = str(REPO / "tests/schemas") + "/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json"
 
 
 def renders() -> dict[str, list[str]]:
@@ -62,7 +63,8 @@ def test_render_validates_against_the_schemas(name):
     cache.mkdir(parents=True, exist_ok=True)
     result = subprocess.run(
         [kubeconform(), "-strict", "-summary", "-cache", str(cache),
-         "-schema-location", "default", "-schema-location", CRD_SCHEMAS],
+         # The local copies first: a kind they do not hold falls through to the default
+         "-schema-location", CRD_SCHEMAS, "-schema-location", "default"],
         input=chart.render_text(*renders()[name]), capture_output=True, text=True,
     )
     assert result.returncode == 0, f"render {name}:\n{result.stdout}{result.stderr}"
