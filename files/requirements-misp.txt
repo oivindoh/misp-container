@@ -17,7 +17,7 @@ misp-stix==2026.10.12
 mixbox==1.0.5
 ordered-set==4.1.0
 plyara==2.2.8
-pycountry==24.6.1
+pycountry==26.2.16
 pycparser==3.12 ; implementation_name == 'pypy'
 pydeep2==0.5.1
 pymisp==2.5.34.2
