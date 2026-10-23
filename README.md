@@ -78,15 +78,8 @@ The Helm chart in `deploy/chart` renders MISP itself; each component (database, 
 ingress or HTTPRoute, network policies, CronJobs) switches on with `<component>.enabled`.
 Each release publishes the chart as `oci://ghcr.io/oivindoh/charts/misp`. The chart has its
 own SemVer version, and its `appVersion` is the MISP version of the images. Helm, Argo CD or
-Flux installs it:
-
-```bash
-helm install misp oci://ghcr.io/oivindoh/charts/misp --version 2.0.0 \
-    --namespace misp --create-namespace -f values.yaml
-```
-
-[docs/kubernetes.md](docs/kubernetes.md) shows the values and lists the components, Secrets,
-storage, network policies and periodic tasks.
+Flux installs it ([docs/kubernetes.md](docs/kubernetes.md#install)), which also shows the
+values and lists the components, Secrets, storage, network policies and periodic tasks.
 
 ## Documentation
 

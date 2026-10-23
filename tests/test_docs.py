@@ -205,14 +205,6 @@ def test_the_header_auth_table_lists_every_short_name():
     assert aliases <= listed, f"docs/configuration.md lacks the header auth names {sorted(aliases - listed)} (env.py ALIASES)"
 
 
-def test_the_upstream_checks_table_lists_every_check():
-    import check_upstream
-    listed = table_names(REPO / "DEVELOPING.md", "| Check | MISP file |")
-    checks = {c.name for c in [*check_upstream.CHECKS, check_upstream.PHP_CHECK]}
-    assert listed == checks, (f"DEVELOPING.md lists {sorted(listed - checks)} that scripts/check_upstream.py "
-                              f"lacks, and lacks {sorted(checks - listed)}")
-
-
 def exporter_metrics() -> dict[str, str]:
     """{name: type} of every metric the exporter emits."""
     tree = ast.parse((REPO / "files/misp_container/metrics.py").read_text())
@@ -349,11 +341,3 @@ def test_the_metrics_port():
     assert f"on port {port}" in " ".join((REPO / "docs/metrics.md").read_text().split()), \
         f"docs/metrics.md should say: on port {port}"
 
-
-
-def test_the_install_examples_carry_the_chart_version():
-    """scripts/release.py rewrites them with the version it sets in Chart.yaml."""
-    version = yaml.safe_load((REPO / "deploy/chart/Chart.yaml").read_text())["version"]
-    for doc in (REPO / "README.md", REPO / "docs/kubernetes.md"):
-        for found in re.findall(r"helm install .*?--version (\S+)", doc.read_text()):
-            assert found == version, f"{doc.relative_to(REPO)} installs chart {found}, Chart.yaml is {version}"

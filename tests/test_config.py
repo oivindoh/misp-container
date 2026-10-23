@@ -12,77 +12,10 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "files"))
 from misp_container.config import (
     SettingsCache,
     SettingSpec,
-    _flatten_dict,
-    _version_newer,
     _read_file,
     load_settings_yaml,
     derive_env_var,
 )
-
-
-class TestVersionNewer:
-    """Compare semantic version strings for the version-gated defaults mechanism."""
-
-    def test_newer(self):
-        """v2.5.38 is newer than v2.5.37."""
-        assert _version_newer("v2.5.38", "v2.5.37") is True
-
-    def test_older(self):
-        """v2.5.36 is not newer than v2.5.37."""
-        assert _version_newer("v2.5.36", "v2.5.37") is False
-
-    def test_equal(self):
-        """Same version is not newer."""
-        assert _version_newer("v2.5.37", "v2.5.37") is False
-
-    def test_empty_reference(self):
-        """Any version is newer than an empty reference (first run)."""
-        assert _version_newer("v2.5.37", "") is True
-
-    def test_major_version_jump(self):
-        """Major version bump is detected as newer."""
-        assert _version_newer("v3.0.0", "v2.5.37") is True
-
-    def test_minor_version_jump(self):
-        """Minor version bump is detected as newer."""
-        assert _version_newer("v2.6.0", "v2.5.37") is True
-
-    def test_no_v_prefix(self):
-        """Versions without 'v' prefix still compare correctly."""
-        assert _version_newer("2.5.38", "2.5.37") is True
-
-
-class TestFlattenDict:
-    """Flatten nested dicts into dotted-key pairs for settings comparison."""
-
-    def test_simple(self):
-        """Flat dict passes through unchanged."""
-        result = dict(_flatten_dict({"a": "b", "c": 1}))
-        assert result == {"a": "b", "c": 1}
-
-    def test_nested(self):
-        """Nested dict becomes dotted keys (MISP.baseurl)."""
-        result = dict(_flatten_dict({"MISP": {"baseurl": "https://example.com", "debug": 0}}))
-        assert result == {"MISP.baseurl": "https://example.com", "MISP.debug": 0}
-
-    def test_deeply_nested(self):
-        """Three levels deep produces a.b.c keys."""
-        result = dict(_flatten_dict({"a": {"b": {"c": "deep"}}}))
-        assert result == {"a.b.c": "deep"}
-
-    def test_boolean_lowercase(self):
-        """Python booleans become lowercase 'true'/'false' to match MISP DB format."""
-        result = dict(_flatten_dict({"enabled": True, "disabled": False}))
-        assert result == {"enabled": "true", "disabled": "false"}
-
-    def test_skips_dicts_and_none(self):
-        """None values are skipped, nested dicts are recursed into."""
-        result = dict(_flatten_dict({"a": "val", "b": None, "c": {"d": "nested"}}))
-        assert result == {"a": "val", "c.d": "nested"}
-
-    def test_empty(self):
-        """Empty dict produces no items."""
-        assert _flatten_dict({}) == []
 
 
 class TestSettingsCache:
@@ -116,14 +49,6 @@ class TestSettingsCache:
         assert cache.has("MISP.nonexistent") is False
         assert cache.get("MISP.baseurl") == '"https://example.com"'
         assert cache.get("MISP.nonexistent") is None
-
-    def test_enforced_tracking(self):
-        """Settings marked as enforced (from envars) are tracked to prevent default override."""
-        cache = SettingsCache()
-        cache.enforced.add("MISP.baseurl")
-        assert "MISP.baseurl" in cache.enforced
-        assert "MISP.other" not in cache.enforced
-
 
 class TestSettingSpec:
     """SettingSpec dataclass behaviour."""
@@ -229,7 +154,7 @@ settings:
         assert groups["test"][0].is_envar is False
 
     def test_preserves_metadata(self, tmp_path):
-        """force, blank_protection, since fields are preserved."""
+        """force and blank_protection are preserved."""
         f = tmp_path / "settings.yaml"
         f.write_text("""
 settings:
@@ -238,13 +163,11 @@ settings:
       value: ""
       force: true
       blank_protection: true
-      since: v2.5.40
 """)
         groups = load_settings_yaml(str(f))
         spec = groups["test"][0]
         assert spec.force is True
         assert spec.blank_protection is True
-        assert spec.since == "v2.5.40"
 
     def test_boolean_values(self, tmp_path):
         """YAML booleans (true/false) are converted to strings."""
@@ -350,53 +273,11 @@ class TestBlankProtectedDefault:
         set_setting.assert_called_once()
 
 
-class TestVersionGate:
-    """A default with since is applied once more by the first image at or past that version."""
-
-    def _cache(self, last: str) -> SettingsCache:
-        cache = SettingsCache()
-        cache.settings = {"MISP.x": '"old"'}
-        cache.last_defaults_version = last
-        return cache
-
-    def _apply(self, cache: SettingsCache, image: str):
-        spec = SettingSpec(name="MISP.x", default_value="new", since="v2.5.40")
-        with patch("misp_container.config._read_file", return_value=image), \
-                patch("misp_container.config.cake.set_setting") as set_setting:
-            cache.apply_defaults([spec], "critical")
-        return set_setting
-
-    def test_upgrade_past_since_applies(self):
-        assert self._apply(self._cache("v2.5.37"), "v2.5.47").call_count == 1
-
-    def test_upgrade_to_since_applies(self):
-        assert self._apply(self._cache("v2.5.37"), "v2.5.40").call_count == 1
-
-    def test_image_before_since_leaves_it(self):
-        self._apply(self._cache("v2.5.37"), "v2.5.39").assert_not_called()
-
-    def test_already_applied_leaves_it(self):
-        self._apply(self._cache("v2.5.40"), "v2.5.47").assert_not_called()
-
-
-def test_no_setting_is_in_two_groups():
-    """The group applied first would win, and the other group's value would never land.
-
-    One name lives in more than one config.php group on purpose: Security.auth,
-    which the render merges across the auth plugins. For any other name, one env
-    var feeds both specs, so a value set in env overrides the group meant to win.
-    A group the configure step writes to the database shares no name with any
-    other group.
-    """
-    import collections
+def test_no_database_default_is_an_empty_string_without_blank_protection():
+    """MISP stores no empty setting, so the configure step would write it again on every run."""
     from misp_container import configure
     path = os.path.join(os.path.dirname(__file__), "..", "files", "misp-config", "settings.yaml")
     groups = load_settings_yaml(path)
-    database = set(configure.DB_GROUPS) | set(configure.SWITCHED_GROUPS) | {"gpg"}
-    homes = collections.defaultdict(set)
-    for group, specs in groups.items():
-        for spec in specs:
-            homes[spec.name].add(group)
-    shared = {name: sorted(where) for name, where in homes.items() if len(where) > 1}
-    assert all(not (where & database) for where in map(set, shared.values())), shared
-    assert set(shared) <= {"Security.auth"}, shared
+    empty = [spec.name for group in configure.DB_GROUPS if group != "upstream" for spec in groups.get(group, [])
+             if spec.default_value == "" and not spec.blank_protection and not spec.track_only]
+    assert empty == []

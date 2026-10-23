@@ -31,17 +31,7 @@ spec:
         - name: worker
           {{- include "misp.image" . | nindent 10 }}
           command: ["/usr/bin/tini", "--", "python3", "/entrypoint-worker.py"]
-          {{- with include "misp.dbEnv" . }}
-          env:
-            {{- . | nindent 12 }}
-          {{- end }}
-          envFrom:
-            - configMapRef:
-                name: misp-env
-            - secretRef:
-                name: misp-db
-            - secretRef:
-                name: misp-app
+          {{- include "misp.appEnv" (list . "misp-db" "misp-app") | nindent 10 }}
           volumeMounts:
             {{- include "misp.appVolumeMounts" . | nindent 12 }}
             - name: attachments

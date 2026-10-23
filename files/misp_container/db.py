@@ -252,8 +252,10 @@ def wait_for_db(retries: int = 100, wait_seconds: int = 5) -> None:
 def set_system_setting(name: str, value: str) -> None:
     """Write a row of system_settings (value stored JSON-encoded, as MISP does)."""
     literal = '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
-    updated = execute("UPDATE system_settings SET value = %s WHERE setting = %s", (literal, name))
-    if not updated:
+    # MySQL counts an UPDATE to the same value as no change, so the row's presence decides
+    if dict_query("SELECT setting FROM system_settings WHERE setting = %s", (name,)):
+        execute("UPDATE system_settings SET value = %s WHERE setting = %s", (literal, name))
+    else:
         execute("INSERT INTO system_settings (setting, value) VALUES (%s, %s)", (name, literal))
 
 

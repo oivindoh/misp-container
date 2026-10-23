@@ -25,14 +25,9 @@ CUSTOM_SETUP_SCRIPT = "/custom/setup.py"
 # The settings groups this step applies to the database, in order. The groups
 # init renders into config.php (config.CONFIG_PHP_GROUPS, the S3 group and the
 # auth plugins) are not among them: MISP reads those from the file. gpg follows
-# the key setup. A switched group is applied while its env var is "true".
-DB_GROUPS = ("initialisation", "critical", "optional", "upstream")
-SWITCHED_GROUPS = {
-    "proxy": "PROXY_ENABLE",
-    "kafka": "PLUGIN_KAFKA_ENABLE",
-    "linotp": "LINOTPAUTH_ENABLED",
-    "custom_auth": "CUSTOM_AUTH_ENABLE",
-}
+# the key setup. A plugin group's defaults do nothing until its enable setting
+# is true.
+DB_GROUPS = ("initialisation", "critical", "optional", "proxy", "kafka", "linotp", "custom_auth", "upstream")
 
 
 def run_custom_script(path: str, label: str) -> None:
@@ -105,7 +100,6 @@ def configure_misp() -> None:
 
         cache = SettingsCache()
         cache.load()
-        cache.load_defaults_version()
 
         all_specs = load_settings_yaml()
 
@@ -124,9 +118,6 @@ def configure_misp() -> None:
         for group, switch in CONDITIONAL_CONFIG_PHP_GROUPS:
             if env(switch) == "true":
                 log.info("%s enabled (in config.php)", group)
-        for group, switch in SWITCHED_GROUPS.items():
-            if env(switch) == "true":
-                apply_settings_fast(group, cache, all_specs)
 
         cache.save_defaults_version()
         log.info("configuration complete")
