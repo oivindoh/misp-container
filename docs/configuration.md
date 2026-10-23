@@ -54,7 +54,8 @@ create its high-performance indexes on the object, correlation, tag and warningl
 ([MISP#11178](https://github.com/MISP/MISP/issues/11178)).
 The image patches one line of CakePHP's PostgreSQL datasource (the `Dockerfile` names it) so
 that settings inserts work. `MISP_REDIS_*` also fills the background-job and ZeroMQ Redis
-settings, and `MISP_BASEURL` fills the external and REST client base URLs, unless those are
+settings, `MISP_BASEURL` fills the external and REST client base URLs, and `ADMIN_ORG` fills
+`MISP.org`, the hosting organisation in e-mail subjects and STIX 1 exports, unless those are
 set explicitly.
 
 ## HTTPS

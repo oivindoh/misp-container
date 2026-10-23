@@ -11,10 +11,14 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "files"))
 from misp_container.config import (
     SettingSpec,
     config_php_specs,
+    load_settings_yaml,
     php_literal,
     render_config_php,
 )
+from misp_container.env import apply_defaults
 from misp_container.init import _generate_database_config, _generate_email_config
+
+REPO = os.path.join(os.path.dirname(__file__), "..")
 
 
 class TestPhpLiteral:
@@ -99,7 +103,7 @@ class TestConfigPhpSpecs:
         return {
             "minimum_config": [SettingSpec.from_dict("MISP.redis_host", {"value": "redis"})],
             "db_enable": [SettingSpec.from_dict("MISP.system_setting_db", {"value": True})],
-            "s3": [SettingSpec.from_dict("MISP.attachments_dir", {"value": "s3://"})],
+            "s3": [SettingSpec.from_dict("Plugin.S3_bucket_name", {"value": ""})],
             "optional": [SettingSpec.from_dict("MISP.enable_themes", {"value": True})],
         }
 
@@ -112,7 +116,28 @@ class TestConfigPhpSpecs:
     def test_s3_group_when_bucket_set(self):
         with patch.dict(os.environ, {"PLUGIN_S3_BUCKET_NAME": "misp"}):
             names = [s.name for s in config_php_specs(self._all())]
-        assert names[-1] == "MISP.attachments_dir"
+        assert names[-1] == "Plugin.S3_bucket_name"
+
+
+class TestAttachmentsDir:
+    """attachments_dir as a pod renders it, with base.env loaded as the chart and Compose load it."""
+
+    def _render(self, extra: dict) -> str:
+        with open(os.path.join(REPO, "deploy/chart/files/base.env")) as f:
+            base = dict(line.strip().split("=", 1) for line in f
+                        if "=" in line and not line.lstrip().startswith("#"))
+        with patch.dict(os.environ, {**base, **extra}, clear=True):
+            apply_defaults()
+            return render_config_php(config_php_specs(load_settings_yaml(
+                os.path.join(REPO, "files/misp-config/settings.yaml"))))
+
+    def test_a_bucket_points_attachments_at_s3(self):
+        out = self._render({"PLUGIN_S3_BUCKET_NAME": "misp"})
+        assert "'attachments_dir' => 's3://'," in out
+
+    def test_without_a_bucket_attachments_stay_on_disk(self):
+        out = self._render({})
+        assert "'attachments_dir' => '/var/www/MISP/app/attachments'," in out
 
 
 class TestGeneratedPhpEscaping:

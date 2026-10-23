@@ -1,7 +1,8 @@
 # Tests, scans and releases the images and the Helm chart: unit tests, the chart
 # renders, the stack suites in Compose, the chart on kind and Trivy; on a tag,
 # pushes the images and the chart and creates the release (tests/README.md, CI).
-# On the misp-3.0 branch, pushes the MISP 3.0 Early Access images instead.
+# On the misp-3.0 branch, pushes the MISP 3.0 Early Access images instead. The
+# file is the same on master and misp-3.0: the gate decides what a run does.
 name: CI
 
 on:
@@ -9,11 +10,13 @@ on:
     # Branch pushes: test + scan (no release).
     # Tag pushes: test + scan + release.
     # A release pushes master and its tag together, which starts two runs of one
-    # commit: the gate job stops the master run, and the tag run tests and releases.
+    # commit: the gate stops the master run, and the tag run tests and releases.
     branches: [master, misp-3.0]
     tags: ["v*"]
   pull_request:
     branches: [master, misp-3.0]
+    # A draft runs the unit tests only; marking it ready for review runs the rest
+    types: [opened, synchronize, reopened, ready_for_review]
 
 # Drop all permissions by default. Grant per-job.
 permissions: {}
@@ -28,43 +31,82 @@ env:
   IMAGE_MODULES: ghcr.io/${{ github.repository }}-modules
 
 jobs:
-  # Stops a master run whose commit carries a release tag: the run of the tag
-  # tests the same commit and releases it. build and unit wait for it, and every
-  # other job waits for them. When the lookup fails, both runs go ahead.
-  #
-  # Also skips the suites on a push to misp-3.0 that merges a pull request: the
-  # ruleset requires them on the pull request and requires it to be up to date,
-  # so the merge commit has the tree they tested. When the lookup fails, the
-  # suites run.
+  # Decides what the run does:
+  # - A master push whose commit carries a release tag does nothing: the run of
+  #   the tag tests the same commit and releases it. When the lookup fails, both
+  #   runs go ahead.
+  # - A draft pull request runs the unit tests only, and ci-ok fails, so it
+  #   cannot merge before a run of the pull request marked ready passed.
+  # - A push to misp-3.0 that merges a pull request skips the unit tests and the
+  #   stack suites: the ruleset requires them on the pull request and requires it
+  #   to be up to date, so the merge commit has the tree they tested. When the
+  #   lookup fails, they run.
+  # - The upgrade suite runs where its module exists, which is on misp-3.0.
   gate:
     runs-on: ubuntu-latest
     permissions:
       contents: read
       pull-requests: read
     outputs:
-      release_commit: ${{ steps.tag.outputs.release_commit }}
-      tested: ${{ steps.pr.outputs.tested }}
+      build: ${{ steps.plan.outputs.build }}
+      unit: ${{ steps.plan.outputs.unit }}
+      stack: ${{ steps.plan.outputs.stack }}
+      suites: ${{ steps.plan.outputs.suites }}
+      publish: ${{ steps.plan.outputs.publish }}
     steps:
-      - name: Look for a release tag on the commit
-        id: tag
-        run: |
-          if [ "$GITHUB_EVENT_NAME" = push ] && [ "$GITHUB_REF_TYPE" = branch ] &&
-             git ls-remote --tags "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git" 'v*' 2>/dev/null | grep -q "^$GITHUB_SHA"; then
-            echo "release_commit=true" >> "$GITHUB_OUTPUT"
-            echo "A release tag points at $GITHUB_SHA: its tag run tests and releases it."
-          fi
-      - name: Look for the pull request the push merges
-        id: pr
-        if: github.event_name == 'push' && github.ref == 'refs/heads/misp-3.0'
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: tests/e2e
+      - name: Plan the run
+        id: plan
         env:
           GH_TOKEN: ${{ github.token }}
+          DRAFT: ${{ github.event.pull_request.draft }}
         run: |
-          PR=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/pulls" \
-            --jq "[.[] | select(.merge_commit_sha == \"$GITHUB_SHA\")][0].number // empty" 2>/dev/null || true)
-          if [ -n "$PR" ]; then
-            echo "tested=true" >> "$GITHUB_OUTPUT"
-            echo "$GITHUB_SHA merges pull request #$PR, whose run passed the suites on this tree."
+          set -euo pipefail
+          build=true unit=true stack=true publish=
+          if [ "$GITHUB_EVENT_NAME" = push ] && [ "$GITHUB_REF_TYPE" = branch ] &&
+             git ls-remote --tags "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git" 'v*' 2>/dev/null | grep -q "^$GITHUB_SHA"; then
+            echo "A release tag points at $GITHUB_SHA: its tag run tests and releases it."
+            build=false unit=false stack=false
+          elif [ "$DRAFT" = true ]; then
+            echo "A draft runs the unit tests only: mark the pull request ready for review to run the rest."
+            build=false stack=false
+          elif [ "$GITHUB_EVENT_NAME" = push ] && [ "$GITHUB_REF" = refs/heads/misp-3.0 ]; then
+            PR=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/pulls" \
+              --jq "[.[] | select(.merge_commit_sha == \"$GITHUB_SHA\")][0].number // empty" 2>/dev/null || true)
+            if [ -n "$PR" ]; then
+              echo "$GITHUB_SHA merges pull request #$PR, whose run passed the suites on this tree."
+              unit=false stack=false
+            fi
           fi
+          if [ "$build" = true ] && [ "$GITHUB_REF_TYPE" = tag ]; then
+            publish=release
+          elif [ "$build" = true ] && [ "$GITHUB_EVENT_NAME" = push ] && [ "$GITHUB_REF" = refs/heads/misp-3.0 ]; then
+            publish=prerelease
+          fi
+          # name is the check name; id names the report
+          suites='[
+            {"name": "integration", "id": "integration", "timeout": 15,
+             "tests": "tests/e2e/test_upstream.py tests/e2e/test_integration.py"},
+            {"name": "integration-postgres", "id": "integration-postgres", "timeout": 15,
+             "tests": "tests/e2e/test_integration.py --db-engine postgres"},
+            {"name": "hub-spoke", "id": "sync", "timeout": 15, "tests": "tests/e2e/test_sync.py"},
+            {"name": "migration", "id": "migration", "timeout": 20, "tests": "tests/e2e/test_migration.py"}]'
+          if [ -f tests/e2e/test_upgrade.py ]; then
+            suites=$(jq -c '. + [
+              {"name": "upgrade (mariadb)", "id": "upgrade-mariadb", "timeout": 30,
+               "tests": "tests/e2e/test_upgrade.py --db-engine mariadb"},
+              {"name": "upgrade (postgres)", "id": "upgrade-postgres", "timeout": 30,
+               "tests": "tests/e2e/test_upgrade.py --db-engine postgres"}]' <<<"$suites")
+          fi
+          {
+            echo "build=$build"
+            echo "unit=$unit"
+            echo "stack=$stack"
+            echo "publish=$publish"
+            echo "suites=$(jq -c . <<<"$suites")"
+          } >> "$GITHUB_OUTPUT"
 
   # Fails while master has commits misp-3.0 lacks, so no 3.0 build ships without
   # the 2.5 fixes. The Sync misp-3.0 workflow on master merges them.
@@ -94,7 +136,7 @@ jobs:
   # the suites, the scan and the release then all use.
   build:
     needs: gate
-    if: needs.gate.outputs.release_commit != 'true'
+    if: needs.gate.outputs.build == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -132,7 +174,7 @@ jobs:
 
   unit:
     needs: gate
-    if: needs.gate.outputs.release_commit != 'true' && needs.gate.outputs.tested != 'true'
+    if: needs.gate.outputs.unit == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -150,166 +192,20 @@ jobs:
           uv sync
           PYTHONPATH=files .venv/bin/python -m pytest tests/ -v --ignore=tests/e2e
 
-  integration:
+  # The stack suites in Compose, one job each, in parallel, against the images
+  # from build. The gate lists them; the upload keeps the JUnit report and,
+  # after a failure, the compose logs.
+  suite:
+    name: ${{ matrix.name }}
     needs: [gate, build]
-    if: needs.gate.outputs.tested != 'true'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    env:
-      MISP_IMAGE_TAG: ci
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Load the images
-        uses: ./.github/actions/load-images
-        with:
-          misp: ${{ env.IMAGE_MISP }}
-          caddy: ${{ env.IMAGE_CADDY }}
-          modules: ${{ env.IMAGE_MODULES }}
-
-      - name: Integration tests
-        timeout-minutes: 15
-        env:
-          TMPDIR: ${{ runner.temp }}
-        run: |
-          pip install --quiet uv
-          uv sync
-          .venv/bin/python -m pytest tests/e2e/test_upstream.py tests/e2e/test_integration.py --skip-build -v --durations=5 \
-            --junitxml="$RUNNER_TEMP/integration-junit.xml"
-
-      - name: Upload the test report and the compose logs
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: integration-report
-          path: |
-            ${{ runner.temp }}/integration-junit.xml
-            ${{ runner.temp }}/*-compose-logs.txt
-          if-no-files-found: ignore
-
-  integration-postgres:
-    needs: [gate, build]
-    if: needs.gate.outputs.tested != 'true'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    env:
-      MISP_IMAGE_TAG: ci
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Load the images
-        uses: ./.github/actions/load-images
-        with:
-          misp: ${{ env.IMAGE_MISP }}
-          caddy: ${{ env.IMAGE_CADDY }}
-          modules: ${{ env.IMAGE_MODULES }}
-
-      - name: Integration tests on PostgreSQL
-        timeout-minutes: 15
-        env:
-          TMPDIR: ${{ runner.temp }}
-        run: |
-          pip install --quiet uv
-          uv sync
-          .venv/bin/python -m pytest tests/e2e/test_integration.py --skip-build --db-engine postgres -v --durations=5 \
-            --junitxml="$RUNNER_TEMP/integration-postgres-junit.xml"
-
-      - name: Upload the test report and the compose logs
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: integration-postgres-report
-          path: |
-            ${{ runner.temp }}/integration-postgres-junit.xml
-            ${{ runner.temp }}/*-compose-logs.txt
-          if-no-files-found: ignore
-
-  hub-spoke:
-    needs: [gate, build]
-    if: needs.gate.outputs.tested != 'true'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    env:
-      MISP_IMAGE_TAG: ci
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Load the images
-        uses: ./.github/actions/load-images
-        with:
-          misp: ${{ env.IMAGE_MISP }}
-          caddy: ${{ env.IMAGE_CADDY }}
-          modules: ${{ env.IMAGE_MODULES }}
-
-      - name: Hub-spoke sync tests
-        timeout-minutes: 15
-        env:
-          TMPDIR: ${{ runner.temp }}
-        run: |
-          pip install --quiet uv
-          uv sync
-          .venv/bin/python -m pytest tests/e2e/test_sync.py --skip-build -v --durations=5 \
-            --junitxml="$RUNNER_TEMP/sync-junit.xml"
-
-      - name: Upload the test report and the compose logs
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: sync-report
-          path: |
-            ${{ runner.temp }}/sync-junit.xml
-            ${{ runner.temp }}/*-compose-logs.txt
-          if-no-files-found: ignore
-
-  migration:
-    needs: [gate, build]
-    if: needs.gate.outputs.tested != 'true'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    env:
-      MISP_IMAGE_TAG: ci
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Load the images
-        uses: ./.github/actions/load-images
-        with:
-          misp: ${{ env.IMAGE_MISP }}
-          caddy: ${{ env.IMAGE_CADDY }}
-          modules: ${{ env.IMAGE_MODULES }}
-
-      - name: Migration tests
-        timeout-minutes: 20
-        env:
-          TMPDIR: ${{ runner.temp }}
-        run: |
-          pip install --quiet uv
-          uv sync
-          .venv/bin/python -m pytest tests/e2e/test_migration.py --skip-build -v --durations=5 \
-            --junitxml="$RUNNER_TEMP/migration-junit.xml"
-
-      - name: Upload the test report and the compose logs
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: migration-report
-          path: |
-            ${{ runner.temp }}/migration-junit.xml
-            ${{ runner.temp }}/*-compose-logs.txt
-          if-no-files-found: ignore
-
-  # Seeds MISP 2.5 from the published images and converts it to MISP 3.0 with
-  # the upgrade step of the images from build, on MariaDB and on PostgreSQL
-  upgrade:
-    needs: [gate, build]
-    if: needs.gate.outputs.tested != 'true'
+    if: needs.gate.outputs.stack == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
     strategy:
       fail-fast: false
       matrix:
-        database: [mariadb, postgres]
+        include: ${{ fromJSON(needs.gate.outputs.suites) }}
     env:
       MISP_IMAGE_TAG: ci
     steps:
@@ -321,23 +217,23 @@ jobs:
           caddy: ${{ env.IMAGE_CADDY }}
           modules: ${{ env.IMAGE_MODULES }}
 
-      - name: Upgrade tests (${{ matrix.database }})
-        timeout-minutes: 30
+      - name: Run the suite
+        timeout-minutes: ${{ matrix.timeout }}
         env:
           TMPDIR: ${{ runner.temp }}
         run: |
           pip install --quiet uv
           uv sync
-          .venv/bin/python -m pytest tests/e2e/test_upgrade.py --skip-build --db-engine ${{ matrix.database }} \
-            -v --durations=5 --junitxml="$RUNNER_TEMP/upgrade-junit.xml"
+          .venv/bin/python -m pytest ${{ matrix.tests }} --skip-build -v --durations=5 \
+            --junitxml="$RUNNER_TEMP/${{ matrix.id }}-junit.xml"
 
       - name: Upload the test report and the compose logs
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: upgrade-${{ matrix.database }}-report
+          name: ${{ matrix.id }}-report
           path: |
-            ${{ runner.temp }}/upgrade-junit.xml
+            ${{ runner.temp }}/${{ matrix.id }}-junit.xml
             ${{ runner.temp }}/*-compose-logs.txt
           if-no-files-found: ignore
 
@@ -345,7 +241,7 @@ jobs:
   # cluster, runs the smoke test, upgrades the release and runs it again
   kind:
     needs: [gate, build]
-    if: needs.gate.outputs.tested != 'true'
+    if: needs.gate.outputs.stack == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -379,7 +275,8 @@ jobs:
         run: tests/run-kind-test.sh ${{ matrix.database == 'postgres' && '--postgres' || '' }}
 
   scan:
-    needs: build
+    needs: [gate, build]
+    if: needs.gate.outputs.build == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -411,6 +308,8 @@ jobs:
             type=gha,scope=misp
             type=gha,scope=${{ matrix.scope }}
 
+      # CRITICAL and HIGH findings with a fix, for the Security tab and for the
+      # check below; one scan, so one download of Trivy's database
       - name: Trivy vulnerability scan (${{ matrix.target }})
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
@@ -427,21 +326,61 @@ jobs:
           sarif_file: trivy-results.sarif
           category: ${{ matrix.target }}
 
-      # The report above never fails the job; this run does, on a CRITICAL
-      # finding with a fix, so the release job that needs this one is gated
+      # The report above never fails the job; this check does, on a CRITICAL
+      # finding with a fix, so publish, which needs this job, is gated
       - name: Fail on a fixable CRITICAL finding (${{ matrix.target }})
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        with:
-          image-ref: ${{ matrix.tag }}
-          format: table
-          severity: CRITICAL
-          ignore-unfixed: true
-          exit-code: "1"
-          skip-setup-trivy: true
+        run: |
+          set -euo pipefail
+          found=$(jq -r '.runs[0] as $run
+            | [$run.tool.driver.rules[] | select(.properties.tags | index("CRITICAL")) | .id] as $critical
+            | $run.results[] | select(.ruleId as $id | $critical | index($id))
+            | "\(.ruleId): \(.message.text | split("\n")[0])"' trivy-results.sarif)
+          if [ -n "$found" ]; then
+            echo "CRITICAL findings with a fix:"
+            echo "$found"
+            exit 1
+          fi
+          echo "No CRITICAL finding with a fix."
 
-  release:
-    needs: [unit, integration, integration-postgres, hub-spoke, migration, kind, scan]
-    if: startsWith(github.ref, 'refs/tags/v')
+  # The one required check: it fails on any failed or cancelled job, and on a
+  # draft, whose run skips the stack suites. Every other skip is the gate's.
+  ci-ok:
+    needs: [gate, master-merged, build, unit, suite, kind, scan]
+    if: always()
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Check the jobs
+        env:
+          FAILED: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}
+          DRAFT: ${{ github.event.pull_request.draft }}
+        run: |
+          if [ "$FAILED" = true ]; then
+            echo "A job failed or was cancelled."
+            exit 1
+          elif [ "$DRAFT" = true ]; then
+            echo "A draft runs the unit tests only: mark the pull request ready for review."
+            exit 1
+          fi
+          echo "Every job passed, or the gate skipped it."
+
+  # Publishes after every other job. On a tag: the images under the tag without
+  # its v, the chart at the version of Chart.yaml, and a GitHub Release. On a
+  # push to misp-3.0: the MISP 3.0 Early Access, the images as
+  # 3.0-wip-<MISP commit>-<commit>, which never moves, and 3.0-wip, the newest;
+  # the chart as 3.0.0-wip.<run>.<attempt>, with that image tag as appVersion,
+  # and no GitHub Release: the Early Access is not for production
+  # (docs/misp-3.md). The unit tests and the suites may be skipped only where the
+  # gate skipped them.
+  publish:
+    needs: [gate, master-merged, build, unit, suite, kind, scan]
+    if: >-
+      always() && needs.gate.outputs.publish != '' &&
+      needs.build.result == 'success' && needs.scan.result == 'success' &&
+      !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') &&
+      (needs.gate.outputs.unit != 'true' || needs.unit.result == 'success') &&
+      (needs.gate.outputs.stack != 'true' || (needs.suite.result == 'success' && needs.kind.result == 'success')) &&
+      (needs.gate.outputs.publish == 'release' || needs.master-merged.result == 'success')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -452,46 +391,60 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
-      - name: Extract version info
-        id: version
-        run: |
-          TAG="${GITHUB_REF#refs/tags/}"
-          MISP_VERSION=$(grep '^ARG CORE_TAG=' Dockerfile | cut -d= -f2)
-          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
-          echo "misp_version=${MISP_VERSION}" >> "$GITHUB_OUTPUT"
-          echo "Git tag: ${TAG}, MISP version: ${MISP_VERSION}"
-
       - name: Install helm
         uses: ./.github/actions/install-helm
 
-      # appVersion is the image tag; the chart version is its own SemVer and, like an
-      # image tag, is never pushed twice
-      - name: Check the chart version
-        id: chart
+      # appVersion is the image tag; the chart version is its own SemVer and, like
+      # an image tag, is never pushed twice. A lookup that fails for another
+      # reason than "not there" (a timeout, a rate limit, a token without read
+      # scope) must not pass as "not there": helm push overwrites an OCI tag.
+      - name: Plan the publication
+        id: plan
+        env:
+          PUBLISH: ${{ needs.gate.outputs.publish }}
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          VER="${GITHUB_REF#refs/tags/v}"
-          APP=$(awk '$1 == "appVersion:" {gsub(/"/, "", $2); print $2}' deploy/chart/Chart.yaml)
-          CHART=$(awk '$1 == "version:" {print $2}' deploy/chart/Chart.yaml)
-          if [ "$APP" != "$VER" ]; then
-            echo "ERROR: deploy/chart/Chart.yaml has appVersion ${APP}, the tag is ${VER}: mise run release sets it."
-            exit 1
-          fi
           echo "$REGISTRY_TOKEN" | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
-          # A lookup that fails for another reason than "not there" (a timeout, a
-          # rate limit, a token without read scope) must not pass as "not there":
-          # helm push overwrites an OCI tag
-          if out=$(helm show chart "oci://ghcr.io/${{ github.repository_owner }}/charts/misp" --version "$CHART" 2>&1); then
-            echo "ERROR: chart version ${CHART} exists in GHCR. Chart versions are immutable: mise run release raises it."
-            exit 1
-          elif ! grep -qiE "not found|manifest unknown|name unknown|denied" <<<"$out"; then
-            echo "ERROR: cannot tell whether chart version ${CHART} exists in GHCR:"
-            echo "$out"
-            exit 1
+          if [ "$PUBLISH" = release ]; then
+            TAG="${GITHUB_REF#refs/tags/v}"
+            APP=$(awk '$1 == "appVersion:" {gsub(/"/, "", $2); print $2}' deploy/chart/Chart.yaml)
+            CHART=$(awk '$1 == "version:" {print $2}' deploy/chart/Chart.yaml)
+            if [ "$APP" != "$TAG" ]; then
+              echo "ERROR: deploy/chart/Chart.yaml has appVersion ${APP}, the tag is ${TAG}: mise run release sets it."
+              exit 1
+            fi
+            if out=$(helm show chart "oci://ghcr.io/${{ github.repository_owner }}/charts/misp" --version "$CHART" 2>&1); then
+              echo "ERROR: chart version ${CHART} exists in GHCR. Chart versions are immutable: mise run release raises it."
+              exit 1
+            elif ! grep -qiE "not found|manifest unknown|name unknown|denied" <<<"$out"; then
+              echo "ERROR: cannot tell whether chart version ${CHART} exists in GHCR:"
+              echo "$out"
+              exit 1
+            fi
+            MOVING=
+            echo "misp_version=$(grep '^ARG CORE_TAG=' Dockerfile | cut -d= -f2)" >> "$GITHUB_OUTPUT"
+          else
+            MISP=$(grep '^ARG CORE_COMMIT=' Dockerfile | cut -d= -f2)
+            if [ -z "$MISP" ]; then
+              echo "ERROR: the Dockerfile pins no CORE_COMMIT: an Early Access image names the MISP commit it carries."
+              exit 1
+            fi
+            TAG="3.0-wip-${MISP::7}-${GITHUB_SHA::7}"
+            CHART="3.0.0-wip.${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}"
+            MOVING=3.0-wip
           fi
-          echo "version=${CHART}" >> "$GITHUB_OUTPUT"
-        env:
-          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          for image in misp caddy modules; do
+            case $image in
+              misp) name="${{ env.IMAGE_MISP }}" ;;
+              caddy) name="${{ env.IMAGE_CADDY }}" ;;
+              modules) name="${{ env.IMAGE_MODULES }}" ;;
+            esac
+            echo "${image}_tags=${name}:${TAG}${MOVING:+,${name}:${MOVING}}" >> "$GITHUB_OUTPUT"
+          done
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "chart=${CHART}" >> "$GITHUB_OUTPUT"
+          echo "Images: ${TAG}${MOVING:+ and ${MOVING}}; chart ${CHART}"
 
       - name: Log in to GHCR
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
@@ -500,32 +453,24 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # The images carry the tag without its v; a re-pushed git tag must not
-      # overwrite them, and a lookup that fails for another reason than "not
+      # A release image tag is never pushed twice: a re-pushed git tag must not
+      # overwrite one, and a lookup that fails for another reason than "not
       # there" must not pass either
       - name: Check tag immutability
+        if: needs.gate.outputs.publish == 'release'
         run: |
           set -euo pipefail
-          VER="${GITHUB_REF#refs/tags/v}"
+          TAG="${{ steps.plan.outputs.tag }}"
           for image in "${{ env.IMAGE_MISP }}" "${{ env.IMAGE_CADDY }}" "${{ env.IMAGE_MODULES }}"; do
-            if out=$(docker manifest inspect "${image}:${VER}" 2>&1); then
-              echo "ERROR: ${image}:${VER} exists in GHCR. Tags are immutable: mise run release hotfix makes ${VER}-r1."
+            if out=$(docker manifest inspect "${image}:${TAG}" 2>&1); then
+              echo "ERROR: ${image}:${TAG} exists in GHCR. Tags are immutable: mise run release hotfix makes ${TAG}-r1."
               exit 1
             elif ! grep -qiE "not found|manifest unknown|name unknown|no such manifest|denied" <<<"$out"; then
-              echo "ERROR: cannot tell whether ${image}:${VER} exists in GHCR:"
+              echo "ERROR: cannot tell whether ${image}:${TAG} exists in GHCR:"
               echo "$out"
               exit 1
             fi
           done
-
-      - name: Docker tags
-        id: tags
-        run: |
-          TAG="${GITHUB_REF#refs/tags/v}"
-          echo "version=${TAG}" >> "$GITHUB_OUTPUT"
-          echo "misp_tags=${{ env.IMAGE_MISP }}:${TAG}" >> "$GITHUB_OUTPUT"
-          echo "caddy_tags=${{ env.IMAGE_CADDY }}:${TAG}" >> "$GITHUB_OUTPUT"
-          echo "modules_tags=${{ env.IMAGE_MODULES }}:${TAG}" >> "$GITHUB_OUTPUT"
 
       - name: Build and push misp (from cache)
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
@@ -533,7 +478,7 @@ jobs:
           context: .
           target: final
           push: true
-          tags: ${{ steps.tags.outputs.misp_tags }}
+          tags: ${{ steps.plan.outputs.misp_tags }}
           provenance: true
           sbom: true
           cache-from: type=gha,scope=misp
@@ -544,7 +489,7 @@ jobs:
           context: .
           target: caddy
           push: true
-          tags: ${{ steps.tags.outputs.caddy_tags }}
+          tags: ${{ steps.plan.outputs.caddy_tags }}
           provenance: true
           sbom: true
           cache-from: |
@@ -557,7 +502,7 @@ jobs:
           context: .
           target: modules
           push: true
-          tags: ${{ steps.tags.outputs.modules_tags }}
+          tags: ${{ steps.plan.outputs.modules_tags }}
           provenance: true
           sbom: true
           cache-from: type=gha,scope=modules
@@ -565,118 +510,24 @@ jobs:
       - name: Push the chart
         run: |
           set -euo pipefail
-          helm package deploy/chart --destination "$RUNNER_TEMP"
-          helm push "$RUNNER_TEMP/misp-${{ steps.chart.outputs.version }}.tgz" "oci://ghcr.io/${{ github.repository_owner }}/charts"
+          helm package deploy/chart --version "${{ steps.plan.outputs.chart }}" \
+            --app-version "${{ steps.plan.outputs.tag }}" --destination "$RUNNER_TEMP"
+          helm push "$RUNNER_TEMP/misp-${{ steps.plan.outputs.chart }}.tgz" "oci://ghcr.io/${{ github.repository_owner }}/charts"
 
       - name: Create GitHub Release
+        if: needs.gate.outputs.publish == 'release'
         run: |
-          TAG="${{ steps.version.outputs.tag }}"
-          MISP="${{ steps.version.outputs.misp_version }}"
-          VER="${{ steps.tags.outputs.version }}"
+          TAG="${GITHUB_REF#refs/tags/}"
+          VER="${{ steps.plan.outputs.tag }}"
           gh release create "${TAG}" \
             --title "${TAG}" \
-            --notes "MISP ${MISP}
+            --notes "MISP ${{ steps.plan.outputs.misp_version }}
 
           Images:
           - \`${{ env.IMAGE_MISP }}:${VER}\`
           - \`${{ env.IMAGE_CADDY }}:${VER}\`
           - \`${{ env.IMAGE_MODULES }}:${VER}\`
 
-          Helm chart: \`oci://ghcr.io/${{ github.repository_owner }}/charts/misp\`, version \`${{ steps.chart.outputs.version }}\`"
+          Helm chart: \`oci://ghcr.io/${{ github.repository_owner }}/charts/misp\`, version \`${{ steps.plan.outputs.chart }}\`"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  # A push to misp-3.0 publishes the MISP 3.0 Early Access after every other
-  # job: the images as 3.0-wip-<MISP commit>-<commit>, which never moves, and
-  # 3.0-wip, the newest; the chart as 3.0.0-wip.<run>.<attempt>, with that image
-  # tag as appVersion. No GitHub Release: the Early Access is not for
-  # production (docs/misp-3.md). A suite may be skipped only when the gate found
-  # the merged pull request that ran it.
-  prerelease:
-    needs: [gate, master-merged, build, unit, integration, integration-postgres, hub-spoke, migration, upgrade, kind, scan]
-    if: >-
-      always() && github.event_name == 'push' && github.ref == 'refs/heads/misp-3.0' &&
-      needs.build.result == 'success' && needs.scan.result == 'success' && needs.master-merged.result == 'success' &&
-      !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') &&
-      (needs.gate.outputs.tested == 'true' || !contains(needs.*.result, 'skipped'))
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
-
-      - name: Log in to GHCR
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Docker tags
-        id: tags
-        run: |
-          set -euo pipefail
-          MISP=$(grep '^ARG CORE_COMMIT=' Dockerfile | cut -d= -f2)
-          if [ -z "$MISP" ]; then
-            echo "ERROR: the Dockerfile pins no CORE_COMMIT: an Early Access image names the MISP commit it carries."
-            exit 1
-          fi
-          TAG="3.0-wip-${MISP::7}-${GITHUB_SHA::7}"
-          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
-          echo "misp_tags=${{ env.IMAGE_MISP }}:${TAG},${{ env.IMAGE_MISP }}:3.0-wip" >> "$GITHUB_OUTPUT"
-          echo "caddy_tags=${{ env.IMAGE_CADDY }}:${TAG},${{ env.IMAGE_CADDY }}:3.0-wip" >> "$GITHUB_OUTPUT"
-          echo "modules_tags=${{ env.IMAGE_MODULES }}:${TAG},${{ env.IMAGE_MODULES }}:3.0-wip" >> "$GITHUB_OUTPUT"
-          echo "Image tag: ${TAG}, MISP 3.0_wip at ${MISP}"
-
-      - name: Build and push misp (from cache)
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
-        with:
-          context: .
-          target: final
-          push: true
-          tags: ${{ steps.tags.outputs.misp_tags }}
-          provenance: true
-          sbom: true
-          cache-from: type=gha,scope=misp
-
-      - name: Build and push caddy (from cache)
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
-        with:
-          context: .
-          target: caddy
-          push: true
-          tags: ${{ steps.tags.outputs.caddy_tags }}
-          provenance: true
-          sbom: true
-          cache-from: |
-            type=gha,scope=misp
-            type=gha,scope=caddy
-
-      - name: Build and push modules (from cache)
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
-        with:
-          context: .
-          target: modules
-          push: true
-          tags: ${{ steps.tags.outputs.modules_tags }}
-          provenance: true
-          sbom: true
-          cache-from: type=gha,scope=modules
-
-      - name: Install helm
-        uses: ./.github/actions/install-helm
-
-      - name: Push the chart
-        run: |
-          set -euo pipefail
-          VERSION="3.0.0-wip.${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}"
-          echo "$REGISTRY_TOKEN" | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
-          helm package deploy/chart --version "$VERSION" --app-version "${{ steps.tags.outputs.tag }}" \
-            --destination "$RUNNER_TEMP"
-          helm push "$RUNNER_TEMP/misp-${VERSION}.tgz" "oci://ghcr.io/${{ github.repository_owner }}/charts"
-          echo "Chart: oci://ghcr.io/${{ github.repository_owner }}/charts/misp --version ${VERSION}"
-        env:
-          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}

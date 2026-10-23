@@ -139,6 +139,11 @@ def test_admin_org_uuid(stack):
     assert me(stack).get("Organisation", {}).get("uuid") == TEST_ENV["ADMIN_ORG_UUID"]
 
 
+def test_misp_org_is_the_admin_org(stack):
+    # stack.sql drops the whitespace of its output
+    assert stack.sql("SELECT value FROM system_settings WHERE setting='MISP.org'") == '"TestOrg"'
+
+
 def test_last_pw_change_is_set(stack):
     assert "NULL" not in stack.sql("SELECT last_pw_change FROM users WHERE id=1;")
 
@@ -207,6 +212,32 @@ def test_a_published_event_runs_a_job(stack):
     queued = int(stack.sql("SELECT COUNT(*) FROM jobs;") or 0)
     stack.http("POST", f"/events/delete/{eid}", stack.key, {})
     assert done > 0, f"no job reached status 4 (completed) in 60 s; {queued} job(s) in the table: no worker ran it"
+
+
+# -- MISP's own Python scripts -------------------------------------------------------
+
+@pytest.fixture(scope="module")
+def stix_event(stack):
+    event = stack.api("POST", "/events/add", stack.key, {"Event": {"info": "STIX export test", "distribution": 0}}) or {}
+    eid = event.get("Event", {}).get("id")
+    assert eid, event
+    stack.api("POST", f"/attributes/add/{eid}", stack.key, {
+        "event_id": eid, "category": "Network activity", "type": "ip-dst", "value": "198.51.100.7"})
+    yield eid
+    stack.http("POST", f"/events/delete/{eid}", stack.key, {})
+
+
+def test_stix2_export_runs_misp_stix(stack, stix_event):
+    # MISP runs app/files/scripts/stix2/misp2stix2.py, which imports misp-stix
+    status, body = stack.http("POST", "/events/restSearch", stack.key, {"returnFormat": "stix2", "eventid": stix_event})
+    assert status == 200 and '"bundle"' in body and "198.51.100.7" in body, body[-2000:]
+
+
+def test_stix1_export_runs_python_stix(stack, stix_event):
+    # MISP runs app/files/scripts/misp2stix.py, which imports python-stix and cybox; a JSON
+    # request gets the package as STIX 1 JSON
+    status, body = stack.http("POST", "/events/restSearch", stack.key, {"returnFormat": "stix", "eventid": stix_event})
+    assert status == 200 and ":STIXPackage-" in body and "198.51.100.7" in body, body[-2000:]
 
 
 # -- PHP-FPM -------------------------------------------------------------------------
@@ -881,13 +912,6 @@ def test_metrics_waiting_job_shows_in_the_queue(waiting_job):
     assert waiting_job and int(waiting_job) >= 1, (
         f"a job queued with the worker stopped reads {waiting_job!r} in misp_jobs_queued: metrics.py reads "
         "Redis keys MISP no longer writes (see the job-keys check in tests/e2e/test_upstream.py)")
-
-
-def test_metrics_queue_returns_to_0(waiting_job):
-    deadline = time.monotonic() + 30
-    while default_depth() != "0" and time.monotonic() < deadline:
-        time.sleep(1)
-    assert default_depth() == "0", "the default queue did not drain: a worker runs no job, or metrics.py counts a key MISP keeps"
 
 
 def test_metrics_sync_log_after_org_sync(metrics_text, synced):

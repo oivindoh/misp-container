@@ -12,9 +12,6 @@ Two files describe MISP settings:
     update_settings.py --check --json settings.json
     update_settings.py --write --json settings.json
 
-The cake dump carries each setting's description; the REST endpoint
-(--url/--key) strips descriptions and only serves as a fallback.
-
 --check exits 1 when MISP defines a setting neither file names, or when the
 curated file names a setting MISP no longer defines. --write regenerates the
 catalogue and reports the same two lists. --stack brings up the Compose test
@@ -27,7 +24,6 @@ dump from its web container and tears it down (--keep leaves it running):
 import argparse
 import json
 import sys
-import urllib.request
 from pathlib import Path
 
 import yaml
@@ -72,17 +68,6 @@ def stack_settings(build: bool, keep: bool) -> list[dict]:
     finally:
         stack.finish("settings-update", keep=keep, failed=failed)
     return data["finalSettings"] if isinstance(data, dict) else data
-
-
-def fetch_settings(url: str, key: str) -> list[dict]:
-    """The finalSettings list from /servers/serverSettings."""
-    req = urllib.request.Request(
-        f"{url.rstrip('/')}/servers/serverSettings",
-        headers={"Authorization": key, "Accept": "application/json"},
-    )
-    with urllib.request.urlopen(req, timeout=120) as resp:
-        data = json.load(resp)
-    return data["finalSettings"]
 
 
 def curated_names(path: Path = CURATED, registered_only: bool = False) -> set[str]:
@@ -190,9 +175,7 @@ def main(argv: list[str] | None = None) -> int:
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--check", action="store_true", help="fail on new or stale settings")
     mode.add_argument("--write", action="store_true", help="regenerate settings-upstream.yaml")
-    parser.add_argument("--url", help="MISP base URL")
-    parser.add_argument("--key", help="admin API key")
-    parser.add_argument("--json", help="output of 'cake Admin getSetting all' (or a saved API response)")
+    parser.add_argument("--json", help="output of 'cake Admin getSetting all'")
     parser.add_argument("--stack", action="store_true", help="read the settings from a fresh Compose test stack")
     parser.add_argument("--skip-build", action="store_true", help="with --stack: reuse the images")
     parser.add_argument("--keep", action="store_true", help="with --stack: leave the stack running")
@@ -205,10 +188,8 @@ def main(argv: list[str] | None = None) -> int:
         with open(args.json) as f:
             data = json.load(f)
         live = data["finalSettings"] if isinstance(data, dict) else data
-    elif args.url and args.key:
-        live = fetch_settings(args.url, args.key)
     else:
-        parser.error("--stack, --json, or --url and --key, are required")
+        parser.error("--stack or --json is required")
     curated = curated_names()
     new, stale = diff(live, curated_names(registered_only=True), catalogue_names())
 

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import ast
 import json
+import operator
 import re
 import shutil
 import subprocess
@@ -26,13 +27,12 @@ from typing import Callable
 SCRIPTS = Path(__file__).resolve().parent
 FILES = SCRIPTS.parent / "files"
 sys.path.insert(0, str(FILES))
-sys.path.insert(0, str(SCRIPTS))
 
-from check_scheduler_coverage import uncovered  # noqa: E402
 from misp_container import CONFIG_DEFAULTS, WORKER_GROUP, WORKER_QUEUES  # noqa: E402
 from misp_container.init import LOG_BLOCK, render_log_block  # noqa: E402
 from misp_container.logrelay import FILES as RELAYED  # noqa: E402
 from misp_container.metrics import RUNNING_PREFIX  # noqa: E402
+from misp_container.task import SCHEDULER_COVERAGE  # noqa: E402
 
 BACKGROUND_JOBS = "app/Lib/Tools/BackgroundJobsTool.php"
 SCHEDULER_SHELL = "app/Console/Command/SchedulerWorkerShell.php"
@@ -46,6 +46,11 @@ ORG_IMG_HELPER = "app/View/Helper/OrgImgHelper.php"
 # Where MISP keeps the files of each upload rule of Server::getFileRules(): the
 # chart mounts the attachments claim and Compose a volume at these paths
 IMAGE_DIRS = {"orgs": "files/img/orgs", "img": "files/img/custom"}
+# The packages MISP's own scripts import, and the pins the image installs for them
+MISP_REQUIREMENTS = "requirements.txt"
+OUR_REQUIREMENTS = FILES / "requirements-misp.txt"
+COMPARE = {"==": operator.eq, "!=": operator.ne, ">=": operator.ge, ">": operator.gt,
+           "<=": operator.le, "<": operator.lt}
 # The directories of MISP's own PHP code, and the parts in them that are not MISP's
 MISP_PHP = ("app/Model", "app/Lib", "app/Controller", "app/Console", "app/Plugin")
 NOT_MISP_PARTS = {"cakephp", "Vendor"}
@@ -135,6 +140,40 @@ def job_keys(root: Path) -> list[str]:
     if prefix and prefix.group(1) != RUNNING_PREFIX:
         problems.append(f"MISP's running-job prefix is {prefix.group(1)!r}; RUNNING_PREFIX is {RUNNING_PREFIX!r}")
     return problems
+
+
+TASK_TYPE = re.compile(r"\$task\['type'\]\s*===?\s*'([^']+)'")
+TASK_ACTION = re.compile(r"\$task\['action'\]\s*[!=]==?\s*'(\w+)'")
+IN_ARRAY = re.compile(r"in_array\(\s*\$task\['action'\]\s*,\s*\[([^\]]*)\]")
+ADMIN_ACTIONS = re.compile(r"const\s+ADMIN_ACTIONS\s*=\s*\[(.*?)\];", re.S)
+QUOTED = re.compile(r"'(\w+)'")
+
+
+def offered(source: str) -> tuple[set[str], set[str], set[str]]:
+    """(task types, non-admin actions, admin actions) named in the scheduler shell."""
+    code = re.sub(r"//[^\n]*", "", source)
+    types = set(TASK_TYPE.findall(code))
+    actions = set(TASK_ACTION.findall(code))
+    for listed in IN_ARRAY.findall(code):
+        actions.update(QUOTED.findall(listed))
+    admin = ADMIN_ACTIONS.search(code)
+    admin_actions = set(QUOTED.findall(admin.group(1))) if admin else set()
+    # runAdminTask compares some admin actions to shape their job arguments
+    return types, actions - admin_actions, admin_actions
+
+
+def uncovered(source: str, coverage: dict = SCHEDULER_COVERAGE) -> list[str]:
+    """The task types and actions MISP's scheduler offers that no task runner task covers."""
+    types, actions, admin_actions = offered(source)
+    if not types:
+        return ["no task types found: the scheduler shell changed shape, update this check"]
+    covered_types = {t for t, _ in coverage}
+    covered_actions = {a for t, a in coverage if t != "Admin" and a}
+    covered_admin = {a for t, a in coverage if t == "Admin"}
+    missing = [f"task type {t!r}" for t in sorted(types - covered_types)]
+    missing += [f"task action {a!r}" for a in sorted(actions - covered_actions)]
+    missing += [f"admin action {a!r}" for a in sorted(admin_actions - covered_admin)]
+    return missing
 
 
 def scheduler_tasks(root: Path) -> list[str]:
@@ -352,6 +391,60 @@ def image_paths(root: Path) -> list[str]:
     return problems
 
 
+# -- the Python packages of MISP's scripts -------------------------------------------
+
+def package(name: str) -> str:
+    """A package name as PyPI compares it: case, dots and underscores do not count."""
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+def release(version: str) -> tuple[int, ...] | None:
+    """1.2.10 -> (1, 2, 10) and 1.2.0 -> (1, 2); None for a version with letters, which this check cannot order."""
+    if not re.fullmatch(r"\d+(\.\d+)*", version):
+        return None
+    parts = [int(p) for p in version.split(".")]
+    while len(parts) > 1 and parts[-1] == 0:
+        parts.pop()
+    return tuple(parts)
+
+
+def pinned(text: str) -> dict[str, str]:
+    """{package: version} of the name==version lines of a requirements file."""
+    pins = {}
+    for line in text.splitlines():
+        found = re.match(r"\s*([A-Za-z0-9][A-Za-z0-9._-]*)\s*==\s*([^\s;#]+)", line)
+        if found:
+            pins[package(found.group(1))] = found.group(2)
+    return pins
+
+
+def python_requirements(root: Path) -> list[str]:
+    """requirements-misp.txt pins every package of MISP's requirements.txt at a version MISP accepts."""
+    pins = pinned(OUR_REQUIREMENTS.read_text())
+    problems = []
+    for line in read(root, MISP_REQUIREMENTS).splitlines():
+        line = line.split("#", 1)[0].strip()
+        if not line:
+            continue
+        found = re.match(r"([A-Za-z0-9][A-Za-z0-9._-]*)(\[[^\]]*\])?\s*([^;]*)", line)
+        if not found:
+            problems.append(f"cannot read the requirement {line!r}: check it by hand")
+            continue
+        name = package(found.group(1))
+        if name not in pins:
+            problems.append(f"MISP's scripts need {line}, which no pin covers: run mise run misp-requirements")
+            continue
+        for clause in filter(None, (c.strip() for c in found.group(3).split(","))):
+            spec = re.fullmatch(r"(==|!=|>=|<=|>|<)\s*(\S+)", clause)
+            have, want = release(pins[name]), release(spec.group(2)) if spec else None
+            if not spec or have is None or want is None:
+                problems.append(f"cannot compare the pin {name}=={pins[name]} with {clause}: check it by hand")
+            elif not COMPARE[spec.group(1)](have, want):
+                problems.append(f"MISP's scripts need {name}{clause}, the pin is {pins[name]}: "
+                                "run mise run misp-requirements")
+    return problems
+
+
 CHECKS = [
     Check("worker-queues", BACKGROUND_JOBS, "files/misp_container/__init__.py WORKER_QUEUES", worker_queues),
     Check("worker-group", BACKGROUND_JOBS, "files/misp_container/__init__.py WORKER_GROUP", worker_group),
@@ -367,6 +460,7 @@ CHECKS = [
           "files/misp_container/logrelay.py FILES", relayed_files),
     Check("image-paths", f"{SERVER_MODEL}, {ORG_IMG_HELPER}",
           "deploy/chart/templates/_helpers.tpl misp.appVolumeMounts, deploy/docker-compose.yml", image_paths),
+    Check("python-requirements", MISP_REQUIREMENTS, "files/requirements-misp.txt", python_requirements),
 ]
 PHP_CHECK = Check("log-block-php", "php", "files/misp_container/init.py LOG_BLOCK", log_block_php)
 

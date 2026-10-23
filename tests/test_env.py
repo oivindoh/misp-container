@@ -79,6 +79,15 @@ class TestDerivedDefaults:
             assert os.environ["MISP_CONTACT"] == "a@x"
             assert os.environ["GNUPG_EMAIL"] == "a@x"
 
+    def test_the_admin_org_names_the_hosting_organisation(self):
+        with patch.dict(os.environ, {"ADMIN_ORG": "Example Org"}, clear=False):
+            os.environ.pop("MISP_ORG", None)
+            apply_defaults()
+            assert os.environ["MISP_ORG"] == "Example Org"
+        with patch.dict(os.environ, {"ADMIN_ORG": "Example Org", "MISP_ORG": "EXAMPLE"}, clear=False):
+            apply_defaults()
+            assert os.environ["MISP_ORG"] == "EXAMPLE"
+
 
 class TestAuthAliases:
     def test_documented_oidc_names_feed_derived_ones(self):

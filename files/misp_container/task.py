@@ -74,8 +74,8 @@ DESCRIPTIONS = {
 
 # Every task type and action that MISP's scheduler offers
 # (app/Console/Command/SchedulerWorkerShell.php), with the task that does the
-# same work. scripts/check_scheduler_coverage.py fails a MISP release whose
-# scheduler offers one that is missing here.
+# same work. The scheduler-tasks check of scripts/check_upstream.py fails a MISP
+# release whose scheduler offers one that is missing here.
 SCHEDULER_COVERAGE = {
     ("Server", "pull"): "pull-servers",
     ("Server", "push"): "push-servers",

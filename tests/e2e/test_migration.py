@@ -341,6 +341,19 @@ def test_postgres_new_rows_get_ids_past_the_copied_ones(stack, postgres_copy):
     assert stack.sql("SELECT COUNT(*) FROM tags WHERE id = (SELECT last_value FROM tags_id_seq)") == "1"
 
 
+def test_postgres_new_attachment_goes_to_the_bucket(stack, postgres_copy):
+    # The volume still holds a copy of every migrated attachment, so a read through
+    # the API passes from disk as well; only a new upload shows where MISP writes
+    event = stack.api("POST", "/events/add", stack.key, {
+        "info": "S3 target event", "distribution": "0", "threat_level_id": "4", "analysis": "0"}) or {}
+    event_id = event.get("Event", {}).get("id")
+    attribute = stack.api("POST", f"/attributes/add/{event_id}", stack.key, {
+        "event_id": event_id, "category": "Payload delivery", "type": "attachment", "value": "s3.txt",
+        "data": base64.b64encode(b"S3 target attachment").decode()}) or {}
+    key = f"{event_id}/{attribute.get('Attribute', {}).get('id')}"
+    assert objects(S3_TARGET["PLUGIN_S3_BUCKET_NAME"]).get(key) == b"S3 target attachment"
+
+
 # -- bucket to bucket ----------------------------------------------------------------
 
 def test_bucket_copy_exits_0(bucket_copy):

@@ -6,9 +6,10 @@
   `mise run test-sync` for the three-instance sync suite. Podman runs the containers.
 - Settings: curated defaults in `files/misp-config/settings.yaml`, the generated catalogue in
   `settings-upstream.yaml` (`mise run settings-update`).
-- New MISP release: the tracking workflow opens a PR with the bump, `files/composer.lock` and
-  the catalogue; CI's strict checks tell you what changed.
+- New MISP release: the tracking workflow opens a PR with the bump, `files/composer.lock`,
+  `files/requirements-misp.txt` and the catalogue; CI's strict checks tell you what changed.
 - Release: `mise run release <hotfix|normal|breaking>`, then push master and the tag.
+- Pull requests: a draft runs the unit tests only; marking it ready for review runs every suite.
 - MISP 3.0 Early Access lives on the `misp-3.0` branch, images `3.0-wip` (see MISP 3.0); a
   workflow merges master into it.
 
@@ -18,13 +19,11 @@
 
 ```bash
 cd misp-container      # mise creates .venv on enter
-mise run test          # unit tests (~0.3s)
-mise run test-upstream     # the MISP in the image against what the image patches or depends on (~5s)
+mise run test          # unit tests, the chart lint and every chart render validated against the schemas
 mise run test-integration  # the upstream guard, then the full Compose stack with podman (~2min)
 mise run test-integration -- --db-engine postgres   # the same suite on PostgreSQL
 mise run test-sync     # hub-spoke 3-instance sync (~2min)
 mise run test-all      # unit, the upstream guard, integration, sync, migration
-mise run test-chart     # helm lint, and every chart render validated against the schemas
 mise run test-kind      # the chart on a kind cluster: install, helm test, task runs, upgrade, rollback
 ```
 
@@ -45,9 +44,9 @@ The integration suite runs every container with `read_only: true` (except web, w
 ## New MISP releases
 
 `.github/workflows/track-misp-releases.yaml` checks upstream daily. For a new release it
-bumps `CORE_TAG`, resolves `files/composer.lock` for that release, builds the image, starts
-the Compose stack, regenerates the settings catalogue from that MISP, and opens a PR with
-all three changes. CI then builds, scans and runs every suite on the PR. Three checks warn
+bumps `CORE_TAG`, resolves `files/composer.lock` and `files/requirements-misp.txt` for that
+release, builds the image, starts the Compose stack, regenerates the settings catalogue from
+that MISP, and opens a PR with all four changes. CI then builds, scans and runs every suite on the PR. Three checks warn
 about a change in MISP:
 
 | Check | Fails when |
@@ -78,6 +77,7 @@ revisit.
 | `shell-streams` | CakePHP's `Shell.php` | `LOG_BLOCK` in `misp_container/init.py` | checks other stream names before it adds its console streams |
 | `relayed-files` | MISP's PHP code | `FILES` in `misp_container/logrelay.py` | writes a new file under `app/tmp/logs`, or stops writing one the relay follows |
 | `image-paths` | `Server.php`, `OrgImgHelper.php` | `misp.appVolumeMounts` in `deploy/chart/templates/_helpers.tpl`, `deploy/docker-compose.yml` | uploads org logos or custom images to, or reads them from, a directory the volumes do not mount |
+| `python-requirements` | `requirements.txt` | `files/requirements-misp.txt` | needs a Python package, or a version of one, that the pins do not give (`mise run misp-requirements`) |
 | `log-block-php` | PHP in the image | `LOG_BLOCK` in `misp_container/init.py` | cannot run the logging block, in either format |
 
 A new queue needs its name in `WORKER_QUEUES` and `NUM_WORKERS_<QUEUE>` in
@@ -152,7 +152,7 @@ The push starts two runs of the release commit. The `gate` job stops the master 
 tag run tests the commit and releases it.
 
 CI runs the tests and the scans, then pushes the images and the chart, and creates a GitHub
-Release. The release job refuses a tag whose image tag differs from `appVersion`, an image tag
+Release. The `publish` job refuses a tag whose image tag differs from `appVersion`, an image tag
 that GHCR already holds, and a chart version that GHCR already holds.
 
 | Artefact | Version |
@@ -187,17 +187,18 @@ flowchart LR
     P --> C[CI: the required checks]
     C -->|all pass| G[GitHub merges it]
     G --> B[CI on misp-3.0: build, scan, master-merged]
-    B --> R[prerelease: images and chart]
+    B --> R[publish: images and chart]
 ```
 
 CI on `misp-3.0` fails its `master-merged` job while master has commits the branch lacks, and
-`prerelease` needs that job: no 3.0 build ships without the fixes of master. A sync pull
+`publish` needs that job: no 3.0 build ships without the fixes of master. A sync pull
 request whose checks fail stays open; the next push to master merges again and updates it.
 
 The ruleset requires a pull request to be up to date with `misp-3.0`, so its merge commit has
 the tree its checks ran on. The push run of that merge commit skips `unit` and the suites, and
 builds, scans and publishes. A push that merges no pull request runs every job. A sync pull
 request that falls behind `misp-3.0` waits for the next push to master, which merges again.
+Both branches carry the same `ci.yaml`: its `gate` job tells the branches apart.
 
 `scripts/merge_into_misp3.py` does the merge. Where the branch pins MISP 3.0 and master pins
 2.5, the merge keeps the branch's side:
@@ -206,12 +207,13 @@ request that falls behind `misp-3.0` waits for the next push to master, which me
 |-----|---------|
 | `ARG CORE_TAG` and `ARG CORE_COMMIT` in the `Dockerfile` | the script: a conflict of only these lines takes the branch's side |
 | `files/composer.lock`, `files/misp-config/settings-upstream.yaml` | the branch's `.gitattributes` (`merge=ours`): the files stay whole |
+| `files/requirements-misp.txt` | the branch's `.gitattributes` keeps it through the merge, and the workflow resolves it anew for the branch's MISP commit |
 | `AGENTS.md` and the generated regions of the docs | the branch's `.gitattributes` keeps `AGENTS.md` through the merge, and the workflow writes both anew from the merged tree |
 
 ### Moving to a newer 3.0_wip commit
 
 1. On a branch from `misp-3.0`, set `ARG CORE_COMMIT` in the `Dockerfile` to the commit.
-2. Run `mise run composer-lock`.
+2. Run `mise run composer-lock` and `mise run misp-requirements`.
 3. Run `mise run settings-update`. Remove from `settings.yaml` each setting the summary names
    as stale.
 4. Open a pull request to `misp-3.0`. The upgrade suite and the upstream guard report what
@@ -241,14 +243,11 @@ The sync needs these pieces of the repository's settings:
 | GitHub App `misp-v3-sync` | Installed on this repository, with read and write access to contents, pull requests, issues and workflows. It opens the pull requests: a pull request made with `GITHUB_TOKEN` starts no CI, and `GITHUB_TOKEN` may not push a change to a workflow file. |
 | Variable `MISP3_SYNC_CLIENT_ID` | The App's client ID |
 | Secret `MISP3_SYNC_PRIVATE_KEY` | A private key of the App |
-| Ruleset "misp-3.0 requires CI" | Requires the checks below, on a pull request that is up to date with `misp-3.0`, before a merge into `misp-3.0`. Repository admins bypass it. |
+| Ruleset "misp-3.0 requires CI" | Requires the check `ci-ok`, on a pull request that is up to date with `misp-3.0`, before a merge into `misp-3.0`. Repository admins bypass it. |
 | Auto-merge | Allowed for the repository. The workflow turns it on for its pull request only while a rule requires checks; without one, the pull request waits for a person. |
 
-The required checks are `master-merged`, `unit`, `integration`,
-`integration-postgres`, `hub-spoke`, `migration`, `upgrade (mariadb)`, `upgrade (postgres)`,
-`kind (mariadb)`, `kind (postgres)` and the three `scan` jobs. Rename a job of the branch's
-`ci.yaml` in the ruleset as well: a required check that never reports holds every sync pull
-request open.
+`ci-ok` fails when any job of the run failed or was cancelled, and on a draft. Rename it in the
+ruleset as well: a required check that never reports holds every sync pull request open.
 
 ## Settings Engine
 
@@ -299,18 +298,23 @@ next run leaves the setting to the operator again. Env vars always take preceden
 `files/misp-config/settings-upstream.yaml` is generated, never edited: every setting the
 running MISP defines that `settings.yaml` does not name, with MISP's own default, description,
 type and level, all `track_only`. The source is `cake Admin getSetting all` inside the web
-container; the REST endpoint strips descriptions. The image never applies those values; the file documents
-them and makes every MISP setting overridable through its derived env var.
+container, which carries each setting's description. The image never applies those values; the file
+documents them and makes every MISP setting overridable through its derived env var.
 
 ```bash
 mise run settings-update              # build the stack, regenerate, tear down
 mise run settings-update -- --skip-build
 mise run composer-lock                # resolve files/composer.lock for the current CORE_TAG
+mise run misp-requirements           # resolve files/requirements-misp.txt for the current CORE_TAG
 ```
 
 `files/composer.lock` pins MISP's PHP dependencies plus this image's extra packages. The
 build installs exactly that lock and fails when it no longer matches upstream's
 `composer.json`, which is the signal to run `mise run composer-lock` after a bump.
+
+`files/requirements-misp.txt` pins the Python packages MISP's own scripts import (STIX,
+TAXII, ZeroMQ, sample extraction), resolved from MISP's `requirements.txt`. The upstream
+guard fails while MISP asks for a package or a version the pins do not give.
 
 The integration suite runs `scripts/update_settings.py --check` and fails when MISP defines a
 setting neither file names, or when `settings.yaml` names one MISP no longer defines. It also
@@ -381,17 +385,17 @@ files/
   entrypoint-metrics.py     # Prometheus metrics HTTP server (metrics Deployment)
   Caddyfile                 # Caddy configuration
   php.ini.template, php-fpm-pool.conf.template
-  requirements-*.txt        # Pinned Python dependencies (final, modules)
+  requirements-*.txt        # Pinned Python dependencies (final, modules; misp: generated)
   composer.lock             # Resolved PHP dependencies for the current CORE_TAG (generated)
 scripts/
   release.py                # mise run release <hotfix|normal|breaking>
   update_settings.py        # The catalogue tool (--stack --write: mise run settings-update; --check in the integration suite)
-  check_scheduler_coverage.py  # Fails when MISP's scheduler offers work no task covers
   check_upstream.py         # Fails when MISP changed something the image patches or depends on
   generate_agents_md.py     # Writes AGENTS.md from the tree (mise run agents-md)
   generate_docs.py          # Fills the generated regions of the docs (mise run docs)
   chart.py                  # Renders the Helm chart for the generators and the tests
   update-composer-lock.sh   # Resolves files/composer.lock through the composer-lock stage
+  update_misp_requirements.py  # Resolves files/requirements-misp.txt (mise run misp-requirements)
   merge_into_misp3.py       # Merges master into misp-3.0, keeping the branch's MISP 3.0 pins
 tests/
   test_*.py                 # Unit tests (see tests/README.md)
