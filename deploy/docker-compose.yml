@@ -220,7 +220,7 @@ services:
 
   # -- MariaDB -------------------------------------------------------------
   mysql:
-    image: docker.io/library/mariadb:11.8.9@sha256:79d59758afc91b89b120b0a8904d637f5a3b3e1c4900f29b740d6d46c72fef68
+    image: docker.io/library/mariadb:11.8.9@sha256:6422478cb8e159f080fb1d8ccf65101e26fe51385787fde7d16c3b165a331f15
     command:
       - --character-set-server=utf8mb4
       - --collation-server=utf8mb4_unicode_ci
