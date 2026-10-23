@@ -485,7 +485,11 @@ $CAKE user change_pw headeruser@example.com 'HeaderUserPass123!' --no_password_c
     stack.exec("web", "/var/www/MISP/app/Console/cake Admin setSetting -q Plugin.CustomAuth_enable false")
 
 
-def test_custom_auth_header_logs_in(custom_auth):
+def test_custom_auth_header_logs_in(custom_auth, request):
+    if custom_auth.engine_under_test == "postgres":
+        # The page is the event index, which hits the bug of the OIDC login below for a
+        # user on the Overmind theme. Not strict: the user does not always get that theme
+        request.applymarker(pytest.mark.xfail(strict=False, reason="MISP 3.0 event index stats fail on PostgreSQL"))
     # A logged-in browser gets the page; a logged-out one the login redirect
     status, _ = custom_auth.http("GET", "/events/index", json_api=False, redirects=False,
                                  headers={"X-Forwarded-Email": "headeruser@example.com"})
