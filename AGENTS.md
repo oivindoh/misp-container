@@ -247,7 +247,6 @@ Fail when MISP no longer matches what this image patches or depends on. A failur
 | Script | Does |
 |---|---|
 | `chart.py` | Render the Helm chart in deploy/chart for the doc generators and the tests. |
-| `check_scheduler_coverage.py` | Fail when MISP's scheduler offers work that no task runner task covers. |
 | `check_upstream.py` | Fail when MISP no longer matches what this image patches or depends on. |
 | `generate_agents_md.py` | Write AGENTS.md: a map of the repository, read from the tree itself. |
 | `generate_docs.py` | Fill the generated regions of the docs from the code. |
@@ -297,7 +296,6 @@ Unit tests (`tests/`, no containers):
 | `test_migrate.py` | Unit tests for the migration Job (misp_container.migrate). |
 | `test_release.py` | Unit tests for the release tool (scripts/release.py): the next tag and chart version. |
 | `test_s3.py` | Unit tests for the minimal S3 client (misp_container.s3). |
-| `test_scheduler_coverage.py` | Unit tests for the scheduler coverage guard (scripts/check_scheduler_coverage.py). |
 | `test_sync.py` | Unit tests for the org sync engine. |
 | `test_task.py` | Unit tests for the periodic task runner. |
 | `test_update_settings.py` | Unit tests for the settings catalogue updater (scripts/update_settings.py). |
@@ -322,17 +320,13 @@ Stack files and runners:
 |---|---|
 | `mise run test` | Run unit tests |
 | `mise run test-integration` | Run the upstream guard and the integration tests (requires podman) |
-| `mise run test-upstream` | Check the MISP in the image against what this repository patches or depends on |
 | `mise run test-sync` | Run hub-spoke sync test (3 MISP instances) |
 | `mise run test-migration` | Run the migration suite (MariaDB to MariaDB and to PostgreSQL) |
-| `mise run test-chart` | Lint the Helm chart, render it with each component and validate against the schemas |
 | `mise run test-kind` | Install, test, upgrade and roll back the Helm chart on a kind cluster (build the images first) |
 | `mise run agents-md` | Regenerate AGENTS.md from the tree |
 | `mise run docs` | Regenerate the generated regions of the docs and AGENTS.md from the code |
 | `mise run test-all` | Run unit + integration + sync + migration tests |
 | `mise run smoketest` | Run smoke test against a live MISP instance |
-| `mise run logs` | Follow integration test compose logs |
-| `mise run logs-sync` | Follow sync test compose logs |
 | `mise run settings-update` | Regenerate files/misp-config/settings-upstream.yaml from a live MISP (builds and runs the test stack) |
 | `mise run composer-lock` | Resolve MISP's PHP dependencies for the current CORE_TAG into files/composer.lock |
 | `mise run misp-requirements` | Resolve the Python packages of MISP's own scripts for the current CORE_TAG into files/requirements-misp.txt |
@@ -342,21 +336,20 @@ Stack files and runners:
 
 | Job | Needs | Steps |
 |---|---|---|
-| `gate` |  | Look for a release tag on the commit |
+| `gate` |  | Plan the run |
+| `master-merged` |  | Check that master is merged |
 | `build` | `gate` | Build ${{ matrix.name }} image |
 | `unit` | `gate` | Install helm and kubeconform; Unit tests |
-| `integration` | `build` | Load the images; Integration tests; Upload the test report and the compose logs |
-| `integration-postgres` | `build` | Load the images; Integration tests on PostgreSQL; Upload the test report and the compose logs |
-| `hub-spoke` | `build` | Load the images; Hub-spoke sync tests; Upload the test report and the compose logs |
-| `migration` | `build` | Load the images; Migration tests; Upload the test report and the compose logs |
-| `kind` | `build` | Load the images; Install kind and helm; Python for the smoke test; Kubernetes test on kind (${{ matrix.database }}) |
-| `scan` | `build` | Build ${{ matrix.target }} image (from cache); Trivy vulnerability scan (${{ matrix.target }}); Upload scan results; Fail on a fixable CRITICAL finding (${{ matrix.target }}) |
-| `release` | `unit`, `integration`, `integration-postgres`, `hub-spoke`, `migration`, `kind`, `scan` | Extract version info; Install helm; Check the chart version; Log in to GHCR; Check tag immutability; Docker tags; Build and push misp (from cache); Build and push caddy (from cache); Build and push modules (from cache); Push the chart; Create GitHub Release |
+| `suite` | `gate`, `build` | Load the images; Run the suite; Upload the test report and the compose logs |
+| `kind` | `gate`, `build` | Load the images; Install kind and helm; Python for the smoke test; Kubernetes test on kind (${{ matrix.database }}) |
+| `scan` | `gate`, `build` | Build ${{ matrix.target }} image (from cache); Trivy vulnerability scan (${{ matrix.target }}); Upload scan results; Fail on a fixable CRITICAL finding (${{ matrix.target }}) |
+| `ci-ok` | `gate`, `master-merged`, `build`, `unit`, `suite`, `kind`, `scan` | Check the jobs |
+| `publish` | `gate`, `master-merged`, `build`, `unit`, `suite`, `kind`, `scan` | Install helm; Plan the publication; Log in to GHCR; Check tag immutability; Build and push misp (from cache); Build and push caddy (from cache); Build and push modules (from cache); Push the chart; Create GitHub Release |
 
 ## Workflows: `.github/workflows/`
 
 | Workflow | Runs on | Does |
 |---|---|---|
-| `.github/workflows/ci.yaml` | push (master, tag v*), pull_request (master) | Tests, scans and releases the images and the Helm chart: unit tests, the chart renders, the stack suites in Compose, the chart on kind and Trivy; on a tag, pushes the images and the chart and creates the release (tests/README.md, CI). |
+| `.github/workflows/ci.yaml` | push (master, misp-3.0, tag v*), pull_request (master, misp-3.0) | Tests, scans and releases the images and the Helm chart: unit tests, the chart renders, the stack suites in Compose, the chart on kind and Trivy; on a tag, pushes the images and the chart and creates the release (tests/README.md, CI). On the misp-3.0 branch, pushes the MISP 3.0 Early Access images instead. The file is the same on master and misp-3.0: the gate decides what a run does. |
 | `.github/workflows/sync-misp-3.0.yaml` | push (master), workflow_dispatch | Merges master into the misp-3.0 branch (MISP 3.0 Early Access) after each push to master, through a pull request that CI tests, so the 2.5 fixes reach the 3.0 images. A GitHub App token opens it: a push or a pull request made with GITHUB_TOKEN starts no workflow and may not change workflow files. A conflict beyond the pinned MISP version opens an issue (DEVELOPING.md, The misp-3.0 branch). |
 | `.github/workflows/track-misp-releases.yaml` | schedule, workflow_dispatch | Opens a pull request for each new MISP release: bumps CORE_TAG, resolves files/composer.lock and files/requirements-misp.txt, and regenerates the settings catalogue (DEVELOPING.md, New MISP releases). |

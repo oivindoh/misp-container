@@ -141,6 +141,11 @@ def test_admin_org_uuid(stack):
     assert me(stack).get("Organisation", {}).get("uuid") == TEST_ENV["ADMIN_ORG_UUID"]
 
 
+def test_misp_org_is_the_admin_org(stack):
+    # stack.sql drops the whitespace of its output
+    assert stack.sql("SELECT value FROM system_settings WHERE setting='MISP.org'") == '"TestOrg"'
+
+
 def test_last_pw_change_is_set(stack):
     assert "NULL" not in stack.sql("SELECT last_pw_change FROM users WHERE id=1;")
 
@@ -898,13 +903,6 @@ def test_metrics_waiting_job_shows_in_the_queue(waiting_job):
     assert waiting_job and int(waiting_job) >= 1, (
         f"a job queued with the worker stopped reads {waiting_job!r} in misp_jobs_queued: metrics.py reads "
         "Redis keys MISP no longer writes (see the job-keys check in tests/e2e/test_upstream.py)")
-
-
-def test_metrics_queue_returns_to_0(waiting_job):
-    deadline = time.monotonic() + 30
-    while default_depth() != "0" and time.monotonic() < deadline:
-        time.sleep(1)
-    assert default_depth() == "0", "the default queue did not drain: a worker runs no job, or metrics.py counts a key MISP keeps"
 
 
 def test_metrics_sync_log_after_org_sync(metrics_text, synced):

@@ -29,13 +29,27 @@ class TestConfigureAdminOrg:
     @patch("misp_container.admin.db.execute")
     @patch("misp_container.admin.db.dict_query")
     def test_a_new_uuid_creates_the_org(self, query, execute, set_setting):
-        query.side_effect = [[], [{"id": 9}], [{"org_id": 9}]]
+        query.side_effect = [[], [], [{"id": 9}], [{"org_id": 9}]]
         with patch.dict(os.environ, {"ADMIN_ORG_UUID": UUID}):
             admin._configure_admin_org("CERT")
         insert = execute.call_args_list[0][0]
         assert insert[0].startswith("INSERT INTO organisations")
         assert insert[1] == ("CERT", UUID)
         assert len(execute.call_args_list) == 2  # insert, rename; the admin is in the org already
+
+    @patch("misp_container.admin.cake.set_setting")
+    @patch("misp_container.admin.db.execute")
+    @patch("misp_container.admin.db.dict_query")
+    def test_the_org_misp_generated_takes_the_uuid(self, query, execute, set_setting):
+        # MISP generated it for its first user, named after MISP.org
+        query.side_effect = [[], [{"id": 1}], [{"org_id": 1}]]
+        with patch.dict(os.environ, {"ADMIN_ORG_UUID": UUID}):
+            admin._configure_admin_org("CERT")
+        assert query.call_args_list[1][0][1] == ("CERT", admin.GENERATED_ORG_DESCRIPTION)
+        adopt = execute.call_args_list[0][0]
+        assert adopt[0].startswith("UPDATE organisations SET uuid") and adopt[1] == (UUID, 1)
+        assert not any(c[0][0].startswith("INSERT") for c in execute.call_args_list)
+        set_setting.assert_called_once_with("MISP.host_org_id", 1)
 
     @patch("misp_container.admin.db.execute")
     @patch("misp_container.admin.db.dict_query")

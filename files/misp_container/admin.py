@@ -98,6 +98,10 @@ def configure_gnupg() -> None:
 # -- Internal helpers --
 
 
+# The description MISP gives the organisation it generates for its first user (User.php)
+GENERATED_ORG_DESCRIPTION = "Automatically generated admin organisation"
+
+
 def _org_id_by_uuid(org_uuid: str):
     row = _one("SELECT id FROM organisations WHERE uuid = %s", (org_uuid,))
     return row["id"] if row else None
@@ -108,6 +112,16 @@ def _configure_admin_org(admin_org: str) -> None:
     org_uuid = env("ADMIN_ORG_UUID")
     if org_uuid:
         org_id = _org_id_by_uuid(org_uuid)
+        if not org_id:
+            # MISP names the organisation it generates for its first user after
+            # MISP.org, which ADMIN_ORG fills (env.py): that one becomes the admin org
+            generated = _one("SELECT id FROM organisations WHERE name = %s AND type = 'ADMIN' AND description = %s",
+                             (admin_org, GENERATED_ORG_DESCRIPTION))
+            if generated:
+                org_id = generated["id"]
+                log.info("giving the organisation MISP generated, '%s', the UUID %s", admin_org, org_uuid)
+                db.execute("UPDATE organisations SET uuid = %s, date_modified = NOW() WHERE id = %s",
+                           (org_uuid, org_id))
         if not org_id:
             log.info("creating organisation '%s' with UUID %s", admin_org, org_uuid)
             db.execute(
