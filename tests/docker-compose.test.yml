@@ -35,8 +35,7 @@ services:
     read_only: true
   web:
     <<: *test-env
-    # Not read_only: version-gate tests patch /etc/misp-docker/settings.yaml.
-    # In K8s, readOnlyRootFilesystem is set and settings.yaml is mounted read-only.
+    read_only: true
   worker:
     <<: *test-env
     read_only: true

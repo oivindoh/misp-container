@@ -22,7 +22,7 @@ sys.path.insert(0, str(REPO / "files"))
 sys.path.insert(0, str(SCRIPTS))
 
 import chart  # noqa: E402
-from generate_agents_md import table  # noqa: E402
+from generate_agents_md import docstring, table  # noqa: E402
 
 DOCS = [REPO / "README.md", REPO / "DEVELOPING.md", REPO / "tests" / "README.md", *sorted((REPO / "docs").glob("*.md"))]
 REGION = re.compile(r"(<!-- generated: (?P<name>[\w-]+) -->\n)(?P<body>.*?)(<!-- end generated -->)", re.S)
@@ -108,10 +108,23 @@ def values() -> str:
     return table(("Value", "Is"), chart.value_rows()[0])
 
 
+def unit_tests() -> str:
+    return table(("Module", "Tests"), [(f"`{p.name}`", docstring(p)) for p in sorted((REPO / "tests").glob("test_*.py"))])
+
+
+def upstream_checks() -> str:
+    import check_upstream
+    checks = [*check_upstream.CHECKS, check_upstream.PHP_CHECK]
+    return table(("Check", "MISP file", "Ours", "Fails when MISP"),
+                 [(f"`{c.name}`", c.upstream, c.ours, c.fails_when) for c in checks])
+
+
 GENERATORS = {
     "components": components,
     "periodic-tasks": periodic_tasks,
     "secrets": secrets,
+    "unit-tests": unit_tests,
+    "upstream-checks": upstream_checks,
     "values": values,
 }
 

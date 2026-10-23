@@ -53,8 +53,7 @@ never do, so they start in seconds and any number of them can run.
 3. Imports the engine's schema baseline (`MYSQL.sql` or `POSTGRESQL.sql`) on an empty database,
    then runs `cake Admin runUpdates`.
 4. Reads every current setting once, compares with `settings.yaml`, and calls `cake` only for
-   the differences: env-driven settings are enforced, defaults are written once, version-gated
-   defaults once per image version.
+   the differences: env-driven settings are enforced, and defaults are written once.
 5. Creates or updates the admin user, organisation, password and API key; configures GPG and
    the auth plugins.
 6. Sets `MISP.live=true`.

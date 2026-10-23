@@ -196,7 +196,8 @@ same-engine copy took under 3 minutes.
 ## After the copy
 
 - **Passwords and authkeys** work as before when the salt and encryption key are the old
-  ones. `ADMIN_PASSWORD` applies only when the admin user does not exist.
+  ones. The configure Job sets the e-mail, password and API key of user 1 from `ADMIN_*` on
+  every run. On a copy, user 1 is the old instance's user 1.
 - **Settings** stored in the old database are kept, except those this image drives from
   env (`MISP.baseurl`, Redis, workers, the attachments directory, ...), which the configure
   Job enforces.

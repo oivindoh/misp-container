@@ -8,12 +8,18 @@ from .log import get as getlog
 log = getlog("cake")
 
 
-def run(*args, check=False):
+def run(*args):
     """Run a cake command. Returns (returncode, stdout)."""
     result = subprocess.run([CAKE, *args], capture_output=True, text=True)
-    if check and result.returncode != 0:
-        raise RuntimeError(f"cake {' '.join(args)} failed: {result.stderr.strip()}")
     return result.returncode, result.stdout.strip()
+
+
+def run_checked(*args):
+    """Run a cake command that the configure step cannot do without; raise when it fails."""
+    result = subprocess.run([CAKE, *args], capture_output=True, text=True)
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout).strip().splitlines()[-5:]
+        raise RuntimeError(f"cake {' '.join(args)} exited {result.returncode}: " + " / ".join(detail))
 
 
 def set_setting(setting, value, force=False):
@@ -31,27 +37,21 @@ def set_setting(setting, value, force=False):
     return True
 
 
-def get_setting(setting):
-    """Get a MISP setting via cake Admin getSetting. Returns the raw JSON output."""
-    _, stdout = run("Admin", "getSetting", setting)
-    return stdout
-
-
 def run_updates():
     """Run MISP database updates."""
     log.info("running MISP database updates")
-    run("Admin", "runUpdates")
+    run_checked("Admin", "runUpdates")
 
 
 def run_db_script(name):
     """Run a MISP database script (idempotent)."""
     log.info("running DB script: %s", name)
-    run("Admin", "runDbScript", name)
+    run_checked("Admin", "runDbScript", name)
 
 
 def user_init():
     """Initialize default user/role/org."""
-    run("user", "init")
+    run_checked("user", "init")
 
 
 def user_change_pw(email, password, no_password_change=True):

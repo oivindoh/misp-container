@@ -34,8 +34,12 @@ updates:
       - dependency-name: library/mariadb
         update-types: ["version-update:semver-major", "version-update:semver-minor"]
 
-  # The Python pins: the repository's own (uv.lock) and the images' (files/requirements-*.txt)
+  # The Python pins: the repository's own (uv.lock) and the images' (files/requirements-*.txt).
+  # files/requirements-misp.txt follows MISP's own requirements.txt, so mise run
+  # misp-requirements updates it, never a single bump
   - package-ecosystem: uv
     directory: /
+    exclude-paths:
+      - files/requirements-misp.txt
     schedule:
       interval: weekly

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import subprocess
 from pathlib import Path
 
@@ -39,7 +38,7 @@ def setup_admin() -> None:
     _configure_admin_org(admin_org)
 
     # Set admin password
-    password = _read_secret("ADMIN_PASSWORD", "ADMIN_PASSWORD_FILE")
+    password = env("ADMIN_PASSWORD")
     if password:
         if len(password) < 12:
             log.error("ADMIN_PASSWORD is too short (%d chars). MISP requires at least 12 "
@@ -54,7 +53,7 @@ def setup_admin() -> None:
                            f"last_pw_change = {db.now_epoch()} WHERE id = 1")
 
     # Set admin API key
-    api_key = _read_secret("ADMIN_KEY", "ADMIN_KEY_FILE")
+    api_key = env("ADMIN_KEY")
     if api_key:
         _set_admin_authkey(admin_email, api_key)
 
@@ -149,22 +148,26 @@ def _configure_admin_org(admin_org: str) -> None:
                    (admin_org, admin_org))
 
 
-def _set_admin_authkey(email: str, api_key: str) -> None:
-    """Set admin API key, skipping if it already exists (idempotent)."""
+def has_authkey(user_id: int, authkey: str) -> bool:
+    """Whether a live auth_keys row of the user already holds this key."""
+    import bcrypt
+
     # MISP keeps the first and last four characters of a key next to its hash
-    row = _one(
-        "SELECT COUNT(*) AS n FROM auth_keys WHERE user_id = 1 AND authkey_start = %s AND authkey_end = %s "
+    rows = db.dict_query(
+        "SELECT authkey FROM auth_keys WHERE user_id = %s AND authkey_start = %s AND authkey_end = %s "
         f"AND (expiration = 0 OR expiration > {db.now_epoch()})",
-        (api_key[:4], api_key[-4:]),
+        (user_id, authkey[:4], authkey[-4:]),
     )
-    if not row or not int(row["n"]):
+    for row in rows:
+        # MISP writes PHP's $2y$ prefix; the bcrypt module checks $2b$
+        stored = str(row["authkey"]).replace("$2y$", "$2b$", 1).encode()
+        if bcrypt.checkpw(authkey.encode(), stored):
+            return True
+    return False
+
+
+def _set_admin_authkey(email: str, api_key: str) -> None:
+    """Set the admin's API key, unless a live key of user 1 already is this one."""
+    if not has_authkey(1, api_key):
         log.info("setting admin API key")
         cake.user_change_authkey(email, api_key)
-
-
-def _read_secret(env_key: str, file_key: str) -> str:
-    """Read a secret from a file (if FILE env set) or from the env var directly."""
-    file_path = env(file_key)
-    if file_path and os.path.isfile(file_path):
-        return Path(file_path).read_text().strip()
-    return env(env_key)

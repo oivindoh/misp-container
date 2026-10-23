@@ -110,16 +110,15 @@ class TestCheckWritable:
 class TestPopulateGnupg:
     """Import of the instance key from the mounted Secret."""
 
-    def _env(self, tmp_path, key_file):
+    def _env(self, tmp_path):
         return {
-            "GNUPG_KEY_FILE": str(key_file),
             "GNUPG_HOMEDIR": str(tmp_path / "gnupg"),
             "GNUPG_BINARY": "gpg",
         }
 
     def test_no_key_file_is_noop(self, tmp_path):
         from misp_container.init import populate_gnupg
-        with patch.dict(os.environ, self._env(tmp_path, tmp_path / "absent.asc")), \
+        with patch.dict(os.environ, self._env(tmp_path)), patch("misp_container.init.GNUPG_KEY_FILE", str(tmp_path / "absent.asc")), \
                 patch("misp_container.init.subprocess.run") as run:
             populate_gnupg()
         run.assert_not_called()
@@ -145,7 +144,7 @@ class TestPopulateGnupg:
         homedir.mkdir()
         (homedir / "trustdb.gpg").write_text("")
         calls, fake_run = self._gpg({"file": ["ABCDEF0123456789"], "home": ["ABCDEF0123456789"]})
-        with patch.dict(os.environ, self._env(tmp_path, key)), \
+        with patch.dict(os.environ, self._env(tmp_path)), patch("misp_container.init.GNUPG_KEY_FILE", str(key)), \
                 patch("misp_container.init.subprocess.run", side_effect=fake_run):
             populate_gnupg()
         assert not any("--import" in cmd for cmd, _ in calls)
@@ -166,7 +165,7 @@ class TestPopulateGnupg:
                 listings["home"] = ["OLD0000000000001", "NEW0000000000001"]
             return result
 
-        with patch.dict(os.environ, self._env(tmp_path, key)), \
+        with patch.dict(os.environ, self._env(tmp_path)), patch("misp_container.init.GNUPG_KEY_FILE", str(key)), \
                 patch("misp_container.init.subprocess.run", side_effect=run_then_hold_both):
             populate_gnupg()
         assert any("--import" in cmd and str(key) in cmd for cmd, _ in calls)
@@ -186,7 +185,7 @@ class TestPopulateGnupg:
                 listings["home"] = ["ABCDEF0123456789"]
             return result
 
-        with patch.dict(os.environ, self._env(tmp_path, key)), \
+        with patch.dict(os.environ, self._env(tmp_path)), patch("misp_container.init.GNUPG_KEY_FILE", str(key)), \
                 patch("misp_container.init.subprocess.run", side_effect=run_then_hold):
             populate_gnupg()
 
@@ -217,7 +216,8 @@ class TestPrepareConfig:
         config_dir = tmp_path / "Config"
         monkeypatch.setattr(init_mod, "MISP_CONFIG", str(config_dir))
         monkeypatch.setattr("misp_container.config.CONFIG_DIR", str(tmp_path))
-        env_vars = {"MISP_CONFIG_DEFAULTS": str(defaults), "DB_HOST": "db", "DB_USER": "u",
+        monkeypatch.setattr(init_mod, "CONFIG_DEFAULTS", str(defaults))
+        env_vars = {"DB_HOST": "db", "DB_USER": "u",
                     "DB_PORT": "3306", "DB_PASSWORD": "p", "DB_NAME": "misp", "DB_TLS": "false",
                     "MISP_EMAIL": "m@x", "SMTP_FQDN": "smtp", "SMTP_PORT": "25"}
         with patch.dict(os.environ, env_vars):
@@ -285,7 +285,8 @@ class TestRenderLogBlock:
         settings.write_text("settings: {}\n")
         monkeypatch.setattr(init_mod, "MISP_CONFIG", str(config_dir))
         monkeypatch.setattr("misp_container.config.CONFIG_DIR", str(tmp_path))
-        with patch.dict(os.environ, {"MISP_CONFIG_DEFAULTS": str(defaults), "DB_PORT": "3306", "SMTP_PORT": "25"}):
+        monkeypatch.setattr(init_mod, "CONFIG_DEFAULTS", str(defaults))
+        with patch.dict(os.environ, {"DB_PORT": "3306", "SMTP_PORT": "25"}):
             init_mod.prepare_config()
         assert (config_dir / "core.php").read_text() == "<?php // new core"
         assert (config_dir / "routes.php").read_text() == "<?php // new routes"
@@ -303,14 +304,14 @@ class TestPopulateCerts:
         (src / "3.pem").write_text("cert")
         (src / "..data").mkdir()
         dst = tmp_path / "certs"
-        with patch.dict(os.environ, {"MISP_CERTS_SOURCE": str(src), "MISP_CERTS_DIR": str(dst)}):
+        with patch("misp_container.init.CERTS_DIR", str(src)), patch("misp_container.init.MISP_CERTS", str(dst)):
             populate_certs()
         assert (dst / "3.pem").read_text() == "cert"
         assert not (dst / "..data").exists()
 
     def test_no_secret_is_noop(self, tmp_path):
         from misp_container.init import populate_certs
-        with patch.dict(os.environ, {"MISP_CERTS_SOURCE": str(tmp_path / "absent"), "MISP_CERTS_DIR": str(tmp_path / "certs")}):
+        with patch("misp_container.init.CERTS_DIR", str(tmp_path / "absent")), patch("misp_container.init.MISP_CERTS", str(tmp_path / "certs")):
             populate_certs()
         assert not (tmp_path / "certs").exists()
 

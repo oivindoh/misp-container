@@ -15,7 +15,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -50,7 +49,6 @@ class SettingSpec:
     default_value: str
     force: bool = False
     blank_protection: bool = False
-    since: str = ""
     sensitive: bool = False
     kind: str = "str"
     # Known to the engine for env overrides and coverage, but its default is
@@ -132,7 +130,6 @@ class SettingSpec:
             default_value=value,
             force=bool(spec.get("force")),
             blank_protection=bool(spec.get("blank_protection")),
-            since=spec.get("since", ""),
             sensitive=bool(spec.get("sensitive")),
             kind=kind,
             track_only=bool(spec.get("track_only")),
@@ -144,63 +141,29 @@ class SettingsCache:
 
     def __init__(self) -> None:
         self.settings: dict[str, str] = {}
-        self.enforced: set[str] = set()
-        self.last_defaults_version: str = ""
 
     def load(self) -> None:
-        """Load all settings from system_settings table and config.php.
+        """Load every setting of the system_settings table.
 
         A failed read raises: an empty result would read as "no settings" and
         every default would be applied over what the operator changed.
         """
         self.settings = {}
-
-        # Load from DB
         raw = db.query("SELECT setting, value FROM system_settings;", check=True)
-        db_count = 0
         for line in raw.splitlines():
             parts = line.split("\t", 1)
             if len(parts) == 2 and parts[0]:
                 self.settings[parts[0]] = parts[1]
-                db_count += 1
-
-        # Load from config.php (covers settings written before system_setting_db was enabled)
-        php_count = 0
-        try:
-            php_code = (
-                '<?php require_once "/var/www/MISP/app/Config/config.php"; '
-                'echo json_encode($config, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES); ?>'
-            )
-            result = subprocess.run(
-                ["/usr/bin/php"], input=php_code, capture_output=True, text=True,
-            )
-            if result.returncode == 0 and result.stdout.strip() not in ("", "null"):
-                config = json.loads(result.stdout.strip())
-                for key, value in _flatten_dict(config):
-                    if key not in self.settings:
-                        self.settings[key] = str(value)
-                        php_count += 1
-            else:
-                log.warning("config.php could not be read: %s", result.stderr.strip() or result.stdout.strip())
-        except Exception as e:
-            log.warning("config.php could not be read: %s", e)
-        log.info("loaded %d DB settings + %d config.php settings", db_count, php_count)
-
-    def load_defaults_version(self) -> None:
-        """Load the last-applied defaults version from DB."""
-        raw = db.query(
-            "SELECT value FROM system_settings WHERE setting='misp_docker.defaults_version';", check=True,
-        )
-        self.last_defaults_version = raw.strip().strip('"')
-        image_version = _read_file(DIST_VERSION_FILE, "unknown")
-        log.info("defaults version: last applied=%s, image=%s", self.last_defaults_version or "none", image_version)
+        log.info("loaded %d settings from the database", len(self.settings))
 
     def save_defaults_version(self) -> None:
-        """Save the current image version as the last-applied defaults version."""
+        """Record the image version this configure run applied (misp_docker.defaults_version).
+
+        Web and worker pods wait until it names their own image (db.wait_for_live).
+        """
         image_version = _read_file(DIST_VERSION_FILE, "unknown")
-        if self.last_defaults_version != image_version:
-            log.info("saving defaults version: %s", image_version)
-            db.set_system_setting("misp_docker.defaults_version", image_version)
+        log.info("saving defaults version: %s", image_version)
+        db.set_system_setting("misp_docker.defaults_version", image_version)
 
     def get(self, key: str) -> str | None:
         """Get a setting value, or None if not present."""
@@ -225,7 +188,6 @@ class SettingsCache:
         skipped = 0
 
         for spec in specs:
-            self.enforced.add(spec.name)
             db_value = self.normalise(self.get(spec.name)) if self.has(spec.name) else "__UNSET__"
 
             if db_value == spec.effective_value:
@@ -239,15 +201,12 @@ class SettingsCache:
         log.info("%s: %d changed, %d unchanged", group, changed, skipped)
 
     def apply_defaults(self, specs: list[SettingSpec], group: str) -> None:
-        """Apply defaults: only if missing, respecting version gates and enforced settings."""
+        """Apply each default the database does not hold yet."""
         applied = 0
-        upgraded = 0
         skipped = 0
-        image_version = _read_file(DIST_VERSION_FILE, "unknown")
 
         for spec in specs:
-            # Env vars always take precedence
-            if spec.name in self.enforced or spec.track_only:
+            if spec.track_only:
                 skipped += 1
                 continue
 
@@ -263,20 +222,10 @@ class SettingsCache:
                 applied += 1
                 continue
 
-            # Version-gated upgrade: this image is at or past since, and the last
-            # configure run that applied defaults was before it
-            if (spec.since
-                    and not _version_newer(spec.since, image_version)
-                    and _version_newer(spec.since, self.last_defaults_version)):
-                log.info("upgrading default %s '%s' to '%s' (since %s)", group, spec.name, spec.print_value, spec.since)
-                cake.set_setting(spec.name, spec.effective_value, force=spec.force)
-                upgraded += 1
-                continue
-
             skipped += 1
 
-        if applied > 0 or upgraded > 0:
-            log.info("%s defaults: %d new, %d upgraded, %d existing", group, applied, upgraded, skipped)
+        if applied > 0:
+            log.info("%s defaults: %d new, %d existing", group, applied, skipped)
 
 
 # Generated catalogue of every MISP setting the curated file does not name
@@ -289,7 +238,7 @@ def load_settings_yaml(path: str | None = None) -> dict[str, list[SettingSpec]]:
     """Load settings.yaml, plus the upstream catalogue next to it, grouped by group name.
 
     settings.yaml has a top-level 'settings' key with groups as levels.
-    Each setting has a 'value' (default) and optional 'force', 'blank_protection', 'since'.
+    Each setting has a 'value' (default) and optional 'force' and 'blank_protection'.
 
     Env var override is automatic: MISP.redis_host -> MISP_REDIS_HOST.
     If the env var exists, the setting is enforced every startup.
@@ -431,34 +380,6 @@ def config_php_specs(all_specs: dict[str, list[SettingSpec]]) -> list[SettingSpe
         if os.environ.get(switch, "").lower() == "true":
             specs.extend(all_specs.get(group, []))
     return specs
-
-
-def _version_newer(version: str, reference: str) -> bool:
-    """Return True if version > reference. Empty reference means everything is newer."""
-    if not reference:
-        return True
-    if version == reference:
-        return False
-    def parse(v: str) -> tuple[int, ...]:
-        return tuple(int(x) for x in v.lstrip("v").split(".") if x.isdigit())
-    try:
-        return parse(version) > parse(reference)
-    except (ValueError, IndexError):
-        return version > reference
-
-
-def _flatten_dict(d: dict, prefix: str = "") -> list[tuple[str, str | int | float]]:
-    """Flatten a nested dict into (dotted.key, value) pairs."""
-    items: list[tuple[str, str | int | float]] = []
-    for k, v in d.items():
-        key = f"{prefix}.{k}" if prefix else k
-        if isinstance(v, dict):
-            items.extend(_flatten_dict(v, key))
-        elif isinstance(v, bool):
-            items.append((key, "true" if v else "false"))
-        elif isinstance(v, (str, int, float)):
-            items.append((key, v))
-    return items
 
 
 def _read_file(path: str, default: str = "") -> str:

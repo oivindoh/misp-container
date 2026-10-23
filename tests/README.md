@@ -21,39 +21,44 @@ The stack suites build the images with compose, start full MISP stacks, and tear
 
 Tests of the Python entrypoint library (`files/misp_container/`), the scripts and the compose files.
 
-| File | What it tests |
-|------|---------------|
-| `test_config.py` | Settings diff engine, version comparison, YAML loading, env var expansion, settings cache |
-| `test_env.py` | Environment variable defaults, `apply_defaults()`, worker config derivation, derived variables |
-| `test_task.py` | Periodic task runner: API tasks, index tasks, the workflow task, console tasks, the backlog guard |
-| `test_check_upstream.py` | The upstream guard: every check on a MISP tree in the 2.5.47 shape, then on that tree changed the way a release could. The PHP run needs `php` and skips without it |
-| `test_log.py`, `test_logrelay.py` | The JSON and text log formats; the relay of MISP's log files and their size cap |
-| `test_metrics.py` | Metrics exporter: database metrics, the job queues in Redis (RESP client), network probes |
-| `test_db.py` | Advisory lock holds one connection until release, statement splitter, the version gate |
-| `test_engine.py` | Engine selection, SQL fragments per engine, `MYSQL_*` aliases, housekeeping batches, cursor handling |
-| `test_configure.py` | Placeholder and identity checks of the configure step |
-| `test_config_php.py` | config.php rendering from settings.yaml, PHP escaping and typing |
-| `test_init.py` | app/Config rendering, database.php/email.php generation, GPG key import, writable check |
-| `test_admin.py` | SQL escape function |
-| `test_s3.py` | The migrate Job's S3 client: AWS's Signature Version 4 examples, path-style and virtual-hosted requests, paged listing, errors |
-| `test_docs.py` | Every name a doc gives exists in the code, the complete lists are complete, the values quoted in sentences match the manifests, and the generated regions are current |
-| `test_agents_md.py` | `AGENTS.md` is what `scripts/generate_agents_md.py` makes of the tree |
-| `test_compose_files.py` | The test overlays repeat the env files they override, so podman-compose and docker compose start each service with the same settings |
-| `test_sync.py` | Org sync engine: config normalization, merge logic, UUID validation, env expansion, role/org/tag/user/server/taxonomy/warninglist/sharing group apply logic, build rules (pull vs push tag format), allow_external user placement, default_role, disable unmanaged resources, full orchestrator flow |
+<!-- generated: unit-tests -->
+| Module | Tests |
+|---|---|
+| `test_admin.py` | Unit tests for admin helpers: every value reaches SQL as a parameter, on either engine. |
+| `test_agents_md.py` | AGENTS.md is what scripts/generate_agents_md.py makes of the tree. |
+| `test_chart.py` | The Helm chart renders what the code and the release expect (helm template, no cluster). |
+| `test_chart_schema.py` | helm lint, and every render of the chart validated against the Kubernetes and CRD schemas. |
+| `test_check_upstream.py` | Unit tests for the upstream guard (scripts/check_upstream.py). |
+| `test_compose_files.py` | The test overlays start a service with the same settings under podman-compose and docker compose. |
+| `test_config.py` | Unit tests for the config diff engine. |
+| `test_config_php.py` | Unit tests for config.php rendering from settings.yaml. |
+| `test_configure.py` | Unit tests for the configure step's identity and secret checks. |
+| `test_db.py` | Unit tests for the advisory lock (no MySQL needed). |
+| `test_docs.py` | The docs name only what the code has. |
+| `test_engine.py` | Unit tests for the engine-neutral database helpers and housekeeping. |
+| `test_env.py` | Unit tests for environment variable handling. |
+| `test_init.py` | Unit tests for init container logic (file operations, no containers needed). |
+| `test_log.py` | Unit tests for the container log formats (LOG_FORMAT json or text). |
+| `test_logrelay.py` | Unit tests for the log relay (misp_container.logrelay). |
+| `test_merge_into_misp3.py` | The merge of master into misp-3.0 (scripts/merge_into_misp3.py), on real git repositories. |
+| `test_metrics.py` | Unit tests for the Prometheus metrics exporter. |
+| `test_migrate.py` | Unit tests for the migration Job (misp_container.migrate). |
+| `test_release.py` | Unit tests for the release tool (scripts/release.py): the next tag and chart version. |
+| `test_s3.py` | Unit tests for the minimal S3 client (misp_container.s3). |
+| `test_sync.py` | Unit tests for the org sync engine. |
+| `test_task.py` | Unit tests for the periodic task runner. |
+| `test_update_settings.py` | Unit tests for the settings catalogue updater (scripts/update_settings.py). |
+<!-- end generated -->
 
-Run with: `mise run test` or `PYTHONPATH=files python -m pytest tests/ -v`
+Run with: `mise run test` or `PYTHONPATH=files python -m pytest tests/ -v --ignore=tests/e2e`
 
 ## Upstream guard
 
 `e2e/test_upstream.py` runs `scripts/check_upstream.py` in one container of the web image,
 with the repository mounted, and reports each check as one test. A check reads MISP's own
-files and fails when MISP changed something this repository patches or depends on: the job
-queues, the Redis keys of the jobs, the scheduler's tasks, the API routes the image calls,
-the keys MISP gives attachments, what `bootstrap.php` loads and logs to, the files MISP
-writes under `app/tmp/logs`, and the Python packages its own scripts need. The
-last check runs the logging block that `init.py` renders through PHP, in both formats. A
-failure names the change, the MISP file and the file of ours to revisit; DEVELOPING.md lists
-the checks. No stack starts, so the guard reports even when MISP no longer starts.
+files and fails when MISP changed something this repository patches or depends on;
+DEVELOPING.md lists the checks. A failure names the change, the MISP file and the file of
+ours to revisit. No stack starts, so the guard reports even when MISP no longer starts.
 
 `mise run test-integration` and the CI job `integration` run it before the integration suite;
 `python -m pytest tests/e2e/test_upstream.py` runs it alone.
@@ -76,8 +81,8 @@ The full MISP stack in Compose, checked feature by feature.
 | Distribution files and app/Config | taxonomies in the image, bootstrap.php is MISP's default plus the logging block, database.php host, config.php content |
 | GPG | Auto-generated key in .gnupg volume |
 | MISP API | Version endpoint, event create via API |
-| Warm restart | Settings cache reload, minimum_config unchanged |
-| Version-gated defaults | Defaults version saved, version gate stability, envar precedence |
+| Warm restart | A second run over the database groups loads the settings and changes none |
+| Defaults version | The configure step records the image version the pods wait for |
 | S3 attachment storage | Garage S3 bootstrap, upload, download, bucket verification |
 | Custom auth | Header login (200), no-header redirect (302) |
 | OIDC login | Redirect to dex, its form, the callback, the user's email, role by name, default organisation, mixed auth |
