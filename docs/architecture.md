@@ -13,7 +13,7 @@
 ```mermaid
 flowchart LR
     cfg[configure Job<br/>sync wave 1] -->|MISP.live = true| web[web Deployment<br/>caddy + php-fpm, wave 2]
-    cfg -->|MISP.live = true| worker[worker Deployment<br/>supervisord, wave 2]
+    cfg -->|MISP.live = true| worker[worker Deployment<br/>PHP workers, wave 2]
     web --> sync[org-sync Job<br/>wave 3]
     cfg --> db[(PostgreSQL)]
     cfg --> redis[(Redis)]
@@ -21,7 +21,6 @@ flowchart LR
     web --> redis
     worker --> db
     worker --> redis
-    web -->|:9001| worker
     web -->|:6666| modules[modules]
     metrics[metrics] --> db
     metrics --> redis
@@ -37,10 +36,14 @@ Secrets, then does its own job:
 |------|------------|---------|------|
 | configure | `entrypoint-configure.py` | Job, once per release revision | Schema import or migration, settings, admin user, GPG, auth plugins. Sets `MISP.live=true` last |
 | web | `entrypoint-web.py` | Deployment, scalable | Waits for `MISP.live=true`, then runs PHP-FPM on 9002 behind caddy on 8080 |
-| worker | `entrypoint-worker.py` | Deployment, scalable | Waits for `MISP.live=true`, then runs the `default`, `prio`, `email`, `update` and `cache` queues under supervisord |
+| worker | `entrypoint-worker.py` | Deployment, scalable | Waits for `MISP.live=true`, then runs the workers of the `default`, `prio`, `email`, `update` and `cache` queues and starts each one again when it exits |
 | org-sync | `entrypoint-sync.py` | Job, once per release revision, after web serves | Applies `orgs.yaml` through the API |
 | metrics | `entrypoint-metrics.py` | Deployment | Prometheus exporter on 9191 |
 | task | `python3 -m misp_container.task` | CronJobs (components `cronjobs`, `userValidity`) | All periodic work, see [Periodic tasks](kubernetes.md#periodic-tasks). MISP's own scheduler never runs |
+
+The workers take their jobs from Redis, and nothing connects to them. MISP's worker page and
+its diagnostics expect supervisord beside the web server, so they show no workers:
+`MISP.manage_workers` is off. The metrics exporter shows the job queues ([metrics.md](metrics.md)).
 
 ## The configure Job
 
@@ -76,7 +79,7 @@ Idle memory per container, after the first start:
 | Container | Idle RSS | Note |
 |-----------|----------|------|
 | web | 42 MB | Grows with the PHP-FPM children under load (`PHP_FCGI_CHILDREN`, `PHP_MEMORY_LIMIT` per request) |
-| worker | 400 MB | 21 PHP worker processes under supervisord (`NUM_WORKERS_*`) |
+| worker | 400 MB | 21 PHP worker processes (`NUM_WORKERS_*`) |
 | modules | 140 MB | |
 | metrics | 28 MB | |
 | caddy | 11 MB | |

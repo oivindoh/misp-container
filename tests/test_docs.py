@@ -300,7 +300,7 @@ def test_the_task_runner_defaults():
     kube = " ".join((REPO / "docs/kubernetes.md").read_text().split())
     expected = f"`TASK_MAX_QUEUED` jobs (default {task.DEFAULT_MAX_QUEUED})"
     assert expected in kube, f"docs/kubernetes.md should say: {expected}"
-    grace = re.search(r'env\("WORKER_STOP_GRACE", "(\d+)"\)', (REPO / "files/entrypoint-worker.py").read_text()).group(1)
+    grace = re.search(r'env\("WORKER_STOP_GRACE", "(\d+)"\)', (REPO / "files/misp_container/worker.py").read_text()).group(1)
     expected = f"`WORKER_STOP_GRACE` seconds (default {grace})"
     assert expected in " ".join((REPO / "docs/architecture.md").read_text().split()), \
         f"docs/architecture.md should say: {expected}"

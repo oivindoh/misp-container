@@ -41,7 +41,7 @@ env:
   MISP_UUID: 06732f0d-87e3-4ede-8767-4e0e9879414c
 secrets:
   db: {DB_PASSWORD: ...}
-  app: {MISP_REDIS_PASSWORD: ..., GNUPG_PASSWORD: ..., SIMPLEBACKGROUNDJOBS_SUPERVISOR_PASSWORD: ..., SECURITY_SALT: ...}
+  app: {MISP_REDIS_PASSWORD: ..., GNUPG_PASSWORD: ..., SECURITY_SALT: ...}
   admin: {ADMIN_PASSWORD: ..., ADMIN_KEY: ...}
 postgres: {enabled: true}
 redis: {enabled: true}
@@ -68,7 +68,7 @@ below come from them.
 | `database` | DB_USER and DB_PASSWORD from a Secret the release does not make, such as the one a database operator (StackGres, CloudNativePG) keeps: a name and a key for each. They replace the same keys of misp-db in every pod, the postgres component included. |
 | `configure` | The configure Job: schema, settings, admin user, GPG and auth, on every install and upgrade. |
 | `web` | MISP's web tier: PHP-FPM and the caddy sidecar in each pod. Replicas scale freely. |
-| `worker` | The background workers. Replicas scale freely; the web pods reach supervisord on TCP 9001. |
+| `worker` | The background workers, which take their jobs from Redis. Replicas scale freely. |
 | `metrics` | The Prometheus exporter (docs/metrics.md). |
 | `modules` | misp-modules: the enrichment, import, export and action modules. |
 | `orgSync` | The org-sync Job applies orgs, the content of orgs.yaml (deploy/orgs.yaml.example), through the API after each install and upgrade. It exits at once when ADMIN_KEY is empty. |
@@ -86,8 +86,7 @@ Each component is off by default:
 | `redis` | Single Redis without persistence: sessions and queued jobs do not survive a restart. Leave it off for an external Redis (MISP_REDIS_HOST in env). |
 | `ingress` | An Ingress to the web Service. The default annotation makes the haproxy ingress replace X-Forwarded-For with the address it sees (docs/kubernetes.md, Client addresses). |
 | `httpRoute` | An HTTPRoute for a Gateway API implementation, in place of the ingress. The Gateway must allow routes from this namespace; set TRUSTED_PROXY_CIDR in env to its proxy pods. |
-| `ciliumNetworkPolicy` | CiliumNetworkPolicies for every pod: the paths MISP needs, DNS, HTTPS out and SMTP out. ingressNamespace holds the ingress or Gateway proxies, monitoringNamespace Prometheus. |
-| `networkPolicy` | NetworkPolicies with the same flows as ciliumNetworkPolicy, in the Kubernetes API, for a cluster whose CNI enforces NetworkPolicy but is not Cilium. ingressNamespace holds the ingress or Gateway proxies, monitoringNamespace Prometheus. |
+| `networkPolicy` | NetworkPolicies for every pod: the paths MISP needs, DNS, HTTPS out and SMTP out, for any CNI that enforces the NetworkPolicy API, Cilium included. ingressNamespace holds the ingress or Gateway proxies, monitoringNamespace Prometheus. |
 | `pdb` | PodDisruptionBudgets for web and worker (maxUnavailable: 1). |
 | `cronjobs` | The periodic tasks as CronJobs: tasks maps a task to its schedule, workflows a workflow ID to its schedule. API tasks need ADMIN_KEY in secrets.admin and dispatch nothing while maxQueued jobs or more wait. |
 | `userValidity` | A daily check of every account against the OIDC or LDAP provider, through MISP's console. Needs the oidc or ldap group. check-user-validity reports; block-invalid-users disables the accounts the provider no longer backs. |
@@ -123,7 +122,7 @@ workload gets a whole Secret, or only the keys the table names:
 | Secret | File | Keys | Read by |
 |---|---|---|---|
 | `misp-db` | `deploy/chart/files/secrets-db.env` | `DB_USER`, `DB_PASSWORD` | configure, cronjobs, housekeeping, metrics (`DB_PASSWORD`, `DB_USER`), migrate, org-sync, postgres (`DB_PASSWORD`, `DB_USER`), userValidity, web, worker |
-| `misp-app` | `deploy/chart/files/secrets-app.env` | `MISP_REDIS_PASSWORD`, `GNUPG_PASSWORD`, `SIMPLEBACKGROUNDJOBS_SUPERVISOR_PASSWORD`, `SECURITY_ENCRYPTION_KEY`, `SECURITY_SALT` | configure, cronjobs, metrics (`MISP_REDIS_PASSWORD`), migrate, redis (`MISP_REDIS_PASSWORD`), userValidity, web, worker |
+| `misp-app` | `deploy/chart/files/secrets-app.env` | `MISP_REDIS_PASSWORD`, `GNUPG_PASSWORD`, `SECURITY_ENCRYPTION_KEY`, `SECURITY_SALT` | configure, cronjobs, metrics (`MISP_REDIS_PASSWORD`), migrate, redis (`MISP_REDIS_PASSWORD`), userValidity, web, worker |
 | `misp-admin` | `deploy/chart/files/secrets-admin.env` | `ADMIN_PASSWORD`, `ADMIN_KEY` | configure, cronjobs (`ADMIN_KEY`), misp-test (`ADMIN_KEY`), org-sync |
 | `misp-migrate` | `deploy/chart/files/secrets-migrate.env` | `MIGRATE_SOURCE_HOST`, `MIGRATE_SOURCE_USER`, `MIGRATE_SOURCE_PASSWORD`, `MIGRATE_FORCE`, `MIGRATE_REPLACE_COPY`, `MIGRATE_SOURCE_FILES`, `MIGRATE_SOURCE_S3_BUCKET`, `MIGRATE_SOURCE_S3_ENDPOINT`, `MIGRATE_SOURCE_S3_REGION`, `MIGRATE_SOURCE_S3_ACCESS_KEY`, `MIGRATE_SOURCE_S3_SECRET_KEY` | migrate |
 <!-- end generated -->

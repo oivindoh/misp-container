@@ -4797,6 +4797,32 @@ settings:
     type: boolean
     level: 0
     track_only: true
+  SimpleBackgroundJobs.supervisor_host:
+    value: localhost
+    description: The host where the Supervisor XML-RPC API is running.
+    type: string
+    level: 0
+    track_only: true
+  SimpleBackgroundJobs.supervisor_password:
+    value: ''
+    description: The password of the Supervisor XML-RPC API.
+    type: string
+    level: 0
+    file_only: true
+    sensitive: true
+    track_only: true
+  SimpleBackgroundJobs.supervisor_port:
+    value: 9001
+    description: The port where the Supervisor XML-RPC API is running.
+    type: numeric
+    level: 0
+    track_only: true
+  SimpleBackgroundJobs.supervisor_user:
+    value: supervisor
+    description: The user of the Supervisor XML-RPC API.
+    type: string
+    level: 0
+    track_only: true
   site_admin_debug:
     value: ''
     description: The debug level of the instance for site admins. This feature allows site admins to run debug mode on a live instance without exposing it to other users. The most verbose option of debug and site_admin_debug is used for site admins.

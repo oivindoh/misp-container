@@ -7,7 +7,7 @@
 #   task cronjobs         --> caddy :8080, metrics :9191
 #   console task cronjobs --> postgres :5432, redis :6379, SMTP out, HTTPS out (IdP), LDAP out
 #   caddy                 --> php-fpm :9002  (localhost in same pod)
-#   php-fpm               --> postgres :5432, redis :6379, modules :6666, worker :9001,
+#   php-fpm               --> postgres :5432, redis :6379, modules :6666,
 #                             HTTPS out (IdP, partners), SMTP out, LDAP out
 #   worker                --> postgres :5432, redis :6379, modules :6666, HTTPS out (partners, feeds), SMTP out
 #   configure job         --> postgres :5432, redis :6379; with migrate, the source database and S3
@@ -143,8 +143,6 @@ spec:
     {{- include "misp.np.redis" $ | nindent 4 }}
     # MISP modules (enrichment, import, export)
     {{- include "misp.np.toPod" (dict "name" "modules" "port" 6666) | nindent 4 }}
-    # Worker supervisord (job management)
-    {{- include "misp.np.toPod" (dict "name" "worker" "port" 9001) | nindent 4 }}
     {{- include "misp.np.smtp" $ | nindent 4 }}
     # Outbound HTTPS: sync partners, feeds, the OIDC provider
     {{- include "misp.np.httpsOut" $ | nindent 4 }}
@@ -209,9 +207,8 @@ spec:
     matchLabels:
       app.kubernetes.io/name: worker
   policyTypes: [Ingress, Egress]
-  ingress:
-    # Web pods connect to supervisord for job management
-    {{- include "misp.np.fromPods" (dict "port" 9001 "selectors" (list (dict "app.kubernetes.io/name" "web"))) | nindent 4 }}
+  # Nothing connects to the workers: they take their jobs from Redis
+  ingress: []
   egress:
     {{- include "misp.np.db" $ | nindent 4 }}
     {{- include "misp.np.redis" $ | nindent 4 }}

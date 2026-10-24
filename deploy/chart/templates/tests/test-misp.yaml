@@ -1,8 +1,7 @@
 # helm test: checks a release from inside the cluster. It loads the login page
 # through the web Service and, with ADMIN_KEY in misp-admin, calls the API as
-# the admin: MISP.live, and a worker on every queue behind a reachable
-# supervisord. The pod carries the API task label, so the networkPolicy
-# component lets it reach web.
+# the admin and reads MISP.live. The pod carries the API task label, so the
+# networkPolicy component lets it reach web.
 apiVersion: v1
 kind: Pod
 metadata:
@@ -25,7 +24,6 @@ spec:
         - -c
         - |
           import json, os, urllib.error, urllib.request
-          from misp_container import WORKER_QUEUES
 
           def get(path, key=""):
               # MISP answers a JSON request without a key with 403, the login page included
@@ -48,11 +46,6 @@ spec:
           live = json.loads(get("/servers/getSetting/MISP.live", key)).get("value")
           assert live in (True, 1, "1", "true"), f"MISP.live is {live!r}"
           print("ok: MISP.live is true")
-          workers = json.loads(get("/servers/getWorkers", key))
-          assert workers.get("supervisord_status") is True, "the web pods cannot reach supervisord in the worker pods"
-          idle = [q for q in WORKER_QUEUES if not (workers.get(q, {}).get("workers") or [])]
-          assert not idle, f"no worker runs the queues {idle}"
-          print(f"ok: workers run the queues {', '.join(WORKER_QUEUES)}")
       env:
         {{- include "misp.logEnv" . | nindent 8 }}
         - name: ADMIN_KEY

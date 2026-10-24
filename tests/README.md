@@ -46,6 +46,7 @@ Tests of the Python entrypoint library (`files/misp_container/`), the scripts an
 | `test_sync.py` | Unit tests for the org sync engine. |
 | `test_task.py` | Unit tests for the periodic task runner. |
 | `test_update_settings.py` | Unit tests for the settings catalogue updater (scripts/update_settings.py). |
+| `test_worker.py` | Unit tests for the worker supervisor (misp_container.worker): the programs, restarts and stop. |
 <!-- end generated -->
 
 Run with: `mise run test` or `PYTHONPATH=files python -m pytest tests/ -v --ignore=tests/e2e`
@@ -73,7 +74,7 @@ The full MISP stack in Compose, checked feature by feature.
 | HTTP / Caddy | Login page, static CSS, root redirect |
 | Admin user config | Email, password (no forced reset), org name, org UUID, last_pw_change |
 | Database settings | DB persistence, setting count, BASE_URL in DB |
-| Workers | The five queues run under supervisord, no scheduler program, web reaches supervisord over TCP |
+| Workers | Each of the five queues runs `NUM_WORKERS_<QUEUE>` workers, no scheduler worker, a killed worker is started again |
 | Background jobs | Event publish triggers job, worker completes it (status=4) |
 | PHP-FPM | Listening on port 9002 |
 | Distribution files and app/Config | taxonomies in the image, bootstrap.php is MISP's default plus the logging block, database.php on PostgreSQL, config.php content |
@@ -220,8 +221,7 @@ Run with: `mise run test-migration` (`-- --skip-build`, `-- --keep`)
 ## Smoke test
 
 `e2e/test_smoke.py` checks a live MISP through its API: the login page, API auth,
-the version, `MISP.baseurl` and `MISP.live`, the org, event and user indexes, supervisord and
-the five worker queues, the enrichment URL, and an event created and deleted. `--url` names
+the version, `MISP.baseurl` and `MISP.live`, the org, event and user indexes, the enrichment URL, and an event created and deleted. `--url` names
 the MISP; without `--key` only the login page is checked; without `--url` the module skips.
 
 Run with: `mise run smoketest https://misp.example.com`

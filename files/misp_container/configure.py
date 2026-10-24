@@ -41,7 +41,7 @@ def run_custom_script(path: str, label: str) -> None:
 PLACEHOLDER_MARKERS = ("change-me", "override-me", "REPLACE-WITH", "0000000000")
 CHECKED_SECRETS = ("SECURITY_SALT", "SECURITY_ENCRYPTION_KEY", "ADMIN_PASSWORD", "ADMIN_KEY",
                    "DB_PASSWORD", "POSTGRES_PASSWORD", "MISP_REDIS_PASSWORD",
-                   "GNUPG_PASSWORD", "SIMPLEBACKGROUNDJOBS_SUPERVISOR_PASSWORD")
+                   "GNUPG_PASSWORD")
 
 
 def is_placeholder(value: str) -> bool:

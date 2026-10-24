@@ -236,7 +236,7 @@ def _generate_config_php(config_dst):
     """Render config.php from settings.yaml (bootstrap groups) and env vars.
 
     Regenerated on every start in every pod, so all replicas and workers share
-    the same bootstrap and BLOCKED settings (redis, supervisor, salt, paths).
+    the same bootstrap and BLOCKED settings (redis, salt, paths).
     """
     from .config import load_settings_yaml, config_php_specs, render_config_php
 

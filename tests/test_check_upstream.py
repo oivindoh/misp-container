@@ -319,8 +319,9 @@ class TestShapeOf2547:
         assert cu.run(misp) == {check.name: [] for check in cu.CHECKS}
 
     def test_a_problem_names_the_upstream_file_and_ours(self, misp):
-        edit(misp, cu.BACKGROUND_JOBS, "'misp-workers'", "'workers'")
-        [problem] = problems(misp, "worker-group")
+        edit(misp, cu.BACKGROUND_JOBS, "SCHEDULER_QUEUE = 'scheduler';", "SCHEDULER_QUEUE = 'scheduler',\n KAFKA_QUEUE = 'kafka';")
+        edit(misp, cu.BACKGROUND_JOBS, "self::SCHEDULER_QUEUE,\n", "self::SCHEDULER_QUEUE,\n self::KAFKA_QUEUE,\n")
+        [problem] = problems(misp, "worker-queues")
         assert f"upstream: {cu.BACKGROUND_JOBS}" in problem and "ours: files/misp_container/__init__.py" in problem
 
 

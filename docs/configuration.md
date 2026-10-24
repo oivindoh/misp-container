@@ -33,7 +33,7 @@ URLs, and `ADMIN_ORG` `MISP.org`, the hosting organisation in e-mail subjects an
 exports.
 
 A few settings are rendered into `config.php` in every pod, because MISP reads them before
-the database (Redis, supervisor, salt, encryption key, paths). Those come from the
+the database (Redis, salt, encryption key, paths). Those come from the
 `minimum_config` group and the same env vars.
 
 Container-level defaults (database and Redis hosts, PHP limits, worker counts) are in

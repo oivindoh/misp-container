@@ -62,7 +62,7 @@ web:
       requests: {cpu: 10m, memory: 32Mi}
       limits: {cpu: 500m, memory: 128Mi}
 
-# The background workers. Replicas scale freely; the web pods reach supervisord on TCP 9001.
+# The background workers, which take their jobs from Redis. Replicas scale freely.
 worker:
   replicas: 1
   resources:

@@ -52,7 +52,6 @@ revisit.
 | Check | MISP file | Ours | Fails when MISP |
 |---|---|---|---|
 | `worker-queues` | app/Lib/Tools/BackgroundJobsTool.php | files/misp_container/__init__.py WORKER_QUEUES | adds or drops a job queue |
-| `worker-group` | app/Lib/Tools/BackgroundJobsTool.php | files/misp_container/__init__.py WORKER_GROUP | finds its workers in another supervisord group |
 | `job-keys` | app/Lib/Tools/BackgroundJobsTool.php | files/misp_container/metrics.py _collect_queue_metrics() | keeps waiting or running jobs under other Redis keys |
 | `scheduler-tasks` | app/Console/Command/SchedulerWorkerShell.php | files/misp_container/task.py SCHEDULER_COVERAGE | offers periodic work that no task covers |
 | `api-routes` | app/Controller | the file and line named in each problem | drops a controller or an action the image calls |

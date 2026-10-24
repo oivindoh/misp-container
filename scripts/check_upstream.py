@@ -28,7 +28,7 @@ SCRIPTS = Path(__file__).resolve().parent
 FILES = SCRIPTS.parent / "files"
 sys.path.insert(0, str(FILES))
 
-from misp_container import CONFIG_DEFAULTS, WORKER_GROUP, WORKER_QUEUES  # noqa: E402
+from misp_container import CONFIG_DEFAULTS, WORKER_QUEUES  # noqa: E402
 from misp_container.init import LOG_BLOCK, render_log_block  # noqa: E402
 from misp_container.logrelay import FILES as RELAYED  # noqa: E402
 from misp_container.metrics import RUNNING_PREFIX  # noqa: E402
@@ -116,16 +116,6 @@ def worker_queues(root: Path) -> list[str]:
                 f"and NUM_WORKERS_{q.upper()} to deploy/chart/files/base.env" for q in sorted(upstream - set(WORKER_QUEUES))]
     problems += [f"WORKER_QUEUES has {q!r}, which MISP no longer offers" for q in sorted(set(WORKER_QUEUES) - upstream)]
     return problems
-
-
-def worker_group(root: Path) -> list[str]:
-    found = re.search(r"MISP_WORKERS_PROCESS_GROUP\s*=\s*'([^']+)'", read(root, BACKGROUND_JOBS))
-    if not found:
-        return ["no MISP_WORKERS_PROCESS_GROUP constant: MISP finds its workers another way now"]
-    if found.group(1) != WORKER_GROUP:
-        return [f"MISP finds its workers in the supervisord group {found.group(1)!r}; the worker entrypoint "
-                f"writes {WORKER_GROUP!r}, so the diagnostic page and worker restarts see no workers"]
-    return []
 
 
 def job_keys(root: Path) -> list[str]:
@@ -450,8 +440,6 @@ def python_requirements(root: Path) -> list[str]:
 CHECKS = [
     Check("worker-queues", BACKGROUND_JOBS, "files/misp_container/__init__.py WORKER_QUEUES", worker_queues,
           fails_when="adds or drops a job queue"),
-    Check("worker-group", BACKGROUND_JOBS, "files/misp_container/__init__.py WORKER_GROUP", worker_group,
-          fails_when="finds its workers in another supervisord group"),
     Check("job-keys", BACKGROUND_JOBS, "files/misp_container/metrics.py _collect_queue_metrics()", job_keys,
           fails_when="keeps waiting or running jobs under other Redis keys"),
     Check("scheduler-tasks", SCHEDULER_SHELL, "files/misp_container/task.py SCHEDULER_COVERAGE", scheduler_tasks,

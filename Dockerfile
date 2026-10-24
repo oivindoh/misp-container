@@ -242,7 +242,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
               /usr/share/doc \
               /usr/share/man
 
-# The pinned Python packages, and their commands such as supervisord: uv
+# The pinned Python packages and their commands: uv
 # installs both under /usr/local (no pip in the final image)
 COPY --from=python /usr/local /usr/local
 

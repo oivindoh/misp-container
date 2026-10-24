@@ -69,7 +69,7 @@ A MISP on MySQL or MariaDB is copied by the `migrate` component instead
 | `SECURITY_ENCRYPTION_KEY` | MISP encrypts the authkeys of sync servers and other stored credentials with it. A new key leaves the stored values unreadable: re-enter them after the change |
 | `MISP_UUID` | None. Sync partners know the instance by it |
 | `ADMIN_PASSWORD`, `ADMIN_KEY` | Change the value in `misp-admin` and upgrade: the configure Job sets both on user 1 |
-| `MISP_REDIS_PASSWORD`, `SIMPLEBACKGROUNDJOBS_SUPERVISOR_PASSWORD`, `DB_PASSWORD` | Change the value in the Secret and on the service it names, then upgrade: the checksum rolls every pod that reads it |
+| `MISP_REDIS_PASSWORD`, `DB_PASSWORD` | Change the value in the Secret and on the service it names, then upgrade: the checksum rolls every pod that reads it |
 | The GPG key (`misp-gnupg`) | Replace `private.asc` in the Secret and upgrade: each pod imports the key of the Secret at start. Compose: replace `private.asc` in the `misp-gnupg-key` volume and recreate the containers. Sync partners need the new public key |
 | The sync server certificates (`misp-certs`) | Replace the file in the Secret and upgrade |
 

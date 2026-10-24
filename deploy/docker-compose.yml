@@ -130,7 +130,7 @@ services:
   worker:
     <<: [*misp-common, *misp-scratch]
     command: ["python3", "/entrypoint-worker.py"]
-    # supervisord lets a running job finish for WORKER_STOP_GRACE seconds (default 300)
+    # The entrypoint lets a running job finish for WORKER_STOP_GRACE seconds (default 300)
     stop_grace_period: 330s
     volumes:
       - misp-files-scripts-tmp:/var/www/MISP/app/files/scripts/tmp

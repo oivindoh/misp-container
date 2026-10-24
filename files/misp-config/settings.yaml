@@ -79,19 +79,7 @@ settings:
       value: ""
       sensitive: true
 
-    # Background jobs Redis + supervisor
-    SimpleBackgroundJobs.supervisor_host:
-      description: "The host where the Supervisor XML-RPC API is running"
-      value: "127.0.0.1"
-    SimpleBackgroundJobs.supervisor_port:
-      description: "The port where the Supervisor XML-RPC API is running"
-      value: 9001
-    SimpleBackgroundJobs.supervisor_user:
-      description: "The user of the Supervisor XML-RPC API"
-      value: supervisor
-    SimpleBackgroundJobs.supervisor_password:
-      value: supervisor
-      sensitive: true
+    # Background jobs Redis
     SimpleBackgroundJobs.redis_host:
       description: "The host running the redis server to be used for background jobs"
       value: redis
@@ -409,9 +397,10 @@ settings:
     MISP.title_text:
       description: "Used in the page title, after the name of the page"
       value: MISP
+    # The worker pods supervise their own workers (misp_container.worker), without supervisord
     MISP.manage_workers:
       description: "Set this to false if you would like to disable MISP managing its own worker processes (for example, if you are managi..."
-      value: true
+      value: false
     MISP.disablerestalert:
       description: "This setting controls whether notification e-mails will be sent when an event is created via the REST interface. It m..."
       value: true
