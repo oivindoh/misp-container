@@ -70,14 +70,18 @@ A new queue needs its name in `WORKER_QUEUES` and `NUM_WORKERS_<QUEUE>` in
 `deploy/chart/files/base.env`. New periodic work needs a task in `misp_container/task.py`
 (`SCHEDULER_COVERAGE`) and a schedule in `cronjobs.tasks` in `deploy/chart/values.yaml`.
 
-The `Dockerfile` patches two upstream files. Each patch checks its anchor first and fails
-the build with the file and the reason when the anchor moved:
+### Patches to MISP
 
-- **`app/composer.json`:** the build drops `iglocska/cake-resque`, which SimpleBackgroundJobs
-  replaces.
-- **CakePHP's `Postgres.php`:** `describe()` resets its sequence match per column
-  ([MISP#11172](https://github.com/MISP/MISP/issues/11172)). On a failure, check whether
-  the release carries the fix and drop the patch, or adapt it.
+Each change to MISP's code is a patch in `patches/`: a git diff against MISP's root, after a
+header with a title, a `Why:` line and an `Upstream:` line. AGENTS.md lists them.
+`scripts/apply_patches.py` applies them in name order in the image build. A patch that no
+longer applies, or that MISP already carries, fails the build with its name: check whether
+MISP fixed the problem, then delete the patch or adapt it to the new MISP.
+
+| Task | Command |
+|------|---------|
+| Apply the patches to a MISP checkout | `python3 scripts/apply_patches.py <MISP checkout>` |
+| Make a patch | Change the file in a MISP checkout, `git diff > patches/<NN>-<name>.patch`, then add the header on top |
 
 ## The MISP pin
 
@@ -91,11 +95,6 @@ that moves the pin to `v3.0.0` once it does. The pin shapes the image in these p
 | The version marker | `3.0_wip+<CORE_COMMIT>` | It changes with each pin, so the pods wait for the configure run of their own build |
 | `settings.yaml` | No switch for background jobs, and four other settings fewer | MISP 3.0 defines none of them; an `s3://` attachments directory turns S3 on |
 | The configure step | Refuses a database whose `attributes` table has the text column `value1` | That is MISP 2.x's layout; the migrate Job imports such a database (docs/migration.md) |
-
-On PostgreSQL, MISP 3.0 answers 500 on the events index for a user on the Overmind theme:
-`EventIndexStatsBehavior::aggregate()` names the alias `Event` unquoted.
-`test_oidc_callback_lands_on_misp` is a strict xfail. It fails once MISP fixes the bug; remove
-the marker then.
 
 ### Moving to a newer 3.0_wip commit
 

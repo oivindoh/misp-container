@@ -25,6 +25,7 @@ Tests of the Python entrypoint library (`files/misp_container/`), the scripts an
 |---|---|
 | `test_admin.py` | Unit tests for admin helpers: every value reaches SQL as a parameter. |
 | `test_agents_md.py` | AGENTS.md is what scripts/generate_agents_md.py makes of the tree. |
+| `test_apply_patches.py` | The patches of patches/ and their applier (scripts/apply_patches.py), on real git trees. |
 | `test_chart.py` | The Helm chart renders what the code and the release expect (helm template, no cluster). |
 | `test_chart_schema.py` | helm lint, and every render of the chart validated against the Kubernetes and CRD schemas. |
 | `test_check_upstream.py` | Unit tests for the upstream guard (scripts/check_upstream.py). |

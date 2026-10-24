@@ -1,0 +1,21 @@
+Quote the alias of the events index stats
+
+Why: EventIndexStatsBehavior::aggregate() names the alias Event unquoted. PostgreSQL folds it to event while the FROM clause quotes it as "Event", so the events index answers 500 for a user on the Overmind theme, MISP 3.0's default.
+Upstream: not filed yet
+
+diff --git a/app/Model/Behavior/EventIndexStatsBehavior.php b/app/Model/Behavior/EventIndexStatsBehavior.php
+--- a/app/Model/Behavior/EventIndexStatsBehavior.php
++++ b/app/Model/Behavior/EventIndexStatsBehavior.php
+@@ -47,9 +47,10 @@ class EventIndexStatsBehavior extends ModelBehavior
+      */
+     public function aggregate(Model $model, $conditions)
+     {
+-        $alias = $model->alias;
++        // PostgreSQL folds an unquoted alias to lower case, and the FROM clause quotes it
++        $alias = $model->getDataSource()->name($model->alias);
+         $weekAgo = time() - self::WEEK;
+-        $lastLogin = (int)$this->settings[$alias]['lastLogin'];
++        $lastLogin = (int)$this->settings[$model->alias]['lastLogin'];
+         $sum = function ($condition) {
+             return 'SUM(CASE WHEN ' . $condition . ' THEN 1 ELSE 0 END)';
+         };

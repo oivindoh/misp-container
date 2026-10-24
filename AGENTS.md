@@ -240,10 +240,19 @@ Fail when MISP no longer matches what this image patches or depends on. A failur
 | `python-requirements` | requirements.txt | files/requirements-misp.txt |
 | `log-block-php` | php | files/misp_container/init.py LOG_BLOCK |
 
+## Patches to MISP: `patches/`
+
+Apply this repository's patches to a MISP tree, and fail when one no longer fits. The image build applies them (DEVELOPING.md, Patches to MISP).
+
+| Patch | MISP file | Why | Upstream |
+|---|---|---|---|
+| `01-event-index-stats-quotes-the-alias.patch` | app/Model/Behavior/EventIndexStatsBehavior.php | EventIndexStatsBehavior::aggregate() names the alias Event unquoted. PostgreSQL folds it to event while the FROM clause quotes it as "Event", so the events index answers 500 for a user on the Overmind theme, MISP 3.0's default. | not filed yet |
+
 ## Scripts: `scripts/`
 
 | Script | Does |
 |---|---|
+| `apply_patches.py` | Apply this repository's patches to a MISP tree, and fail when one no longer fits. |
 | `chart.py` | Render the Helm chart in deploy/chart for the doc generators and the tests. |
 | `check_upstream.py` | Fail when MISP no longer matches what this image patches or depends on. |
 | `generate_agents_md.py` | Write AGENTS.md: a map of the repository, read from the tree itself. |
@@ -274,6 +283,7 @@ Unit tests (`tests/`, no containers):
 |---|---|
 | `test_admin.py` | Unit tests for admin helpers: every value reaches SQL as a parameter. |
 | `test_agents_md.py` | AGENTS.md is what scripts/generate_agents_md.py makes of the tree. |
+| `test_apply_patches.py` | The patches of patches/ and their applier (scripts/apply_patches.py), on real git trees. |
 | `test_chart.py` | The Helm chart renders what the code and the release expect (helm template, no cluster). |
 | `test_chart_schema.py` | helm lint, and every render of the chart validated against the Kubernetes and CRD schemas. |
 | `test_check_upstream.py` | Unit tests for the upstream guard (scripts/check_upstream.py). |

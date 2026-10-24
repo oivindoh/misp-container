@@ -40,6 +40,5 @@ check that the backup restores ([operations.md](operations.md#what-to-back-up)).
 
 | What | In 3.0 |
 |------|--------|
-| The events index on PostgreSQL | Answers 500 for a user on the Overmind theme: the stats query names the alias `Event` unquoted |
 | The STIX 1 export | Needs `MISP.org`, which `ADMIN_ORG` fills |
 | The HIDS, OpenIOC and Suricata exports | Gone |

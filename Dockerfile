@@ -128,7 +128,7 @@ ARG MISP_GID=1000
 
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
-    rm -f /etc/apt/apt.conf.d/docker-clean && apt-get update && apt-get install -y --no-install-recommends git ca-certificates
+    rm -f /etc/apt/apt.conf.d/docker-clean && apt-get update && apt-get install -y --no-install-recommends git ca-certificates python3
 
 # Initialise only the submodules the image ships: PyMISP and the STIX helpers
 # under app/files/scripts are removed below, so they are never fetched. No
@@ -145,21 +145,11 @@ RUN if [ -n "${CORE_COMMIT}" ]; then \
         | grep -v -E '^(PyMISP|app/files/scripts/(cti-python-stix2|misp-stix|mixbox|python-cybox|python-maec|python-stix))$' \
         | xargs git submodule update --init --depth 1 --
 
-# CakePHP's Postgres::describe() reuses the $seq match of an earlier column
-# for every column with a NULL default, so the sequence map points each
-# column of a table at the id sequence and an INSERT into a table keyed on
-# a varchar (system_settings) fails in setval(). Reset the match per column.
-# The build fails, naming the file, when upstream changes the loop.
-# Reported upstream: https://github.com/MISP/MISP/issues/11172
-RUN CAKE_PG=/var/www/MISP/app/Lib/cakephp/lib/Cake/Model/Datasource/Database/Postgres.php && \
-    T="$(printf '\t')" && \
-    if ! grep -q "^${T}${T}${T}foreach (\$cols as \$c) {\$" "$CAKE_PG"; then \
-        echo "$CAKE_PG changed upstream: the describe() loop that the \$seq reset patches is gone. Check whether CakePHP fixed the bug, then delete or adapt this RUN" >&2; exit 1; \
-    fi && \
-    sed -i "s|^\(${T}${T}${T}\)foreach (\$cols as \$c) {\$|\1foreach (\$cols as \$c) {\n\1${T}\$seq = null;|" "$CAKE_PG" && \
-    if ! grep -q "^${T}${T}${T}${T}\$seq = null;\$" "$CAKE_PG"; then \
-        echo "$CAKE_PG: the \$seq reset did not apply" >&2; exit 1; \
-    fi
+# Our changes to MISP's code: one patch each in patches/, with its reason. The build
+# fails, naming the patch, when one no longer applies or MISP already carries it.
+COPY patches/ /tmp/patches/
+COPY scripts/apply_patches.py /tmp/apply_patches.py
+RUN python3 /tmp/apply_patches.py /var/www/MISP /tmp/patches
 
 # Clean and set permissions - all in one layer
 RUN find /var/www/MISP/INSTALL/* ! -name 'POSTGRESQL.sql' -type f -exec rm {} + && \
