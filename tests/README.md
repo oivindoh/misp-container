@@ -2,15 +2,14 @@
 
 ## TL;DR
 
-Unit tests on the Python library, an upstream guard that checks the MISP in the image against what this repository patches or depends on, and four stack suites in pytest (`tests/e2e/`): an integration suite on one Compose stack, a hub-spoke sync suite on three instances, a migration suite that copies a seeded instance onto MariaDB and PostgreSQL, and an upgrade suite that converts a seeded MISP 2.5 to MISP 3.0. A smoke test checks any live MISP through its API. Two Kubernetes checks cover the Helm chart: every render validated against the schemas, and the chart installed and upgraded on a kind cluster with the smoke test.
+Unit tests on the Python library, an upstream guard that checks the MISP in the image against what this repository patches or depends on, and four stack suites in pytest (`tests/e2e/`): an integration suite on one Compose stack, a hub-spoke sync suite on two instances, a migration suite that copies a seeded MISP 2.5.50 on MariaDB into PostgreSQL, and an upgrade suite that converts a seeded MISP 2.5 to MISP 3.0. A smoke test checks any live MISP through its API. Two Kubernetes checks cover the Helm chart: every render validated against the schemas, and the chart installed and upgraded on a kind cluster with the smoke test.
 
 ```bash
 mise run test                # unit tests, the chart lint and every chart render validated against the schemas
 mise run test-integration    # the upstream guard, then single-instance integration tests (~2min)
-mise run test-integration -- --db-engine postgres   # the same on PostgreSQL
-mise run test-sync           # hub-spoke sync test with 3 instances (~2min)
-mise run test-migration      # the migration: MariaDB to MariaDB, MariaDB to PostgreSQL (~3min)
-mise run test-upgrade        # MISP 2.5.50 converted to MISP 3.0 (-- --db-engine postgres for PostgreSQL)
+mise run test-sync           # hub-spoke sync test with 2 instances (~2min)
+mise run test-migration      # the migration: MISP 2.5.50 on MariaDB into PostgreSQL (~3min)
+mise run test-upgrade        # MISP 2.5.50 converted to MISP 3.0
 mise run smoketest https://misp.example.com   # a live MISP; asks for an API key
 mise run test-all            # every suite
 mise run test-kind           # the chart on a kind cluster: install, helm test, task runs, upgrade, rollback (build the images first)
@@ -25,7 +24,7 @@ Tests of the Python entrypoint library (`files/misp_container/`), the scripts an
 <!-- generated: unit-tests -->
 | Module | Tests |
 |---|---|
-| `test_admin.py` | Unit tests for admin helpers: every value reaches SQL as a parameter, on either engine. |
+| `test_admin.py` | Unit tests for admin helpers: every value reaches SQL as a parameter. |
 | `test_agents_md.py` | AGENTS.md is what scripts/generate_agents_md.py makes of the tree. |
 | `test_chart.py` | The Helm chart renders what the code and the release expect (helm template, no cluster). |
 | `test_chart_schema.py` | helm lint, and every render of the chart validated against the Kubernetes and CRD schemas. |
@@ -34,9 +33,8 @@ Tests of the Python entrypoint library (`files/misp_container/`), the scripts an
 | `test_config.py` | Unit tests for the config diff engine. |
 | `test_config_php.py` | Unit tests for config.php rendering from settings.yaml. |
 | `test_configure.py` | Unit tests for the configure step's identity and secret checks. |
-| `test_db.py` | Unit tests for the advisory lock (no MySQL needed). |
+| `test_db.py` | Unit tests for the database layer and housekeeping (no PostgreSQL needed). |
 | `test_docs.py` | The docs name only what the code has. |
-| `test_engine.py` | Unit tests for the engine-neutral database helpers and housekeeping. |
 | `test_env.py` | Unit tests for environment variable handling. |
 | `test_init.py` | Unit tests for init container logic (file operations, no containers needed). |
 | `test_log.py` | Unit tests for the container log formats (LOG_FORMAT json or text). |
@@ -56,7 +54,7 @@ Run with: `mise run test` or `PYTHONPATH=files python -m pytest tests/ -v --igno
 
 ## Upstream guard
 
-`e2e/test_upstream.py` runs `scripts/check_upstream.py` in one container of the web image,
+`e2e/test_upstream.py` runs `scripts/check_upstream.py` in one container of the main image,
 with the repository mounted, and reports each check as one test. A check reads MISP's own
 files and fails when MISP changed something this repository patches or depends on;
 DEVELOPING.md lists the checks. A failure names the change, the MISP file and the file of
@@ -69,7 +67,7 @@ ours to revisit. No stack starts, so the guard reports even when MISP no longer 
 
 The full MISP stack in Compose, checked feature by feature.
 
-**Stack:** 1 MISP instance (configure + web x2 + caddy + worker + MariaDB or PostgreSQL + Redis + Garage S3 + dex)
+**Stack:** 1 MISP instance (configure + web x2 + caddy + worker + PostgreSQL + Redis + Garage S3 + dex)
 
 | Suite | What it verifies |
 |-------|------------------|
@@ -80,8 +78,8 @@ The full MISP stack in Compose, checked feature by feature.
 | Workers | The five queues run under supervisord, no scheduler program, web reaches supervisord over TCP |
 | Background jobs | Event publish triggers job, worker completes it (status=4) |
 | PHP-FPM | Listening on port 9002 |
-| Distribution files and app/Config | taxonomies in the image, bootstrap.php is MISP's default plus the logging block, database.php host, config.php content |
-| GPG | Auto-generated key in .gnupg volume |
+| Distribution files and app/Config | taxonomies in the image, bootstrap.php is MISP's default plus the logging block, database.php on PostgreSQL, config.php content |
+| GPG | The key that configure generated into the `misp-gnupg-key` volume, imported into the web container's homedir |
 | MISP API | Version endpoint, event create via API |
 | Warm restart | A second run over the database groups loads the settings and changes none |
 | Defaults version | The configure step records the image version the pods wait for |
@@ -98,8 +96,7 @@ The full MISP stack in Compose, checked feature by feature.
 
 **Files:**
 - `e2e/test_integration.py` -- the suite, in the order above; later sections use the state earlier ones leave
-- `docker-compose.test.yml` -- overlay on `deploy/docker-compose.yml` (test ports, env, Garage S3, dex)
-- `docker-compose.postgres.yml`, `postgres.env` -- second overlay for `--db-engine postgres`: points every MISP container at the postgres service
+- `docker-compose.test.yml` -- overlay on `deploy/docker-compose.yml` (test ports, env, Garage S3, dex). `MISP_TEST_ENV` names one more env file for the MISP containers, layered last; `none.env` is its empty default
 - `dex.yaml` -- the OIDC provider's static client and user
 - `test-compose.env` -- test env overrides (BASE_URL, ADMIN_EMAIL, etc.)
 - `test-compose-secrets.env` -- test secrets (passwords, Redis key), layered over `deploy/chart/files/secrets-*.env`
@@ -119,9 +116,8 @@ fail. It runs with the unit tests (CI job: `unit`). `test_chart.py` checks what 
 hold.
 
 **kind test** (`tests/run-kind-test.sh`): creates a kind cluster, loads the three images
-under the tag `kind`, and installs the chart with `tests/kind/values.yaml`: the `mariadb`
-component, or with `--postgres` the `postgres` component (`tests/kind/values-postgres.yaml`).
-CI runs both. Each step must pass:
+under the tag `kind`, and installs the chart with `tests/kind/values.yaml`. Each step must
+pass:
 
 1. The configure Job and the Deployments finish; the smoke test (`e2e/test_smoke.py`) passes
    through a port-forward on 38080, and so does the chart's `helm test`.
@@ -137,7 +133,7 @@ running. CI job: `kind`.
 
 | Value | Why |
 |-------|-----|
-| The `mariadb` and `redis` components, namespace `misp` | The smallest deployment that runs |
+| The `postgres` and `redis` components, namespace `misp` | The smallest deployment that runs |
 | The `cronjobs` and `housekeeping` components | The task runs start from their CronJobs |
 | Test values for `misp-db`, `misp-app`, `misp-admin`, `MISP_UUID` | The configure Job refuses the chart's placeholders |
 | A ReadWriteOnce attachments claim | kind's local-path storage offers no ReadWriteMany |
@@ -150,62 +146,60 @@ localhost breaks the image pulls there.
 
 ## Hub-spoke sync test
 
-MISP server-to-server synchronisation across 3 isolated instances.
+MISP server-to-server synchronisation between two isolated instances.
 
-**Stack:** 3 MISP instances (A, B, C), each with dedicated MySQL + Redis + web + caddy + worker. 18 containers total.
+**Stack:** 2 MISP instances, the hub B and the spoke A, each with the deploy stack's
+PostgreSQL, Redis, configure, web, caddy and worker. The fixture writes them into one Compose
+file from `deploy/docker-compose.yml`, with an env file per instance; the configure step
+sets each admin key from `ADMIN_KEY`.
 
-```
-  A (spoke :18091)      B (hub :18092)       C (spoke :18093)
-  +------------+        +------------+       +------------+
-  | Event: A   |--pull->| Events:    |<-pull-| Event: C   |
-  |            |        |  A, B, C   |       |            |
-  +------------+        +------------+       +------------+
-        ^                  |     |                  ^
-        |                  |     |                  |
-        +--pull tag:A------+     +-----pull tag:C---+
-        +--push tag:A------+
+```mermaid
+flowchart LR
+    A[A, spoke :18091] -->|pull, every event| B[B, hub :18092]
+    B -->|pull, tag release-to:A| A
+    B -->|push, tag release-to:A| A
 ```
 
 | Phase | What it verifies |
 |-------|------------------|
-| Setup | All 3 instances ready, configured via sync container |
-| Pull (unfiltered) | B pulls events from A and C (1 event each) |
-| Tagging | Events on B tagged with release-to:A and release-to:C |
-| Pull (tag-filtered) | A gets only release-to:A events, C gets only release-to:C events |
-| Push (tag-filtered) | B pushes tagged event to A, untagged event stays on B |
-| Hub layout | A and C hold no active servers; B pulls from both, then pushes each spoke only its own tagged event |
+| Setup | Both instances ready, configured via the sync container |
+| Pull (unfiltered) | B pulls the event from A |
+| Tagging | B tags it release-to:A, and creates one event tagged release-to:A and one release-to:C |
+| Pull (tag-filtered) | A gets the release-to:A event, not the release-to:C one |
+| Push (tag-filtered) | B pushes a tagged event to A; an untagged one stays on B |
+| Hub layout | A holds no active servers; B pulls from it, then pushes it only the events tagged release-to:A |
 
 Pulls and pushes are POSTs; a refused call fails the suite. Before each check the suite waits
 until no job on the instance is unfinished.
 
 **Files:**
-- `e2e/test_sync.py` -- the suite; one module fixture per phase
-- `docker-compose.sync-test.yml` -- standalone 3-instance compose (not an overlay)
-- `sync-test-{a,b,c}.env` -- per-instance env (MySQL host, Redis host, BASE_URL)
-- `sync-test-secrets.env` -- shared secrets
+- `e2e/test_sync.py` -- the suite, with the stack it writes to `$TMPDIR/hub-spoke`; one module fixture per phase
+- `test-compose-secrets.env` -- the secrets of both instances
 
 Run with: `mise run test-sync`
 
 ## Migration suite
 
-`e2e/test_migration.py` starts the integration stack on MariaDB, seeds it (an org with a
-user, a sync user with a known authkey, a sync server, an event with an attachment) and
-records the row counts. The mounted source files hold an attachment in each place MISP keeps
-one on disk: flat, under `bucket_<n>/` and under `shadow/`. The suite then runs the migrate Job
-into a second MariaDB and checks the refusals (a non-empty target, an identity mismatch,
-`MIGRATE_FORCE` alone on the Job's own copy, then with `MIGRATE_REPLACE_COPY`), points the stack at the copy and checks it: row counts, both authkeys, the
-org, the server, the event, the attachment download, the fixture attachments under MISP's
-keys, `MISP.live` set by the configure step, and the run in the sync log. The same copy and
-checks then run onto PostgreSQL with the attachments uploaded into an S3 bucket in garage,
-plus the id sequences and a new attachment that MISP must write to the bucket. One parametrized list of checks runs against both copies. A last run
+`e2e/test_migration.py` starts the integration stack with the published 2.5.50 images on
+MariaDB (`MISP_TEST_ENV=tests/migrate-source.env`), seeds it (an org with a user, a sync user
+with a known authkey, a sync server, an event with an attachment) and records the row counts.
+The mounted source files hold an attachment in each place MISP keeps one on disk: flat, under
+`bucket_<n>/` and under `shadow/`. The suite then runs the migrate Job of this tree's image
+into PostgreSQL with `MIGRATE_SOURCE_UPGRADE=true` and checks the refusals (a non-empty
+target, an identity mismatch, `MIGRATE_FORCE` alone on the Job's own copy, then with
+`MIGRATE_REPLACE_COPY`). It runs this tree's images on the copy and checks it: row counts,
+both authkeys, the org, the server, the event, the attachment download, the fixture
+attachments under MISP's keys, `MISP.live` set by the configure step, the run record and the
+id sequences. A forced second copy uploads the attachments into an S3 bucket in garage; the
+same checks run on it, plus a new attachment that MISP must write to the bucket. A last run
 copies that bucket into a second one and compares every key and byte.
 
 **Files:**
 - `e2e/test_migration.py` -- the suite; module fixtures carry each step's state to the next
 - `e2e/stack.py`, `e2e/conftest.py` -- the stack helper and the options every pytest suite shares (see below)
-- `docker-compose.migrate.yml` -- overlay: the second MariaDB (`mysql-target`) and the migrate service with the fixture files mounted
-- `docker-compose.migrate-mysql.yml`, `migrate-target-mysql.env` -- point the stack at `mysql-target` after the copy
-- `docker-compose.migrate-s3.yml`, `migrate-target-s3.env` -- point the stack at `postgres` with the attachments in the bucket `misp-migrated`, after the copy
+- `docker-compose.migrate.yml` -- overlay: the source's MariaDB (`mysql`) and the migrate service with the fixture files mounted
+- `migrate-source.env` -- points the 2.5.50 containers at that MariaDB
+- `migrate-target-s3.env` -- puts the attachments in the bucket `misp-migrated`, after the second copy
 - `e2e/garage.py` -- layout, keys and buckets in the test stack's garage
 - `migrate-orgs.yaml` -- seed content for the org sync
 
@@ -213,7 +207,8 @@ Run with: `mise run test-migration` (`-- --skip-build`, `-- --keep`)
 
 ## Upgrade suite
 
-`e2e/test_upgrade.py` starts the integration stack on the published 2.5.50 images and seeds it:
+`e2e/test_upgrade.py` starts the integration stack on the published 2.5.50 images, on
+PostgreSQL (`MISP_TEST_ENV=tests/upgrade-source.env`), and seeds it:
 two events that share an IP address, values of five types with a non-ASCII one, an
 attachment and a sighting. It stops web and worker and checks two refusals: the 3.0
 configure step on the 2.5 database, and the upgrade step without a confirmed backup. Then it
@@ -221,13 +216,14 @@ converts the database with the upgrade step of this tree's images, runs the step
 see it convert nothing, and starts the stack on the 3.0 images. The checks: MISP reports
 3.x, the text column is gone, every attribute keeps its type and value, the attachment
 downloads whole, the sightings stay, and the workers rebuild the correlation between the two
-events. `--db-engine postgres` runs it all on PostgreSQL.
+events.
 
 **Files:**
 - `e2e/test_upgrade.py` -- the suite; module fixtures carry each step's state to the next
-- `docker-compose.test.yml`, `docker-compose.postgres.yml` -- the upgrade service with the test env
+- `docker-compose.test.yml` -- the upgrade service with the test env
+- `upgrade-source.env` -- points the 2.5.50 containers at PostgreSQL, which they do not take by default
 
-Run with: `mise run test-upgrade` (`-- --skip-build`, `-- --keep`, `-- --db-engine postgres`)
+Run with: `mise run test-upgrade` (`-- --skip-build`, `-- --keep`)
 
 ## Smoke test
 
@@ -246,7 +242,7 @@ them out (`--ignore=tests/e2e`).
 | Piece | Does |
 |-------|------|
 | `stack.py` | The `Stack` class: compose calls, `exec` and logs through the engine (a third of a compose call), SQL through the image's db layer, HTTP to MISP, waits, the log dump after a failure |
-| `conftest.py` | `--skip-build`, `--keep` (leave the stack up), `--db-engine`, `--url` and `--key` for the smoke test, a fixture that tells a module whether one of its tests failed, and the log dump at a module's first failure |
+| `conftest.py` | `--skip-build`, `--keep` (leave the stack up), `--url` and `--key` for the smoke test, a fixture that tells a module whether one of its tests failed, and the log dump at a module's first failure |
 
 A suite is one module. Module fixtures run each step once and hand its result on; the tests
 run in file order. At a module's first failure every service's log goes to
@@ -277,8 +273,8 @@ branches carry the same `ci.yaml`:
 | `master-merged` | On `misp-3.0` and its pull requests: fails while master has commits the branch lacks |
 | `build` | The three images into the layer cache. The misp image's final stage is built fresh each run, so it carries the current Debian packages |
 | `unit` | The unit tests, the chart lint and every chart render validated against the schemas |
-| `suite` | The stack suites, one job each, in parallel, against the images from `build` (`MISP_IMAGE_TAG=ci`): `integration` (the upstream guard, then the integration suite), `integration-postgres`, `hub-spoke`, `migration`, and `upgrade (mariadb)` and `upgrade (postgres)` where the upgrade suite exists. Each uploads its JUnit report and, after a failure, the compose logs |
-| `kind` | The chart on a kind cluster, once on MariaDB and once on PostgreSQL: install, smoke test, `helm test`, task runs, upgrade, rollback |
+| `suite` | The stack suites, one job each, in parallel, against the images from `build` (`MISP_IMAGE_TAG=ci`): `integration` (the upstream guard, then the integration suite), `hub-spoke`, `migration`, and `upgrade` where the upgrade suite exists. Each uploads its JUnit report and, after a failure, the compose logs |
+| `kind` | The chart on a kind cluster: install, smoke test, `helm test`, task runs, upgrade, rollback |
 | `scan` | Trivy on the three images, one scan each: CRITICAL and HIGH findings with a fix go to the Security tab, and a CRITICAL one fails the job, which blocks `publish` |
 | `ci-ok` | The one required check: fails when a job failed or was cancelled, and on a draft |
 | `publish` | After every other job: on a tag, the images, the chart and the GitHub Release; on a push to `misp-3.0`, the Early Access images and chart |

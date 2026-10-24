@@ -1,29 +1,82 @@
-"""Hub-spoke sync suite: three MISP instances configured through the org sync container.
+"""Hub-spoke sync suite: two MISP instances configured through the org sync container.
 
     pytest tests/e2e/test_sync.py [--skip-build] [--keep]
 
-Layout 1: B (the hub) pulls every event from A and C; A and C pull from B only
-the events tagged release-to:A and release-to:C; B pushes a tagged event to A.
-Layout 2: A and C are passive; B pulls from both, tags, and pushes each spoke
-only its own events.
+The stack is the deploy stack's services once per instance, prefixed a- and b-,
+written to one Compose file by the stack fixture. B is the hub, A a spoke.
+Layout 1: B pulls every event from A; A pulls from B only the events tagged
+release-to:A; B pushes a tagged event to A. Layout 2: A is passive; B pulls
+from it, tags, and pushes it only the events tagged for it.
 """
 
 import json
 import time
 
 import pytest
+import yaml
 
-from stack import TESTS, Stack, scratch_dir
+from stack import DEPLOY, TESTS, Stack, env_file, scratch_dir
 
-PORTS = {"a": 18091, "b": 18092, "c": 18093}
-ADMIN_KEYS = {i: f"adminKeyFor{i.upper()}" + "0" * 28 for i in PORTS}
+PORTS = {"a": 18091, "b": 18092}
+# The configure step refuses a key with ten zeros in a row as a placeholder
+ADMIN_KEYS = {i: f"adminKeyFor{i.upper()}" + "k7" * 14 for i in PORTS}
+MISP_UUIDS = {"a": "1a4e2c6d-0b3f-4a58-9c1d-7e2f3b4c5d6a", "b": "2b5f3d7e-1c40-4b69-8d2e-8f3a4c5d6e7b"}
+ORG_UUIDS = {"a": "1a4e2c6d-0b3f-4a58-9c1d-7e2f3b4c5d6f", "b": "2b5f3d7e-1c40-4b69-8d2e-8f3a4c5d6e7f"}
 SYNC_KEY = {  # the key the first instance's sync user holds, for the second instance
-    ("a", "b"): "syncKeyAforB" + "0" * 28,
-    ("b", "a"): "syncKeyBforA" + "0" * 28,
-    ("b", "c"): "syncKeyBforC" + "0" * 28,
-    ("c", "b"): "syncKeyCforB" + "0" * 28,
+    ("a", "b"): "syncKeyAforB" + "s5" * 14,
+    ("b", "a"): "syncKeyBforA" + "s5" * 14,
 }
-DB_PASSWORD = "misp-sync-test"
+SECRETS = TESTS / "test-compose-secrets.env"
+REDIS_PASSWORD = env_file(SECRETS)["MISP_REDIS_PASSWORD"]
+# The services of the deploy stack each instance runs; the MISP ones run read-only
+SERVICES = ("postgres", "redis", "configure", "web", "worker", "caddy")
+READ_ONLY = ("configure", "web", "worker", "caddy")
+
+
+def instance_env(inst):
+    return {"DB_HOST": f"{inst}-postgres", "MISP_REDIS_HOST": f"{inst}-redis",
+            "SIMPLEBACKGROUNDJOBS_SUPERVISOR_HOST": f"{inst}-worker",
+            "MISP_BASEURL": f"http://localhost:{PORTS[inst]}", "MISP_UUID": MISP_UUIDS[inst],
+            "ADMIN_EMAIL": "admin@admin.test", "ADMIN_ORG": f"Org-{inst.upper()}",
+            "ADMIN_ORG_UUID": ORG_UUIDS[inst], "ADMIN_KEY": ADMIN_KEYS[inst]}
+
+
+def write_stack(directory):
+    """One Compose file with SERVICES of deploy/docker-compose.yml for each instance; its path."""
+    deploy = yaml.safe_load((DEPLOY / "docker-compose.yml").read_text())["services"]
+    directory.mkdir(parents=True, exist_ok=True)
+    services, volumes = {}, {}
+
+    def prefixed(inst, volume):
+        source, _, target = volume.partition(":")
+        if "/" in source or source.startswith((".", "$")):
+            return volume
+        volumes[f"{inst}-{source}"] = None
+        return f"{inst}-{source}:{target}"
+
+    for inst in PORTS:
+        env = directory / f"{inst}.env"
+        env.write_text("".join(f"{key}={value}\n" for key, value in instance_env(inst).items()))
+        for name in SERVICES:
+            spec = {k: v for k, v in deploy[name].items() if k not in ("build", "ports", "profiles")}
+            spec["env_file"] = [str(DEPLOY / f) for f in spec.get("env_file", [])] + [str(SECRETS), str(env)]
+            spec["volumes"] = [prefixed(inst, v) for v in spec.get("volumes", [])]
+            deps = spec.pop("depends_on", {})
+            deps = deps if isinstance(deps, dict) else {d: {"condition": "service_started"} for d in deps}
+            spec["depends_on"] = {f"{inst}-{d}": c for d, c in deps.items() if d in SERVICES}
+            if name == "caddy":
+                spec["environment"] = {**spec.get("environment", {}), "PHP_FPM_HOST": f"{inst}-web"}
+                spec["ports"] = [f"{PORTS[inst]}:8080"]
+            if name in READ_ONLY:
+                spec["read_only"] = True
+            services[f"{inst}-{name}"] = {k: v for k, v in spec.items() if v not in ([], {})}
+    # One org sync service; run_sync points it at an instance
+    sync = {k: v for k, v in deploy["sync"].items() if k not in ("build", "depends_on")}
+    sync["env_file"] = [str(DEPLOY / f) for f in sync["env_file"]] + [str(SECRETS)]
+    services["sync"] = sync
+    path = directory / "docker-compose.yml"
+    path.write_text(yaml.safe_dump({"services": services, "volumes": volumes}, sort_keys=False))
+    return path
 
 
 def url(inst):
@@ -40,16 +93,11 @@ def post_ok(stack, inst, path, data=None):
     assert status == 200, f"POST {path} on {inst}: {status} {body[:300]}"
 
 
-def sql(stack, inst, query):
-    out = stack.exec(f"{inst}-mysql", f"mariadb -u misp -p{DB_PASSWORD} -N misp -e \"{query}\"")
-    return "".join(out.split())
-
-
 def wait_for_jobs(stack, inst, timeout=90):
     """Until no job on the instance is unfinished (MISP keeps it at 0 until 3 or 4)."""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        if sql(stack, inst, "SELECT COUNT(*) FROM jobs WHERE status NOT IN (3,4);") == "0":
+        if stack.sql("SELECT COUNT(*) FROM jobs WHERE status NOT IN (3,4);", service=f"{inst}-web") == "0":
             return
         time.sleep(2)
     raise RuntimeError(f"{inst}: a job is still unfinished after {timeout}s")
@@ -88,51 +136,48 @@ def run_sync(stack, inst, config: str) -> int:
     path.write_text(config)
     rc, _ = stack.run("sync", env={
         "ADMIN_KEY": ADMIN_KEYS[inst], "SYNC_BASE_URL": f"http://{inst}-caddy:8080",
-        "DB_HOST": f"{inst}-mysql", "DB_PORT": "3306", "DB_USER": "misp", "DB_PASSWORD": DB_PASSWORD,
-        "DB_NAME": "misp", "MISP_REDIS_HOST": f"{inst}-redis", "ORG_CONFIG_FILE": "/etc/misp-docker/orgs.yaml",
+        "DB_HOST": f"{inst}-postgres", "MISP_REDIS_HOST": f"{inst}-redis",
     }, volumes=[f"{path}:/etc/misp-docker/orgs.yaml:ro"])
     path.unlink()
     return rc
 
 
-def spoke(org_uuid, name, own, hub_server=True, pull_tag=""):
-    """orgs.yaml of a spoke: its sync user for B and, in layout 1, B as a pull server."""
+def spoke(hub_server=True):
+    """orgs.yaml of A: its sync user for B and, in layout 1, B as a pull server for release-to:A."""
     config = f'''teams:
-  - uuid: "{org_uuid}"
-    name: "{name}"
+  - uuid: "{ORG_UUIDS['a']}"
+    name: "Org-A"
     users:
       - email: admin@admin.test
         role: admin
     sync_users:
-      - email: sync-b@{own}.test
-        authkey: "{SYNC_KEY[(own, 'b')]}"
+      - email: sync-b@a.test
+        authkey: "{SYNC_KEY[('a', 'b')]}"
 '''
     if hub_server:
         config += f'''    servers:
       - name: "Hub B"
         url: "http://b-caddy:8080"
-        authkey: "{SYNC_KEY[('b', own)]}"
+        authkey: "{SYNC_KEY[('b', 'a')]}"
         pull: true
         push: false
         pull_tags:
-          - "{pull_tag}"
+          - "release-to:A"
 '''
     return config
 
 
-def hub(org_uuid, push):
-    """orgs.yaml of B: sync users for A and C, both spokes as pull (and in layout 2 push) servers."""
-    servers = ""
-    for own in ("a", "c"):
-        servers += f'''      - name: "Spoke {own.upper()}"
-        url: "http://{own}-caddy:8080"
-        authkey: "{SYNC_KEY[(own, 'b')]}"
+def hub(push):
+    """orgs.yaml of B: the sync user for A, and A as a pull (and in layout 2 push) server."""
+    server = f'''      - name: "Spoke A"
+        url: "http://a-caddy:8080"
+        authkey: "{SYNC_KEY[('a', 'b')]}"
         pull: true
         push: {"true" if push else "false"}
 '''
-        if push:
-            servers += f'''        push_tags:
-          - "release-to:{own.upper()}"
+    if push:
+        server += '''        push_tags:
+          - "release-to:A"
 '''
     return f'''tags:
   - name: "release-to:A"
@@ -141,7 +186,7 @@ def hub(org_uuid, push):
     colour: "#ff0000"
 
 teams:
-  - uuid: "{org_uuid}"
+  - uuid: "{ORG_UUIDS['b']}"
     name: "Org-B"
     users:
       - email: admin@admin.test
@@ -149,37 +194,21 @@ teams:
     sync_users:
       - email: sync-a@b.test
         authkey: "{SYNC_KEY[('b', 'a')]}"
-      - email: sync-c@b.test
-        authkey: "{SYNC_KEY[('b', 'c')]}"
     servers:
-{servers}'''
+{server}'''
 
 
 # -- fixtures: one per phase --------------------------------------------------------
 
 @pytest.fixture(scope="module")
 def stack(options, failed_in_module):
-    s = Stack([TESTS / "docker-compose.sync-test.yml"])
-    s.compose("down", "-v")
     if not options["skip_build"]:
-        s.compose("build", check=True, timeout=3600)
-    s.compose("up", "-d")
+        Stack([DEPLOY / "docker-compose.yml"]).compose("build", check=True, timeout=3600)
+    s = Stack([write_stack(scratch_dir() / "hub-spoke")])
+    s.compose("down", "-v")
+    s.compose("up", "-d", *[f"{inst}-{name}" for inst in PORTS for name in SERVICES])
     for inst in PORTS:
         s.wait_for_misp(timeout=360, base_url=url(inst))
-    # MISP stores only a hash of an authkey: write a known admin key per instance
-    for inst, key in ADMIN_KEYS.items():
-        s.run("sync", "python3", "-c", f"""
-import bcrypt, pymysql, uuid
-key = '{key}'
-h = bcrypt.hashpw(key.encode(), bcrypt.gensalt(12)).decode().replace('$2b$', '$2y$')
-conn = pymysql.connect(host='{inst}-mysql', user='misp', password='{DB_PASSWORD}', database='misp')
-with conn.cursor() as cur:
-    cur.execute('DELETE FROM auth_keys WHERE user_id = 1')
-    cur.execute('INSERT INTO auth_keys (uuid, authkey, authkey_start, authkey_end, created, user_id, expiration) '
-                'VALUES (%s, %s, %s, %s, UNIX_TIMESTAMP(), 1, 0)', (str(uuid.uuid4()), h, key[:4], key[-4:]))
-conn.commit()
-""")
-    s.org_uuid = {inst: sql(s, inst, "SELECT uuid FROM organisations WHERE id=1;") for inst in PORTS}
     yield s
     s.finish("sync", options["keep"], failed_in_module())
 
@@ -187,42 +216,35 @@ conn.commit()
 @pytest.fixture(scope="module")
 def layout1(stack):
     create_event(stack, "a", "Event from A", "10.0.0.1")
-    create_event(stack, "c", "Event from C", "10.0.0.2")
-    return {
-        "a": run_sync(stack, "a", spoke(stack.org_uuid["a"], "Org-A", "a", pull_tag="release-to:A")),
-        "b": run_sync(stack, "b", hub(stack.org_uuid["b"], push=False)),
-        "c": run_sync(stack, "c", spoke(stack.org_uuid["c"], "Org-C", "c", pull_tag="release-to:C")),
-    }
+    return {"a": run_sync(stack, "a", spoke()), "b": run_sync(stack, "b", hub(push=False))}
 
 
 @pytest.fixture(scope="module")
 def hub_pulled(stack, layout1):
-    for name in ("Spoke A", "Spoke C"):
-        post_ok(stack, "b", f"/servers/pull/{server_id(stack, 'b', name)}/full")
+    post_ok(stack, "b", f"/servers/pull/{server_id(stack, 'b', 'Spoke A')}/full")
     wait_for_jobs(stack, "b")
 
 
 @pytest.fixture(scope="module")
 def hub_tagged(stack, hub_pulled):
-    ids = {own: event_id(stack, "b", f"Event from {own.upper()}") for own in ("a", "c")}
-    for own, eid in ids.items():
-        tag_and_publish(stack, "b", eid, f"release-to:{own.upper()}")
-    return ids
+    eid = event_id(stack, "b", "Event from A")
+    tag_and_publish(stack, "b", eid, "release-to:A")
+    for release in ("A", "C"):
+        tag_and_publish(stack, "b", create_event(stack, "b", f"Release to {release}", "10.0.0.2", publish=False),
+                        f"release-to:{release}")
+    return eid
 
 
 @pytest.fixture(scope="module")
-def spokes_pulled(stack, hub_tagged):
-    for inst in ("a", "c"):
-        # Stale event indexes in Redis would hide the pulled events
-        stack.exec(f"{inst}-redis", "redis-cli -a redis-sync-test FLUSHALL")
-    for inst in ("a", "c"):
-        post_ok(stack, inst, f"/servers/pull/{server_id(stack, inst, 'Hub B')}/full")
+def spoke_pulled(stack, hub_tagged):
+    # Stale event indexes in Redis would hide the pulled events
+    stack.exec("a-redis", f"redis-cli -a {REDIS_PASSWORD} FLUSHALL")
+    post_ok(stack, "a", f"/servers/pull/{server_id(stack, 'a', 'Hub B')}/full")
     wait_for_jobs(stack, "a")
-    wait_for_jobs(stack, "c")
 
 
 @pytest.fixture(scope="module")
-def hub_pushed_to_a(stack, spokes_pulled):
+def hub_pushed_to_a(stack, spoke_pulled):
     tags = (api(stack, "b", "GET", "/tags") or {}).get("Tag", [])
     tag_a = next(t["id"] for t in tags if t["name"] == "release-to:A")
     rules = {"tags": {"OR": [int(tag_a)], "NOT": []}, "orgs": {"OR": [], "NOT": []}}
@@ -237,28 +259,22 @@ def hub_pushed_to_a(stack, spokes_pulled):
 
 @pytest.fixture(scope="module")
 def layout2(stack, hub_pushed_to_a):
-    return {
-        "a": run_sync(stack, "a", spoke(stack.org_uuid["a"], "Org-A", "a", hub_server=False)),
-        "b": run_sync(stack, "b", hub(stack.org_uuid["b"], push=True)),
-        "c": run_sync(stack, "c", spoke(stack.org_uuid["c"], "Org-C", "c", hub_server=False)),
-    }
+    return {"a": run_sync(stack, "a", spoke(hub_server=False)), "b": run_sync(stack, "b", hub(push=True))}
 
 
 @pytest.fixture(scope="module")
 def layout2_pulled(stack, layout2):
     create_event(stack, "a", "Layout2 from A", "10.1.0.1")
-    create_event(stack, "c", "Layout2 from C", "10.1.0.2")
-    for name in ("Spoke A", "Spoke C"):
-        post_ok(stack, "b", f"/servers/pull/{server_id(stack, 'b', name)}/full")
+    post_ok(stack, "b", f"/servers/pull/{server_id(stack, 'b', 'Spoke A')}/full")
     wait_for_jobs(stack, "b")
 
 
 @pytest.fixture(scope="module")
 def layout2_pushed(stack, layout2_pulled):
-    for own in ("a", "c"):
-        tag_and_publish(stack, "b", event_id(stack, "b", f"Layout2 from {own.upper()}"), f"release-to:{own.upper()}")
-    for name in ("Spoke A", "Spoke C"):
-        post_ok(stack, "b", f"/servers/push/{server_id(stack, 'b', name)}/full")
+    for release in ("A", "C"):
+        tag_and_publish(stack, "b", create_event(stack, "b", f"Layout2 to {release}", "10.1.0.2", publish=False),
+                        f"release-to:{release}")
+    post_ok(stack, "b", f"/servers/push/{server_id(stack, 'b', 'Spoke A')}/full")
     wait_for_jobs(stack, "b")
 
 
@@ -270,28 +286,24 @@ def test_all_instances_ready(stack):
 
 
 def test_all_instances_configured_through_the_sync_container(layout1):
-    assert layout1 == {"a": 0, "b": 0, "c": 0}
+    assert layout1 == {"a": 0, "b": 0}
 
 
-@pytest.mark.parametrize("own", ["A", "C"])
-def test_hub_pulled_the_event(stack, hub_pulled, own):
-    assert event_count(stack, "b", f"Event from {own}") == 1
+def test_hub_pulled_the_event(stack, hub_pulled):
+    assert event_count(stack, "b", "Event from A") == 1
 
 
-@pytest.mark.parametrize("own", ["a", "c"])
-def test_hub_event_tagged(stack, hub_tagged, own):
-    event = api(stack, "b", "GET", f"/events/view/{hub_tagged[own]}") or {}
+def test_hub_event_tagged(stack, hub_tagged):
+    event = api(stack, "b", "GET", f"/events/view/{hub_tagged}") or {}
     assert len(event.get("Event", {}).get("Tag") or []) == 1
 
 
-@pytest.mark.parametrize("inst,own,foreign", [("a", "A", "C"), ("c", "C", "A")])
-def test_spoke_has_its_own_event(stack, spokes_pulled, inst, own, foreign):
-    assert event_count(stack, inst, f"Event from {own}") == 1
+def test_spoke_pulled_its_release(stack, spoke_pulled):
+    assert event_count(stack, "a", "Release to A") == 1
 
 
-@pytest.mark.parametrize("inst,own,foreign", [("a", "A", "C"), ("c", "C", "A")])
-def test_spoke_pulled_no_foreign_event(stack, spokes_pulled, inst, own, foreign):
-    assert event_count(stack, inst, f"Event from {foreign}") == 0
+def test_spoke_pulled_no_foreign_release(stack, spoke_pulled):
+    assert event_count(stack, "a", "Release to C") == 0
 
 
 def test_a_received_the_tagged_push(stack, hub_pushed_to_a):
@@ -304,24 +316,20 @@ def test_a_did_not_receive_the_untagged_push(stack, hub_pushed_to_a):
 
 # -- layout 2: hub-initiated ---------------------------------------------------------
 
-@pytest.mark.parametrize("inst", ["a", "c"])
-def test_spoke_is_passive(stack, layout2, inst):
-    assert layout2[inst] == 0
-    active = [s for s in api(stack, inst, "GET", "/servers") or []
+def test_spoke_is_passive(stack, layout2):
+    assert layout2 == {"a": 0, "b": 0}
+    active = [s for s in api(stack, "a", "GET", "/servers") or []
               if s["Server"].get("push") or s["Server"].get("pull")]
     assert active == []
 
 
-@pytest.mark.parametrize("own", ["A", "C"])
-def test_hub_pulled_the_layout2_event(stack, layout2_pulled, own):
-    assert event_count(stack, "b", f"Layout2 from {own}") == 1
+def test_hub_pulled_the_layout2_event(stack, layout2_pulled):
+    assert event_count(stack, "b", "Layout2 from A") == 1
 
 
-@pytest.mark.parametrize("inst,own,foreign", [("a", "A", "C"), ("c", "C", "A")])
-def test_spoke_received_its_own_event_by_hub_push(stack, layout2_pushed, inst, own, foreign):
-    assert event_count(stack, inst, f"Layout2 from {own}") == 1
+def test_spoke_received_its_release_by_hub_push(stack, layout2_pushed):
+    assert event_count(stack, "a", "Layout2 to A") == 1
 
 
-@pytest.mark.parametrize("inst,own,foreign", [("a", "A", "C"), ("c", "C", "A")])
-def test_spoke_received_no_foreign_event_by_hub_push(stack, layout2_pushed, inst, own, foreign):
-    assert event_count(stack, inst, f"Layout2 from {foreign}") == 0
+def test_spoke_received_no_foreign_release_by_hub_push(stack, layout2_pushed):
+    assert event_count(stack, "a", "Layout2 to C") == 0

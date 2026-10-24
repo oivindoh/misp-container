@@ -1,6 +1,6 @@
 """Integration suite: one MISP stack in Compose, checked feature by feature.
 
-    pytest tests/e2e/test_integration.py [--skip-build] [--keep] [--db-engine postgres]
+    pytest tests/e2e/test_integration.py [--skip-build] [--keep]
 
 The tests run in file order on one stack. Later sections depend on the state
 earlier ones leave: custom auth creates a user that the org sync warm run
@@ -44,14 +44,7 @@ def bootstrap_garage():
 
 @pytest.fixture(scope="module")
 def stack(options, failed_in_module):
-    files = [DEPLOY / "docker-compose.yml", TESTS / "docker-compose.test.yml"]
-    profiles = ()
-    if options["db_engine"] == "postgres":
-        # The overlay points every MISP container at the postgres service
-        files.append(TESTS / "docker-compose.postgres.yml")
-        profiles = ("postgres",)
-    s = Stack(files, profiles)
-    s.engine_under_test = "postgres" if options["db_engine"] == "postgres" else "mysql"
+    s = Stack([DEPLOY / "docker-compose.yml", TESTS / "docker-compose.test.yml"])
     s.compose("down", "-v")
     if not options["skip_build"]:
         s.compose("build", check=True, timeout=3600)
@@ -65,14 +58,6 @@ def stack(options, failed_in_module):
 
 def me(stack, key=None):
     return stack.api("GET", "/users/view/me", key or stack.key) or {}
-
-
-def sql_true(stack):
-    return "TRUE" if stack.engine_under_test == "postgres" else "1"
-
-
-def sql_now(stack):
-    return "EXTRACT(EPOCH FROM NOW())::bigint" if stack.engine_under_test == "postgres" else "UNIX_TIMESTAMP()"
 
 
 def task(stack, *args, key=None):
@@ -289,9 +274,9 @@ print((rendered[:start] + rendered[end:]).strip() == default.strip())
     assert out == "True", f"bootstrap.php differs from MISP's bootstrap.default.php beyond the logging block: {out}"
 
 
-def test_database_php_has_the_engine_host(stack):
-    hosts = stack.exec("web", "grep host /var/www/MISP/app/Config/database.php")
-    assert stack.engine_under_test in hosts
+def test_database_php_points_at_postgres(stack):
+    config = stack.exec("web", "grep -E 'datasource|host' /var/www/MISP/app/Config/database.php")
+    assert "Database/PostgresObserverExtended" in config and "'postgres'" in config
 
 
 @pytest.mark.parametrize("needle", ["redis_host", "redis_password", "SimpleBackgroundJobs", "supervisor_host"])
@@ -438,9 +423,9 @@ $CAKE Admin setSetting -q Plugin.CustomAuth_required false
 $CAKE user create headeruser@example.com 3 1 'HeaderUserPass123!' || true
 $CAKE user change_pw headeruser@example.com 'HeaderUserPass123!' --no_password_change""")
     # CustomAuth matches a user by external_auth_key, not by email
-    stack.sql(f"UPDATE users SET external_auth_required={sql_true(stack)}, "
-              f"external_auth_key='headeruser@example.com', change_pw=NOT {sql_true(stack)}, "
-              f"last_pw_change={sql_now(stack)} WHERE email='headeruser@example.com';")
+    stack.sql("UPDATE users SET external_auth_required=TRUE, external_auth_key='headeruser@example.com', "
+              "change_pw=FALSE, last_pw_change=EXTRACT(EPOCH FROM NOW())::bigint "
+              "WHERE email='headeruser@example.com';")
     yield stack
     stack.exec("web", "/var/www/MISP/app/Console/cake Admin setSetting -q Plugin.CustomAuth_enable false")
 
@@ -878,8 +863,8 @@ def test_metrics_waiting_job_shows_in_the_queue(waiting_job):
         "Redis keys MISP no longer writes (see the job-keys check in tests/e2e/test_upstream.py)")
 
 
-def test_metrics_sync_log_after_org_sync(metrics_text, synced):
-    assert "misp_sync_runs_24h" in metrics_text
+def test_metrics_count_the_org_sync_run(metrics_text, synced):
+    assert 'misp_container_job_runs_total{operation="org-sync",status="success"}' in metrics_text
 
 
 # -- MISP modules --------------------------------------------------------------------

@@ -15,8 +15,7 @@ GOOD = {
     "SECURITY_ENCRYPTION_KEY": "",
     "ADMIN_PASSWORD": "Long-Passw0rd!Value",
     "ADMIN_KEY": "",
-    "MYSQL_PASSWORD": "db-pass",
-    "MYSQL_ROOT_PASSWORD": "root-pass",
+    "DB_PASSWORD": "db-pass",
     "MISP_REDIS_PASSWORD": "redis-pass",
     "GNUPG_PASSWORD": "gpg-pass",
     "MISP_UUID": "1a4e2c6d-0b3f-4a58-9c1d-7e2f3b4c5d6a",
@@ -32,7 +31,7 @@ class TestCheckIdentity:
         ("SECURITY_SALT", "override-me-generate-a-real-64-char-hex-salt-with-python3-secret"),
         ("SECURITY_SALT", "0" * 64),
         ("ADMIN_PASSWORD", "change-me"),
-        ("MYSQL_PASSWORD", "REPLACE-WITH-REAL-PASSWORD"),
+        ("DB_PASSWORD", "REPLACE-WITH-REAL-PASSWORD"),
         ("SECURITY_ENCRYPTION_KEY", "change-me"),
     ])
     def test_placeholder_secret_refused(self, key, value):

@@ -1,6 +1,6 @@
 # The postgres component: single-node PostgreSQL on a ReadWriteOnce claim, the
-# database misp owned by DB_USER, UTF8. It sets DB_ENGINE, DB_HOST and DB_PORT
-# in misp-env (configmap-env.yaml).
+# database misp owned by DB_USER, UTF8, behind the Service postgres that DB_HOST
+# names by default.
 {{- if .Values.postgres.enabled }}
 apiVersion: apps/v1
 kind: StatefulSet

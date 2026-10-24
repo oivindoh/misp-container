@@ -21,8 +21,6 @@ from misp_container.metrics import (
     _check_server_auth,
     _check_tls_cert,
     collect_all,
-    init_sync_log_table,
-    log_sync_result,
     network_metrics,
     refresh_network_metrics,
 )
@@ -217,16 +215,16 @@ class TestCollectDbMetrics:
 
     @patch("misp_container.metrics._connect")
     def test_basic_content_counts(self, mock_connect):
-        """Content count metrics are emitted from information_schema + exact queries."""
+        """Content count metrics are emitted from pg_stat_user_tables + exact queries."""
         mock_connect.return_value = _make_conn({
             "system_settings": [
                 {"setting": "MISP.uuid", "value": '"abc-123"'},
                 {"setting": "MISP.baseurl", "value": '"https://misp.example.com"'},
             ],
-            "information_schema": [
-                {"TABLE_NAME": "events", "TABLE_ROWS": 500},
-                {"TABLE_NAME": "attributes", "TABLE_ROWS": 15000},
-                {"TABLE_NAME": "shadow_attributes", "TABLE_ROWS": 10},
+            "pg_stat_user_tables": [
+                {"relname": "events", "live_rows": 500},
+                {"relname": "attributes", "live_rows": 15000},
+                {"relname": "shadow_attributes", "live_rows": 10},
             ],
             "organisations": {
                 "orgs": 5, "orgs_local": 3,
@@ -235,7 +233,6 @@ class TestCollectDbMetrics:
             },
             "FROM servers": [],
             "FROM jobs": [],
-            "misp_container_sync_log": [],
         })
         output, errors = _collect_db_metrics()
         parsed = _parse_metrics(output)
@@ -257,7 +254,7 @@ class TestCollectDbMetrics:
                 {"setting": "MISP.uuid", "value": '"test-uuid"'},
                 {"setting": "MISP.baseurl", "value": '"https://misp.test"'},
             ],
-            "information_schema": [],
+            "pg_stat_user_tables": [],
             "organisations": {
                 "orgs": 0, "orgs_local": 0,
                 "users_active": 0, "users_disabled": 0,
@@ -265,7 +262,6 @@ class TestCollectDbMetrics:
             },
             "FROM servers": [],
             "FROM jobs": [],
-            "misp_container_sync_log": [],
         })
         output, _ = _collect_db_metrics()
         parsed = _parse_metrics(output)
@@ -278,7 +274,7 @@ class TestCollectDbMetrics:
         """User metrics are split by active/disabled status label."""
         mock_connect.return_value = _make_conn({
             "system_settings": [],
-            "information_schema": [],
+            "pg_stat_user_tables": [],
             "organisations": {
                 "orgs": 0, "orgs_local": 0,
                 "users_active": 8, "users_disabled": 2,
@@ -286,7 +282,6 @@ class TestCollectDbMetrics:
             },
             "FROM servers": [],
             "FROM jobs": [],
-            "misp_container_sync_log": [],
         })
         output, _ = _collect_db_metrics()
         parsed = _parse_metrics(output)
@@ -300,7 +295,7 @@ class TestCollectDbMetrics:
         """Server info, pull/push enabled, and last sync IDs are emitted."""
         mock_connect.return_value = _make_conn({
             "system_settings": [],
-            "information_schema": [],
+            "pg_stat_user_tables": [],
             "organisations": {
                 "orgs": 0, "orgs_local": 0,
                 "users_active": 0, "users_disabled": 0,
@@ -319,7 +314,6 @@ class TestCollectDbMetrics:
                 },
             ],
             "FROM jobs": [],
-            "misp_container_sync_log": [],
         })
         output, errors = _collect_db_metrics()
         parsed = _parse_metrics(output)
@@ -350,7 +344,7 @@ class TestCollectDbMetrics:
         """No server metrics emitted when no servers are configured."""
         mock_connect.return_value = _make_conn({
             "system_settings": [],
-            "information_schema": [],
+            "pg_stat_user_tables": [],
             "organisations": {
                 "orgs": 0, "orgs_local": 0,
                 "users_active": 0, "users_disabled": 0,
@@ -358,7 +352,6 @@ class TestCollectDbMetrics:
             },
             "FROM servers": [],
             "FROM jobs": [],
-            "misp_container_sync_log": [],
         })
         output, errors = _collect_db_metrics()
         parsed = _parse_metrics(output)
@@ -370,7 +363,7 @@ class TestCollectDbMetrics:
         """All jobs fetched in one query; split into server vs non-server counters."""
         mock_connect.return_value = _make_conn({
             "system_settings": [],
-            "information_schema": [],
+            "pg_stat_user_tables": [],
             "organisations": {
                 "orgs": 0, "orgs_local": 0,
                 "users_active": 0, "users_disabled": 0,
@@ -388,7 +381,6 @@ class TestCollectDbMetrics:
                 {"worker": "default", "job_type": "publish", "status": 3, "server_id": None, "server_name": None, "cnt": 2},
                 {"worker": "prio", "job_type": "publish_event", "status": 0, "server_id": None, "server_name": None, "cnt": 4},
             ],
-            "misp_container_sync_log": [],
         })
         output, _ = _collect_db_metrics()
         parsed = _parse_metrics(output)
@@ -435,11 +427,16 @@ class TestCollectDbMetrics:
         assert parsed["misp_scheduled_tasks_enabled"] == [({}, "0")]
 
     @patch("misp_container.metrics._connect")
-    def test_sync_log_metrics(self, mock_connect):
-        """Sync container log metrics are emitted when table exists."""
+    def test_job_run_metrics(self, mock_connect):
+        """Each container job's row of system_settings becomes a run counter and a last-success time."""
         mock_connect.return_value = _make_conn({
+            "setting LIKE": [
+                {"setting": "misp_docker.runs.org-sync",
+                 "value": b'{"success": 5, "error": 1, "last_success": 1747310400, "last_error": 1747300000}'},
+                {"setting": "misp_docker.runs.configure", "value": '{"error": 2, "last_error": 1747300000}'},
+            ],
             "system_settings": [],
-            "information_schema": [],
+            "pg_stat_user_tables": [],
             "organisations": {
                 "orgs": 0, "orgs_local": 0,
                 "users_active": 0, "users_disabled": 0,
@@ -447,30 +444,20 @@ class TestCollectDbMetrics:
             },
             "FROM servers": [],
             "FROM jobs": [],
-            "GROUP BY operation, status": [
-                {"operation": "org-sync", "status": "success", "runs": 5,
-                 "last_run": "2026-05-15 10:00:00", "avg_duration": 2.5},
-                {"operation": "org-sync", "status": "error", "runs": 1,
-                 "last_run": "2026-05-15 09:00:00", "avg_duration": 1.0},
-            ],
-            "UNIX_TIMESTAMP": [{"operation": "org-sync", "ts": 1747310400}],
         })
-        output, _ = _collect_db_metrics()
-        parsed = _parse_metrics(output)
-
-        runs = parsed["misp_sync_runs_24h"]
-        by_status = {s[0]["status"]: s[1] for s in runs}
-        assert by_status["success"] == "5"
-        assert by_status["error"] == "1"
-
-        assert parsed["misp_sync_last_success_timestamp_seconds"][0] == ({"operation": "org-sync"}, "1747310400")
+        parsed = _parse_metrics(_collect_db_metrics()[0])
+        runs = {(s[0]["operation"], s[0]["status"]): s[1] for s in parsed["misp_container_job_runs_total"]}
+        assert runs == {("configure", "error"): "2", ("configure", "success"): "0",
+                        ("org-sync", "error"): "1", ("org-sync", "success"): "5"}
+        assert parsed["misp_container_job_last_success_timestamp_seconds"] == [
+            ({"operation": "org-sync"}, "1747310400")]
 
     @patch("misp_container.metrics._connect")
-    def test_sync_log_table_missing(self, mock_connect):
-        """No crash when the sync log table doesn't exist yet."""
+    def test_job_runs_query_failure(self, mock_connect):
+        """A failed read of the run records counts as an error and drops only those metrics."""
         cursor = FakeCursor({
             "system_settings": [],
-            "information_schema": [],
+            "pg_stat_user_tables": [],
             "organisations": {
                 "orgs": 0, "orgs_local": 0,
                 "users_active": 0, "users_disabled": 0,
@@ -479,26 +466,25 @@ class TestCollectDbMetrics:
             "FROM servers": [],
             "FROM jobs": [],
         })
-        # Make sync log queries raise (table doesn't exist)
         orig_execute = cursor.execute
         def raising_execute(sql, args=None):
-            if "misp_container_sync_log" in sql:
-                raise Exception("Table doesn't exist")
+            if "setting LIKE" in sql:
+                raise Exception("connection lost")
             return orig_execute(sql, args)
         cursor.execute = raising_execute
 
         mock_connect.return_value = FakeConnection(cursor)
-        output, _ = _collect_db_metrics()
-        # Should not crash, just skip sync log metrics
+        output, errors = _collect_db_metrics()
         assert "misp_up" in output
-        assert "misp_sync_runs_24h" not in output
+        assert "misp_container_job_runs_total" not in output
+        assert errors == 1
 
     @patch("misp_container.metrics._connect")
     def test_no_db_cache(self, mock_connect):
         """Each call queries the database (no stale cache)."""
         mock_connect.return_value = _make_conn({
             "system_settings": [],
-            "information_schema": [],
+            "pg_stat_user_tables": [],
             "organisations": {
                 "orgs": 1, "orgs_local": 0,
                 "users_active": 0, "users_disabled": 0,
@@ -506,7 +492,6 @@ class TestCollectDbMetrics:
             },
             "FROM servers": [],
             "LEFT JOIN servers": [],
-            "misp_container_sync_log": [],
         })
         _collect_db_metrics()
         _collect_db_metrics()
@@ -880,50 +865,6 @@ class TestCollectAll:
         assert parsed["misp_server_reachable"][0] == ({"id": "1"}, "1")
 
 
-# ---------------------------------------------------------------------------
-# Sync log table operations
-# ---------------------------------------------------------------------------
-
-
-class TestSyncLogTable:
-    """init_sync_log_table and log_sync_result write to the database."""
-
-    @patch("misp_container.metrics._connect")
-    def test_init_creates_table(self, mock_connect):
-        conn = MagicMock()
-        cursor = conn.cursor.return_value
-        mock_connect.return_value = conn
-
-        init_sync_log_table()
-
-        calls = [str(c) for c in cursor.execute.call_args_list]
-        assert any("CREATE TABLE" in c for c in calls)
-        assert any("DELETE" in c and "30 DAY" in c and "operation <> 'migrate'" in c for c in calls)
-        conn.commit.assert_called_once()
-        conn.close.assert_called_once()
-
-    @patch("misp_container.metrics._connect")
-    def test_log_result_inserts_row(self, mock_connect):
-        conn = MagicMock()
-        cursor = conn.cursor.return_value
-        mock_connect.return_value = conn
-
-        log_sync_result(
-            operation="org-sync",
-            status="success",
-            summary='{"orgs": 3}',
-            duration_seconds=2.5,
-        )
-
-        cursor.execute.assert_called_once()
-        args = cursor.execute.call_args
-        assert "INSERT INTO misp_container_sync_log" in args[0][0]
-        assert args[0][1][0] == "org-sync"
-        assert args[0][1][1] == "success"
-        conn.commit.assert_called_once()
-        conn.close.assert_called_once()
-
-
 class TestCheckServerAuthEncrypted:
     """With Security.encryption_key set, servers.authkey is ciphertext the probe cannot send."""
 
@@ -952,7 +893,7 @@ class TestCheckServerAuthEncrypted:
             _check_server_auth("https://x", ENCRYPTED_MAGIC + "cipher")
         assert "Authorization" not in seen["headers"]
 
-    def test_bytes_authkey_from_pymysql(self):
+    def test_a_bytea_authkey(self):
         from misp_container.metrics import ENCRYPTED_MAGIC
         with patch("misp_container.metrics.urllib.request.urlopen", side_effect=self._http_error(403)):
             assert _check_server_auth("https://x", (ENCRYPTED_MAGIC + "cipher").encode("latin-1")) is True

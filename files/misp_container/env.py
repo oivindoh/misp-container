@@ -2,7 +2,7 @@
 
 All defaults live in two places:
 1. settings.yaml -- for MISP settings (auto-derived env vars)
-2. deploy/chart/files/*.env -- for container config (MySQL, PHP, etc.)
+2. deploy/chart/files/*.env -- for container config (database, PHP, etc.)
 
 apply_defaults() loads settings.yaml defaults into os.environ so that
 env("MISP_REDIS_HOST") works everywhere without inline defaults.
@@ -34,17 +34,6 @@ DERIVED = {
                                        "PLUGIN_ACTION_SERVICES_URL"),
 }
 
-
-# Database connection: DB_* is the engine-neutral form; MYSQL_* stays as the
-# alias every existing deployment sets.
-DB_ALIASES = {
-    "MYSQL_HOST": "DB_HOST",
-    "MYSQL_PORT": "DB_PORT",
-    "MYSQL_DATABASE": "DB_NAME",
-    "MYSQL_USER": "DB_USER",
-    "MYSQL_PASSWORD": "DB_PASSWORD",
-    "MYSQL_TLS": "DB_TLS",
-}
 
 # Documented short names for the auth plugins, mapped onto the env vars derived
 # from the setting names (OidcAuth.provider_url -> OIDCAUTH_PROVIDER_URL).
@@ -106,11 +95,6 @@ def apply_defaults():
         value = os.environ.get(alias, "")
         if value:
             os.environ.setdefault(target, value)
-    for alias, target in DB_ALIASES.items():
-        value = os.environ.get(alias, "")
-        if value:
-            os.environ.setdefault(target, value)
-    os.environ.setdefault("DB_ENGINE", "mysql")
     # MISP stores attachments in S3 only when attachments_dir starts with s3; the
     # bucket name is the one switch, so it overrides the path base.env sets
     if os.environ.get("PLUGIN_S3_BUCKET_NAME"):

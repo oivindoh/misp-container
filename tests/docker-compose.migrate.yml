@@ -1,6 +1,6 @@
-# Overlay for the migration suite (tests/e2e/test_migration.py): a second
-# MariaDB as the same-engine target, and the migrate service with the test
-# env and a fixture attachments directory mounted as the source's files.
+# Overlay for the migration suite (tests/e2e/test_migration.py): the source's
+# MariaDB, and the migrate service with the test env and a fixture attachments
+# directory mounted as the source's files.
 x-test-env: &test-env
   env_file:
     - chart/files/base.env
@@ -18,26 +18,24 @@ services:
     read_only: true
     volumes:
       - misp-attachments:/var/www/MISP/app/attachments
-      - migrate-tmp:/tmp
-      - migrate-config:/var/www/MISP/app/Config
-      - migrate-app-tmp:/var/www/MISP/app/tmp
+      - misp-files-img-orgs:/var/www/MISP/app/attachments/img/orgs
+      - misp-files-img-custom:/var/www/MISP/app/attachments/img/custom
       - ${MIGRATE_FIXTURE_DIR:-/tmp}:/mnt/source:ro
 
-  mysql-target:
-    profiles: [migrate-target]
+  # MISP 2.5.50 of the published images runs on it first (tests/migrate-source.env)
+  mysql:
     image: docker.io/library/mariadb:11.8.9@sha256:79d59758afc91b89b120b0a8904d637f5a3b3e1c4900f29b740d6d46c72fef68
     command:
       - --character-set-server=utf8mb4
       - --collation-server=utf8mb4_unicode_ci
       - --max-allowed-packet=1G
     env_file:
-      - chart/files/secrets-db.env
       - ../tests/test-compose-secrets.env
     environment:
       MARIADB_DATABASE: misp
-    # A named volume: the stack is recreated against this database after the copy
+      MARIADB_RANDOM_ROOT_PASSWORD: "1"
     volumes:
-      - mysql-target-data:/var/lib/mysql
+      - mysql-data:/var/lib/mysql
     healthcheck:
       test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
       interval: 10s
@@ -46,4 +44,4 @@ services:
       start_period: 30s
 
 volumes:
-  mysql-target-data:
+  mysql-data:

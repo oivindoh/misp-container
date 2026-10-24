@@ -23,11 +23,11 @@ description = "Run the upstream guard and the integration tests (requires podman
 run = "python -m pytest tests/e2e/test_upstream.py tests/e2e/test_integration.py -v"
 
 [tasks.test-sync]
-description = "Run hub-spoke sync test (3 MISP instances)"
+description = "Run the hub-spoke sync suite (2 MISP instances)"
 run = "python -m pytest tests/e2e/test_sync.py -v"
 
 [tasks.test-migration]
-description = "Run the migration suite (MariaDB to MariaDB and to PostgreSQL)"
+description = "Run the migration suite (MISP 2.5.50 on MariaDB into PostgreSQL)"
 run = "python -m pytest tests/e2e/test_migration.py -v"
 
 [tasks.test-kind]

@@ -88,9 +88,8 @@ differs from master in these places:
 
 | Where | On this branch | Because |
 |-------|----------------|---------|
-| `Dockerfile` | `CORE_TAG=3.0_wip` with `CORE_COMMIT` pinned; no `cake-resque` patch in `composer-prep`; submodules without recursion; `INSTALL/MARIADB.sql` kept | MISP 3.0 requires no `iglocska/cake-resque`, and only `misp-iconify` nests submodules, over SSH URLs |
-| The version marker | `3.0_wip+<CORE_COMMIT>` | It sorts after every `since:` of 2.5 and changes with each pin |
-| `db.init_schema()` | Imports `MARIADB.sql` on a MariaDB server | MISP ships a MariaDB baseline with its own collations |
+| `Dockerfile` | `CORE_TAG=3.0_wip` with `CORE_COMMIT` pinned; no `cake-resque` patch in `composer-prep`; submodules without recursion | MISP 3.0 requires no `iglocska/cake-resque`, and only `misp-iconify` nests submodules, over SSH URLs |
+| The version marker | `3.0_wip+<CORE_COMMIT>` | It changes with each pin, so the pods wait for the configure run of their own build |
 | `settings.yaml` | No switch for background jobs, and four other settings fewer | MISP 3.0 defines none of them; an `s3://` attachments directory turns S3 on |
 | The upgrade step | `misp_container.upgrade`, the chart's `upgrade` component, the Compose `upgrade` profile | MISP converts a 2.5 database only with its one-way `cake Admin runUpgrade`; the step runs it while `attributes` has the text column `value1`, which the last migration drops, and the configure step refuses such a database |
 | CI | The `upgrade` suite, the `master-merged` job and the `prerelease` job | See The misp-3.0 branch |

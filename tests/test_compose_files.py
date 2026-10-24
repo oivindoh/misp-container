@@ -15,9 +15,7 @@ import yaml
 REPO = Path(__file__).resolve().parents[1]
 BASE = REPO / "deploy" / "docker-compose.yml"
 TEST = REPO / "tests" / "docker-compose.test.yml"
-# A separate project with its own services; it overrides nothing
-STANDALONE = {"docker-compose.sync-test.yml"}
-OVERLAYS = sorted(p for p in (REPO / "tests").glob("docker-compose.*.yml") if p.name not in STANDALONE)
+OVERLAYS = sorted((REPO / "tests").glob("docker-compose.*.yml"))
 
 
 def env_files(path: Path) -> dict[str, list[str]]:
@@ -60,6 +58,4 @@ def test_the_check_finds_a_list_that_drops_a_file(tmp_path):
 
 
 def test_every_overlay_is_checked():
-    # A new overlay that is not an override of the base compose file belongs in STANDALONE
-    assert {p.name for p in OVERLAYS} >= {"docker-compose.test.yml", "docker-compose.postgres.yml",
-                                          "docker-compose.migrate.yml", "docker-compose.migrate-mysql.yml"}
+    assert {p.name for p in OVERLAYS} >= {"docker-compose.test.yml", "docker-compose.migrate.yml"}

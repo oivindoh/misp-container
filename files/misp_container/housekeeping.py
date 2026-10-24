@@ -3,7 +3,7 @@
 Usage: python3 -m misp_container.housekeeping <jobs|logs|audit_logs>
 
 Batched deletes keep locks short. Retention comes from HOUSEKEEPING_<TABLE>_DAYS
-(defaults: jobs 2, logs 30, audit_logs 90). Runs on MySQL/MariaDB and PostgreSQL.
+(defaults: jobs 2, logs 30, audit_logs 90).
 """
 
 import sys
@@ -29,13 +29,9 @@ def retention_days(table: str) -> int:
 
 
 def delete_batch(table: str, column: str, days: int) -> int:
-    cutoff = db.ago(days, "DAY")
-    if db.is_postgres():
-        sql = (f"DELETE FROM {table} WHERE id IN "
-               f"(SELECT id FROM {table} WHERE {column} < {cutoff} ORDER BY id LIMIT {BATCH})")
-    else:
-        sql = f"DELETE FROM {table} WHERE {column} < {cutoff} LIMIT {BATCH}"
-    return db.execute(sql)
+    # PostgreSQL's DELETE takes no LIMIT
+    return db.execute(f"DELETE FROM {table} WHERE id IN (SELECT id FROM {table} "
+                      f"WHERE {column} < NOW() - INTERVAL '{days} days' ORDER BY id LIMIT {BATCH})")
 
 
 def run(table: str) -> int:

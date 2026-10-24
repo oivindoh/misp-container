@@ -4,7 +4,8 @@
 # Every env_file list here repeats the list it overrides, then adds the test
 # files. podman-compose appends an override list and docker compose merges it
 # and drops repeats; only a repeated prefix gives both runners the same settings
-# (tests/test_compose_files.py).
+# (tests/test_compose_files.py). MISP_TEST_ENV names one more env file, layered
+# last: a suite points the MISP containers at another database or bucket with it.
 x-test-env: &test-env
   env_file:
     - chart/files/base.env
@@ -14,6 +15,7 @@ x-test-env: &test-env
     - compose-secrets.env
     - ../tests/test-compose.env
     - ../tests/test-compose-secrets.env
+    - ${MISP_TEST_ENV:-../tests/none.env}
 
 # configure and sync act as the admin: the same plus secrets-admin.env
 x-test-env-admin: &test-env-admin
@@ -26,6 +28,7 @@ x-test-env-admin: &test-env-admin
     - compose-secrets.env
     - ../tests/test-compose.env
     - ../tests/test-compose-secrets.env
+    - ${MISP_TEST_ENV:-../tests/none.env}
 
 services:
   # read_only on all our containers to catch filesystem write issues
@@ -64,14 +67,6 @@ services:
     ports:
       - "16666:6666"
 
-  mysql:
-    env_file:
-      - chart/files/secrets-db.env
-      - compose-secrets.env
-      - ../tests/test-compose-secrets.env
-    environment:
-      MARIADB_DATABASE: misp
-
   # command and healthcheck come from the base file; repeating a list here
   # makes podman-compose concatenate it
   redis:
@@ -79,7 +74,6 @@ services:
       - compose-secrets.env
       - ../tests/test-compose-secrets.env
 
-  # PostgreSQL for the second run of the suite (tests/e2e/test_integration.py --db-engine postgres)
   postgres:
     env_file:
       - chart/files/secrets-db.env
