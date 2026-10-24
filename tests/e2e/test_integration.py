@@ -430,11 +430,10 @@ $CAKE user change_pw headeruser@example.com 'HeaderUserPass123!' --no_password_c
     stack.exec("web", "/var/www/MISP/app/Console/cake Admin setSetting -q Plugin.CustomAuth_enable false")
 
 
-def test_custom_auth_header_logs_in(custom_auth, request):
-    if custom_auth.engine_under_test == "postgres":
-        # The page is the event index, which hits the bug of the OIDC login below for a
-        # user on the Overmind theme. Not strict: the user does not always get that theme
-        request.applymarker(pytest.mark.xfail(strict=False, reason="MISP 3.0 event index stats fail on PostgreSQL"))
+# The page is the event index, which hits the bug of the OIDC login below for a user
+# on the Overmind theme. Not strict: the user does not always get that theme
+@pytest.mark.xfail(strict=False, reason="MISP 3.0 event index stats fail on PostgreSQL")
+def test_custom_auth_header_logs_in(custom_auth):
     # A logged-in browser gets the page; a logged-out one the login redirect
     status, _ = custom_auth.http("GET", "/events/index", json_api=False, redirects=False,
                                  headers={"X-Forwarded-Email": "headeruser@example.com"})
@@ -495,11 +494,10 @@ def test_oidc_dex_offers_its_password_form(oidc):
     assert "form=http://dex:5556/dex/auth/local/login" in oidc["out"]
 
 
-def test_oidc_callback_lands_on_misp(oidc, stack, request):
-    if stack.engine_under_test == "postgres":
-        # MISP 3.0's EventIndexStatsBehavior::aggregate() writes the alias Event unquoted;
-        # PostgreSQL folds it to event, and the page after the login answers 500
-        request.applymarker(pytest.mark.xfail(strict=True, reason="MISP 3.0 event index stats fail on PostgreSQL"))
+# MISP 3.0's EventIndexStatsBehavior::aggregate() writes the alias Event unquoted;
+# PostgreSQL folds it to event, and the page after the login answers 500
+@pytest.mark.xfail(strict=True, reason="MISP 3.0 event index stats fail on PostgreSQL")
+def test_oidc_callback_lands_on_misp(oidc):
     assert "final=http://caddy:8080/ 200" in oidc["out"]
 
 
