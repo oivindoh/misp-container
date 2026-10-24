@@ -17,8 +17,9 @@ import urllib.request
 
 from functools import lru_cache
 
-from . import WORKER_QUEUES, db
-from .log import get as getlog
+from . import WORKER_QUEUES, db, exporter
+from .env import apply_defaults
+from .log import get as getlog, setup as setup_logging
 
 log = getlog("metrics")
 
@@ -624,3 +625,21 @@ def collect_all() -> str:
 
     parts = [p for p in (db_output, queue_output, net_output, meta) if p]
     return "\n\n".join(parts) + "\n"
+
+
+def main():
+    """The metrics role: the exporter (misp_container.exporter)."""
+    setup_logging("metrics")
+    log.info("MISP metrics exporter starting")
+    apply_defaults()
+    db.wait_for_db(retries=30, wait_seconds=5)
+
+    # The partner checks take seconds per unreachable server; they run beside the
+    # server, so a scrape and the probes never wait for them
+    threading.Thread(target=run_network_checks, name="partner-checks", daemon=True).start()
+
+    exporter.serve(collect_all)
+
+
+if __name__ == "__main__":
+    main()

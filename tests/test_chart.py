@@ -35,12 +35,13 @@ def test_the_console_tasks_are_the_task_runners():
     assert listed == set(task.CAKE_TASKS)
 
 
-def test_every_task_has_a_cronjob_but_the_alternatives():
-    # workflow runs per workflow ID (cronjobs.workflows); block-invalid-users replaces
-    # check-user-validity in userValidity.task
-    commands = [chart.pod_spec(d)["containers"][0]["command"] for d in kinds(every_component=True)["CronJob"]]
+def test_every_task_has_a_cronjobs_entry_and_each_scheduled_one_a_cronjob():
+    # workflow runs per workflow ID (cronjobs.workflows)
+    tasks = yaml.safe_load((chart.CHART / "values.yaml").read_text())["cronjobs"]["tasks"]
+    assert set(tasks) == set(task.TASKS) - {task.WORKFLOW_TASK}
+    commands = [chart.pod_spec(d)["containers"][0]["args"] for d in kinds(every_component=True)["CronJob"]]
     scheduled = {c[c.index("misp_container.task") + 1] for c in commands if "misp_container.task" in c}
-    assert scheduled == set(task.TASKS) - {task.WORKFLOW_TASK, "block-invalid-users"}
+    assert scheduled == {name for name, schedule in tasks.items() if schedule}
 
 
 def test_a_console_task_renders_app_config_and_an_api_task_calls_the_api():
@@ -59,7 +60,7 @@ def test_the_backlog_limit_is_the_task_runners_default():
 
 def test_a_workflow_cronjob_passes_its_id():
     cronjob = chart.find("CronJob", "workflow-7", "cronjobs.enabled=true", "cronjobs.workflows.7=0 4 * * *")
-    assert chart.pod_spec(cronjob)["containers"][0]["command"][-2:] == ["workflow", "7"]
+    assert chart.pod_spec(cronjob)["containers"][0]["args"][-2:] == ["workflow", "7"]
 
 
 def test_the_app_version_is_the_image_tag_the_compose_files_default_to():
@@ -145,7 +146,7 @@ DATABASE_SECRET = ("database.user.name=pg-app", "database.user.key=username",
 def test_every_pod_takes_the_database_credentials_from_the_database_secret():
     """env wins over envFrom: a container that reads misp-db gets DB_USER and DB_PASSWORD from database.*."""
     pods = set()
-    for doc in chart.objects("migrate.enabled=true", "userValidity.enabled=true", *DATABASE_SECRET, every_component=True):
+    for doc in chart.objects("migrate.enabled=true", *DATABASE_SECRET, every_component=True):
         spec = chart.pod_spec(doc)
         if not spec:
             continue
@@ -192,11 +193,12 @@ def test_attachments_in_s3_render_no_claim():
 
 
 def test_the_helm_test_reaches_web_through_the_network_policy():
-    pod = chart.find("Pod", "misp-test", "ciliumNetworkPolicy.enabled=true")
+    pod = chart.find("Pod", "misp-test", "networkPolicy.enabled=true")
     assert pod["metadata"]["annotations"]["helm.sh/hook"] == "test"
     component = pod["metadata"]["labels"]["app.kubernetes.io/component"]
-    web = chart.find("CiliumNetworkPolicy", "web", "ciliumNetworkPolicy.enabled=true")
-    allowed = [e["matchLabels"] for rule in web["spec"]["ingress"] for e in rule["fromEndpoints"]]
+    web = chart.find("NetworkPolicy", "web", "networkPolicy.enabled=true")
+    allowed = [peer["podSelector"]["matchLabels"] for rule in web["spec"]["ingress"] for peer in rule["from"]
+               if "podSelector" in peer]
     assert {"app.kubernetes.io/component": component} in allowed
 
 
@@ -204,7 +206,7 @@ def test_every_component_renders_and_the_default_renders_none():
     for component in chart.components():
         assert chart.render_text(*chart.component_sets(component)) != chart.render_text(), (
             f"{component}.enabled=true changes nothing in the render")
-    assert not any(d["kind"] in ("StatefulSet", "CronJob", "Ingress", "HTTPRoute", "PodDisruptionBudget", "CiliumNetworkPolicy")
+    assert not any(d["kind"] in ("StatefulSet", "CronJob", "Ingress", "HTTPRoute", "NetworkPolicy")
                    for d in chart.objects())
 
 

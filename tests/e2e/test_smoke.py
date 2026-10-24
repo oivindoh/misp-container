@@ -8,7 +8,6 @@ The kind test (tests/run-kind-test.sh) runs it against the base on a cluster.
 
 import pytest
 
-from misp_container import WORKER_QUEUES
 from stack import Stack
 
 
@@ -61,20 +60,6 @@ def test_index_answers(authed, path):
 def test_users_index(authed):
     # A key without site admin rights gets no user list; that is no failure
     assert authed.http("GET", "/admin/users/index", authed.key)[0] in (200, 403)
-
-
-@pytest.fixture(scope="module")
-def workers(authed):
-    return authed.api("GET", "/servers/getWorkers", authed.key) or {}
-
-
-def test_supervisord_reachable(workers):
-    assert workers.get("supervisord_status") is True
-
-
-@pytest.mark.parametrize("queue", WORKER_QUEUES)
-def test_worker_queue(workers, queue):
-    assert len(workers.get(queue, {}).get("workers") or []) > 0
 
 
 def test_enrichment_url(authed):

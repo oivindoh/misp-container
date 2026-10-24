@@ -21,15 +21,15 @@ spec:
       annotations:
         {{- include "misp.checksums" . | nindent 8 }}
     spec:
-      # supervisord lets a running job finish for WORKER_STOP_GRACE seconds (default
-      # 300, files/entrypoint-worker.py); the kubelet must wait longer than that
+      # The entrypoint lets a running job finish for WORKER_STOP_GRACE seconds (default
+      # 300, misp_container.worker); the kubelet must wait longer than that
       terminationGracePeriodSeconds: {{ add 30 (int (default 300 (index .Values.env "WORKER_STOP_GRACE"))) }}
       {{- include "misp.podSecurityContext" . | nindent 6 }}
       {{- include "misp.podScheduling" . | nindent 6 }}
       containers:
         - name: worker
           {{- include "misp.image" . | nindent 10 }}
-          command: ["/usr/bin/tini", "--", "python3", "/entrypoint-worker.py"]
+          args: ["python3", "-m", "misp_container.worker"]
           {{- include "misp.appEnv" (list . "misp-db" "misp-app") | nindent 10 }}
           volumeMounts:
             {{- include "misp.appVolumeMounts" . | nindent 12 }}
@@ -37,22 +37,13 @@ spec:
               mountPath: /var/www/MISP/app/attachments
           resources:
             {{- toYaml .Values.worker.resources | nindent 12 }}
-          # The web pods reach supervisord through the TCP proxy on 9001, so that
-          # port is what the probes test. The entrypoint exits when supervisord
-          # does, which restarts the pod.
-          startupProbe:
-            tcpSocket:
-              port: 9001
-            failureThreshold: 60
-            periodSeconds: 5
+          # Ready once the entrypoint runs MISP's workers, after the configure Job set
+          # MISP.live, so a rollout stops the old workers only then. The entrypoint
+          # restarts a worker that exits; nothing else in the pod can hang.
           readinessProbe:
-            tcpSocket:
-              port: 9001
-            periodSeconds: 30
-          livenessProbe:
-            tcpSocket:
-              port: 9001
-            periodSeconds: 60
+            exec:
+              command: ["pgrep", "-f", "start_worker"]
+            periodSeconds: 10
           {{- include "misp.containerSecurityContext" . | nindent 10 }}
 
       volumes:

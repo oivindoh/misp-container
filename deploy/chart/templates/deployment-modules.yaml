@@ -24,8 +24,7 @@ spec:
           type: RuntimeDefault
       {{- include "misp.podScheduling" . | nindent 6 }}
       # Modules call external APIs (VirusTotal, Shodan, etc.). Lower ndots avoids
-      # 3+ wasted DNS expansions per external lookup that would be dropped by
-      # Cilium L7 DNS policies.
+      # 3+ wasted DNS expansions per external lookup.
       dnsConfig:
         options:
           - name: ndots

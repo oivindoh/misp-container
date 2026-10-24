@@ -2,7 +2,7 @@
 
 ## TL;DR
 
-The metrics Deployment (`entrypoint-metrics.py` in the main image) exposes Prometheus metrics
+The metrics Deployment (`python3 -m misp_container.metrics` in the main image) exposes Prometheus metrics
 on port 9191 from the database, from MISP's job queues in Redis and from probes of the
 configured sync servers: instance health, content counts, server sync state and certificate
 expiry, job queues, and the runs of the configure, org sync and migrate Jobs.

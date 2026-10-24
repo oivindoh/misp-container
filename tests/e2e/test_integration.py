@@ -150,38 +150,45 @@ def test_baseurl_stored_in_the_database(stack):
 
 # -- workers -------------------------------------------------------------------------
 
+def worker_processes(stack):
+    """{queue: [pid]} of the PHP workers in the worker container."""
+    found = {}
+    for line in stack.exec("worker", "ps -eo pid=,args=").splitlines():
+        pid, _, args = line.strip().partition(" ")
+        queue = re.search(r"start_worker (\w+)$", args)
+        if queue:
+            found.setdefault(queue.group(1), []).append(int(pid))
+    return found
+
+
 @pytest.fixture(scope="module")
-def supervisor_status(stack):
-    stack.wait_for("worker", "test -S /tmp/supervisor.sock", timeout=60)
+def workers(stack):
+    stack.wait_for("worker", "pgrep -f start_worker", timeout=120)
     time.sleep(3)
-    return stack.exec("worker", 'supervisorctl -s unix:///tmp/supervisor.sock '
-                                '-u "${SIMPLEBACKGROUNDJOBS_SUPERVISOR_USER:-supervisor}" '
-                                '-p "${SIMPLEBACKGROUNDJOBS_SUPERVISOR_PASSWORD:-supervisor}" status')
+    return worker_processes(stack)
 
 
 @pytest.mark.parametrize("queue", WORKER_QUEUES)
-def test_worker_queue_running(supervisor_status, queue):
-    assert re.search(rf"{queue}.*RUNNING", supervisor_status)
+def test_worker_queue_running(stack, workers, queue):
+    expected = int(stack.exec("worker", f"printenv NUM_WORKERS_{queue.upper()}"))
+    assert len(workers.get(queue, [])) == expected
 
 
-def test_no_scheduler_program(supervisor_status):
+def test_no_scheduler_worker(workers):
     # Periodic work belongs to the task runner; MISP's own scheduler never runs
-    assert "scheduler" not in supervisor_status
+    assert "scheduler" not in workers
 
 
-def test_web_reaches_supervisord_over_tcp(stack):
-    _, out = stack.python("""
-import os, urllib.request
-host = os.environ.get('SIMPLEBACKGROUNDJOBS_SUPERVISOR_HOST', 'worker')
-port = os.environ.get('SIMPLEBACKGROUNDJOBS_SUPERVISOR_PORT', '9001')
-mgr = urllib.request.HTTPPasswordMgrWithDefaultRealm()
-mgr.add_password(None, f'http://{host}:{port}', os.environ.get('SIMPLEBACKGROUNDJOBS_SUPERVISOR_USER', 'supervisor'),
-                 os.environ.get('SIMPLEBACKGROUNDJOBS_SUPERVISOR_PASSWORD', 'supervisor'))
-opener = urllib.request.build_opener(urllib.request.HTTPBasicAuthHandler(mgr))
-body = b'<?xml version="1.0"?><methodCall><methodName>supervisor.getState</methodName></methodCall>'
-print('OK' if opener.open(f'http://{host}:{port}/RPC2', body, timeout=5).status == 200 else 'no')
-""")
-    assert out.strip().endswith("OK")
+def test_a_killed_worker_is_started_again(stack, workers):
+    pid = workers["default"][0]
+    stack.exec("worker", f"kill -9 {pid}")
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        now = worker_processes(stack).get("default", [])
+        if pid not in now and len(now) == len(workers["default"]):
+            return
+        time.sleep(1)
+    raise AssertionError(f"worker {pid} of the default queue was not replaced in 30 s")
 
 
 # -- background jobs -----------------------------------------------------------------
@@ -280,7 +287,7 @@ def test_database_php_points_at_postgres(stack):
     assert "Database/PostgresObserverExtended" in config and "'postgres'" in config
 
 
-@pytest.mark.parametrize("needle", ["redis_host", "redis_password", "SimpleBackgroundJobs", "supervisor_host"])
+@pytest.mark.parametrize("needle", ["redis_host", "redis_password", "SimpleBackgroundJobs"])
 def test_web_config_php(stack, needle):
     # Each pod renders its own app/Config; workers never run the configure step
     assert needle in stack.exec("web", "cat /var/www/MISP/app/Config/config.php")

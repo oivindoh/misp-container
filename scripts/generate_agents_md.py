@@ -88,37 +88,30 @@ def docs() -> str:
 def image() -> str:
     stages = [(m.group(2), m.group(3)) for m in
               re.finditer(r"^# Stage (\d+): ([\w-]+) - (.+)$", (REPO / "Dockerfile").read_text(), re.M)]
-    entrypoints = [(f"`{rel(p)}`", docstring(p)) for p in sorted((REPO / "files").glob("entrypoint-*.py"))]
+    roles = []
+    for service, spec in yaml.safe_load((REPO / "deploy/docker-compose.yml").read_text())["services"].items():
+        command = spec.get("command")
+        if isinstance(command, list) and command[:2] == ["python3", "-m"] and command[2].startswith("misp_container."):
+            module = REPO / "files" / (command[2].replace(".", "/") + ".py")
+            roles.append((f"`{service}`", f"`{' '.join(command)}`", docstring(module)))
     return ("## Image\n\nThe `Dockerfile` builds the images from these stages:\n\n"
             + table(("Stage", "What it holds"), stages)
-            + "\n\nEach role of the main image starts from its own entrypoint:\n\n"
-            + table(("Entrypoint", "Does"), entrypoints))
+            + "\n\nEach role of the main image is a module of the package, run under the image's tini "
+            "entrypoint; the Compose services start them so:\n\n"
+            + table(("Service", "Command", "Does"), roles))
 
 
 def library() -> str:
     rows = [(f"`{p.name}`", docstring(p)) for p in sorted((REPO / "files/misp_container").glob("*.py"))]
-    return ("## Python library: `files/misp_container/`\n\nThe entrypoints, the task runner and the Jobs "
+    return ("## Python library: `files/misp_container/`\n\nThe roles, the task runner and the Jobs "
             "share this package; it is `/opt/misp_container` in the image.\n\n" + table(("Module", "Does"), rows))
 
 
 def periodic() -> str:
-    from misp_container import task
-    rows = [(f"`{name}`", f"POST `{path}`") for name, path in task.ENDPOINTS.items()]
-    rows += [(f"`{name}`", f"POST `{path}` for every server with `{flag}` on") for name, (flag, path) in task.SERVER_TASKS.items()]
-    rows += [(f"`{name}`", "lists the items, then acts on each") for name in task.INDEX_TASKS]
-    rows += [(f"`{task.WORKFLOW_TASK}`", "runs one workflow by ID")]
-    rows += [(f"`{name}`", f"`cake {' '.join(args)}` in the pod") for name, args in task.CAKE_TASKS.items()]
-    jobs = []
-    for template, doc in chart.render(every_component=True):
-        if doc["kind"] == "CronJob":
-            command = " ".join(chart.pod_spec(doc)["containers"][0]["command"][-3:])
-            jobs.append((f"`{doc['metadata']['name']}`", f"`{doc['spec']['schedule']}`", f"`{command}`",
-                         f"`{chart.template_component(template)}`"))
+    import generate_docs
     return ("## Periodic work\n\nMISP's own scheduler never runs. The task runner "
-            "(`python3 -m misp_container.task <task>`) does each piece of periodic work:\n\n"
-            + table(("Task", "Does"), rows)
-            + "\n\nThe chart's components run periodic work as CronJobs, with their default schedules:\n\n"
-            + table(("CronJob", "Schedule", "Runs", "Component"), jobs))
+            "(`python3 -m misp_container.task <task>`) does each piece of periodic work, from the CronJobs of the "
+            "`cronjobs` component (docs/kubernetes.md, Periodic tasks):\n\n" + generate_docs.periodic_tasks())
 
 
 def kubernetes() -> str:

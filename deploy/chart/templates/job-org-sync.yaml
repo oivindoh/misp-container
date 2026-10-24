@@ -25,7 +25,7 @@ spec:
       containers:
         - name: org-sync
           {{- include "misp.image" . | nindent 10 }}
-          command: ["/usr/bin/tini", "--", "python3", "/entrypoint-sync.py"]
+          args: ["python3", "-m", "misp_container.sync"]
           env:
             - name: SYNC_BASE_URL
               value: http://web:8080

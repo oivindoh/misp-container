@@ -5,20 +5,18 @@ before any web or worker starts. Sets MISP.live=true when done; web and
 worker entrypoints wait for that flag.
 """
 
-import os
 import sys
-from pathlib import Path
 
 from . import admin
 from . import cake
 from . import db
 from .config import CONDITIONAL_CONFIG_PHP_GROUPS, SettingsCache, apply_settings_fast, load_settings_yaml
-from .env import env
-from .log import get as getlog
+from .env import apply_defaults, env
+from .init import prepare
+from .log import get as getlog, setup as setup_logging
 
 log = getlog("configure")
 
-CUSTOM_SETUP_SCRIPT = "/custom/setup.py"
 
 # The settings groups this step applies to the database, in order. The groups
 # init renders into config.php (config.CONFIG_PHP_GROUPS, the S3 group and the
@@ -28,20 +26,12 @@ CUSTOM_SETUP_SCRIPT = "/custom/setup.py"
 DB_GROUPS = ("initialisation", "critical", "optional", "proxy", "kafka", "linotp", "custom_auth", "upstream")
 
 
-def run_custom_script(path: str, label: str) -> None:
-    """Run a custom Python script if it exists."""
-    if os.path.isfile(path):
-        log.info("running custom script: %s (%s)", label, path)
-        exec(compile(Path(path).read_text(), path, "exec"), {"__name__": "__custom__"})
-        log.info("custom script %s complete", label)
-
-
 # Values shipped in the chart's secrets-*.env files and the examples. A
 # deployment that still carries one of them forgot to set its secrets.
 PLACEHOLDER_MARKERS = ("change-me", "override-me", "REPLACE-WITH", "0000000000")
 CHECKED_SECRETS = ("SECURITY_SALT", "SECURITY_ENCRYPTION_KEY", "ADMIN_PASSWORD", "ADMIN_KEY",
                    "DB_PASSWORD", "POSTGRES_PASSWORD", "MISP_REDIS_PASSWORD",
-                   "GNUPG_PASSWORD", "SIMPLEBACKGROUNDJOBS_SUPERVISOR_PASSWORD")
+                   "GNUPG_PASSWORD")
 
 
 def is_placeholder(value: str) -> bool:
@@ -130,9 +120,6 @@ def run() -> None:
     db.init_schema()
     check_layout()
 
-    # Early custom hook: after the DB is ready, before MISP configuration.
-    run_custom_script(CUSTOM_SETUP_SCRIPT, "setup")
-
     try:
         configure_misp()
         log.info("setting MISP.live = true")
@@ -141,3 +128,17 @@ def run() -> None:
         record_run(False)
         raise
     record_run(True)
+
+
+def main() -> None:
+    """The configure role: runs once per rollout, before web and worker pods serve."""
+    setup_logging("configure")
+    log.info("MISP configure starting")
+    apply_defaults()
+    prepare()
+    run()
+    log.info("MISP configure complete")
+
+
+if __name__ == "__main__":
+    main()

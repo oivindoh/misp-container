@@ -1,6 +1,5 @@
-# The pdb component: one voluntary disruption at a time for web and worker.
-# maxUnavailable, not minAvailable, so a single replica never blocks a node drain.
-{{- if .Values.pdb.enabled }}
+# One voluntary disruption at a time for web and worker. maxUnavailable, not
+# minAvailable, so a single replica never blocks a node drain.
 {{- range list "web" "worker" }}
 ---
 apiVersion: policy/v1
@@ -14,5 +13,4 @@ spec:
   selector:
     matchLabels:
       app.kubernetes.io/name: {{ . }}
-{{- end }}
 {{- end }}

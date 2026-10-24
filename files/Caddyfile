@@ -1,5 +1,12 @@
+# Plain HTTP on :8080, for an ingress, a Gateway or a load balancer in front, which
+# terminates TLS. Caddy writes nothing: no certificates, no autosaved config and no
+# storage checks, so its root stays read-only.
 {
 	admin off
+	auto_https off
+	persist_config off
+	storage_check off
+	storage_clean_interval off
 	servers {
 		# The client is the rightmost X-Forwarded-For address outside the trusted
 		# proxies, or the peer when the peer is not one. A proxy that appends to a
@@ -9,10 +16,7 @@
 	}
 }
 
-# Default: plain HTTP on :8080 (behind a load balancer or for local dev).
-# Set CADDY_ADDRESS to a domain for automatic HTTPS with Let's Encrypt:
-#   CADDY_ADDRESS=misp.example.com
-{$CADDY_ADDRESS::8080} {
+:8080 {
 	root * /var/www/MISP/app/webroot
 
 	# PHP-FPM ping for the pod probes (ping.path in the FPM pool)

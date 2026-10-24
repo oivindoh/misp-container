@@ -34,23 +34,24 @@ The `Dockerfile` builds the images from these stages:
 | caddy | Static files + FastCGI reverse proxy (scratch image) |
 | modules | MISP enrichment/import/export/action modules |
 
-Each role of the main image starts from its own entrypoint:
+Each role of the main image is a module of the package, run under the image's tini entrypoint; the Compose services start them so:
 
-| Entrypoint | Does |
-|---|---|
-| `files/entrypoint-configure.py` | Configure entrypoint: one-shot schema, settings, admin, GPG and auth setup. |
-| `files/entrypoint-metrics.py` | MISP Prometheus metrics exporter. |
-| `files/entrypoint-sync.py` | Org sync entrypoint. |
-| `files/entrypoint-web.py` | PHP-FPM entrypoint for the misp-web container. |
-| `files/entrypoint-worker.py` | Background worker entrypoint. |
+| Service | Command | Does |
+|---|---|---|
+| `configure` | `python3 -m misp_container.configure` | One-shot MISP configuration: schema, settings, admin user, GPG, auth. |
+| `web` | `python3 -m misp_container.web` | MISP's web role: prepares app/Config, waits for the configure Job, then execs PHP-FPM. |
+| `worker` | `python3 -m misp_container.worker` | Background workers: MISP's queue workers and the log relay, each restarted when it exits. |
+| `sync` | `python3 -m misp_container.sync` | Declarative org/team sync engine. |
+| `metrics` | `python3 -m misp_container.metrics` | MISP Prometheus metrics exporter. |
+| `migrate` | `python3 -m misp_container.migrate` | Copy an existing MISP database (MySQL or MariaDB) into this deployment's PostgreSQL. |
 
 ## Python library: `files/misp_container/`
 
-The entrypoints, the task runner and the Jobs share this package; it is `/opt/misp_container` in the image.
+The roles, the task runner and the Jobs share this package; it is `/opt/misp_container` in the image.
 
 | Module | Does |
 |---|---|
-| `__init__.py` | MISP container entrypoint library. |
+| `__init__.py` | MISP container library: the roles of the main image, the task runner and the Jobs. |
 | `admin.py` | Admin user, organisation and API key setup. |
 | `api.py` | Thin MISP REST API client using only urllib (stdlib). |
 | `cake.py` | Thin wrapper around the CakePHP cake CLI. |
@@ -58,6 +59,7 @@ The entrypoints, the task runner and the Jobs share this package; it is `/opt/mi
 | `configure.py` | One-shot MISP configuration: schema, settings, admin user, GPG, auth. |
 | `db.py` | Database access for the entrypoints, on PostgreSQL. |
 | `env.py` | Environment variable handling. |
+| `exporter.py` | The metrics exporter's HTTP server: /metrics, and /healthz and /ready for the probes. |
 | `housekeeping.py` | Nightly deletes in MISP's jobs, logs and audit_logs tables. |
 | `init.py` | Per-pod preparation: tmp directories, app/Config rendering, GPG key import. |
 | `log.py` | Logging setup for MISP container entrypoints. |
@@ -67,51 +69,31 @@ The entrypoints, the task runner and the Jobs share this package; it is `/opt/mi
 | `s3.py` | A minimal S3 client for the migrate Job: list, get and put objects. |
 | `sync.py` | Declarative org/team sync engine. |
 | `task.py` | Periodic MISP tasks. |
+| `web.py` | MISP's web role: prepares app/Config, waits for the configure Job, then execs PHP-FPM. |
+| `worker.py` | Background workers: MISP's queue workers and the log relay, each restarted when it exits. |
 
 ## Periodic work
 
-MISP's own scheduler never runs. The task runner (`python3 -m misp_container.task <task>`) does each piece of periodic work:
+MISP's own scheduler never runs. The task runner (`python3 -m misp_container.task <task>`) does each piece of periodic work, from the CronJobs of the `cronjobs` component (docs/kubernetes.md, Periodic tasks):
 
-| Task | Does |
-|---|---|
-| `cache-feeds` | POST `/feeds/cacheFeeds/all` |
-| `fetch-feeds` | POST `/feeds/fetchFromAllFeeds` |
-| `cache-servers` | POST `/servers/cache/all` |
-| `update-galaxies` | POST `/galaxies/update` |
-| `update-taxonomies` | POST `/taxonomies/update` |
-| `update-warninglists` | POST `/warninglists/update` |
-| `update-noticelists` | POST `/noticelists/update` |
-| `update-object-templates` | POST `/objectTemplates/update` |
-| `pull-servers` | POST `/servers/pull/{id}` for every server with `pull` on |
-| `push-servers` | POST `/servers/push/{id}` for every server with `push` on |
-| `push-taxii` | lists the items, then acts on each |
-| `sharing-group-blueprints` | lists the items, then acts on each |
-| `workflow` | runs one workflow by ID |
-| `periodic-summary` | `cake Server sendPeriodicSummaryToUsers` in the pod |
-| `check-user-validity` | `cake Admin checkUserValidity` in the pod |
-| `block-invalid-users` | `cake Admin blockInvalidUsers` in the pod |
-
-The chart's components run periodic work as CronJobs, with their default schedules:
-
-| CronJob | Schedule | Runs | Component |
+| Task | Does | Kind | CronJob schedule (component) |
 |---|---|---|---|
-| `user-validity` | `30 5 * * *` | `-m misp_container.task check-user-validity` | `userValidity` |
-| `housekeeping-audit-logs` | `10 3 * * *` | `-m misp_container.housekeeping audit_logs` | `housekeeping` |
-| `housekeeping-jobs` | `0 2 * * *` | `-m misp_container.housekeeping jobs` | `housekeeping` |
-| `housekeeping-logs` | `0 3 * * *` | `-m misp_container.housekeeping logs` | `housekeeping` |
-| `cache-feeds` | `20 2 * * *` | `-m misp_container.task cache-feeds` | `cronjobs` |
-| `cache-servers` | `40 2 * * *` | `-m misp_container.task cache-servers` | `cronjobs` |
-| `fetch-feeds` | `30 2 * * *` | `-m misp_container.task fetch-feeds` | `cronjobs` |
-| `periodic-summary` | `0 6 * * *` | `-m misp_container.task periodic-summary` | `cronjobs` |
-| `pull-servers` | `*/5 * * * *` | `-m misp_container.task pull-servers` | `cronjobs` |
-| `push-servers` | `*/15 * * * *` | `-m misp_container.task push-servers` | `cronjobs` |
-| `push-taxii` | `7 * * * *` | `-m misp_container.task push-taxii` | `cronjobs` |
-| `sharing-group-blueprints` | `37 * * * *` | `-m misp_container.task sharing-group-blueprints` | `cronjobs` |
-| `update-galaxies` | `0 3 * * *` | `-m misp_container.task update-galaxies` | `cronjobs` |
-| `update-noticelists` | `30 3 * * *` | `-m misp_container.task update-noticelists` | `cronjobs` |
-| `update-object-templates` | `40 3 * * *` | `-m misp_container.task update-object-templates` | `cronjobs` |
-| `update-taxonomies` | `10 3 * * *` | `-m misp_container.task update-taxonomies` | `cronjobs` |
-| `update-warninglists` | `20 3 * * *` | `-m misp_container.task update-warninglists` | `cronjobs` |
+| `cache-feeds` | Cache every feed | API | `20 2 * * *` (`cronjobs`) |
+| `fetch-feeds` | Fetch every enabled feed | API | `30 2 * * *` (`cronjobs`) |
+| `cache-servers` | Cache the events of every server | API | `40 2 * * *` (`cronjobs`) |
+| `update-galaxies` | Update MISP's bundled galaxies | API | `0 3 * * *` (`cronjobs`) |
+| `update-taxonomies` | Update MISP's bundled taxonomies | API | `10 3 * * *` (`cronjobs`) |
+| `update-warninglists` | Update MISP's bundled warninglists | API | `20 3 * * *` (`cronjobs`) |
+| `update-noticelists` | Update MISP's bundled noticelists | API | `30 3 * * *` (`cronjobs`) |
+| `update-object-templates` | Update MISP's bundled object templates | API | `40 3 * * *` (`cronjobs`) |
+| `pull-servers` | Pull from every server with pull enabled | API | `*/5 * * * *` (`cronjobs`) |
+| `push-servers` | Push to every server with push enabled | API | `*/15 * * * *` (`cronjobs`) |
+| `push-taxii` | Push to every enabled TAXII server | API | `7 * * * *` (`cronjobs`) |
+| `sharing-group-blueprints` | Apply the sharing group blueprints | API | `37 * * * *` (`cronjobs`) |
+| `workflow` | Run one ad-hoc workflow, by its ID | API | none |
+| `periodic-summary` | Send the daily, weekly (Mondays) and monthly (the first) summaries users subscribed to | console | `0 6 * * *` (`cronjobs`) |
+| `check-user-validity` | Report every account as valid or invalid at the OIDC or LDAP provider | console | none |
+| `block-invalid-users` | Disable the accounts the OIDC or LDAP provider no longer backs | console | none |
 
 ## Kubernetes: the Helm chart in `deploy/chart/`
 
@@ -119,10 +101,8 @@ Values of the misp chart. The comment above each top-level key describes it; doc
 
 | Template | Renders, every component on | Note |
 |---|---|---|
-| `ciliumnetworkpolicy.yaml` | CiliumNetworkPolicy `web`, CiliumNetworkPolicy `configure`, CiliumNetworkPolicy `org-sync`, CiliumNetworkPolicy `worker`, CiliumNetworkPolicy `cronjob`, CiliumNetworkPolicy `console-task`, CiliumNetworkPolicy `housekeeping`, CiliumNetworkPolicy `modules`, CiliumNetworkPolicy `metrics`, CiliumNetworkPolicy `postgres`, CiliumNetworkPolicy `cache` | The ciliumNetworkPolicy component: CiliumNetworkPolicies for every pod. |
 | `configmap-env.yaml` | ConfigMap `misp-env` | misp-env: files/base.env, then the env value. Every MISP pod reads it; its checksum rolls the Deployments. |
 | `configmap-orgs.yaml` | ConfigMap `misp-orgs` | Declarative org config for the org-sync Job (orgSync.orgs; format: deploy/orgs.yaml.example). |
-| `cronjob-user-validity.yaml` | CronJob `user-validity` | The userValidity component: checks every MISP account against the OIDC or LDAP provider through MISP's console. Needs the oidc or ldap group: MISP's check refuses to run without one. check-user-validity reports each user as valid or invalid and changes nothing; block-invalid-users disables the users the provider no longer backs. |
 | `cronjobs-housekeeping.yaml` | CronJob `housekeeping-audit-logs`, CronJob `housekeeping-jobs`, CronJob `housekeeping-logs` | The housekeeping component: nightly batched deletes of old rows in jobs, logs and audit_logs (python3 -m misp_container.housekeeping). Autovacuum reclaims the space. Retention is a policy choice: HOUSEKEEPING_<TABLE>_DAYS in env. |
 | `cronjobs.yaml` | CronJob `cache-feeds`, CronJob `cache-servers`, CronJob `fetch-feeds`, CronJob `periodic-summary`, CronJob `pull-servers`, CronJob `push-servers`, CronJob `push-taxii`, CronJob `sharing-group-blueprints`, CronJob `update-galaxies`, CronJob `update-noticelists`, CronJob `update-object-templates`, CronJob `update-taxonomies`, CronJob `update-warninglists` | The cronjobs component: the periodic tasks, run by the task runner in the main image (python3 -m misp_container.task <task>), one CronJob per entry of cronjobs.tasks and one per workflow ID in cronjobs.workflows. API tasks need ADMIN_KEY in misp-admin; the runner exits 1 with a clear message when it is empty. A run dispatches nothing while the queue holds cronjobs.maxQueued jobs or more (read from the metrics exporter). |
 | `deployment-metrics.yaml` | Deployment `metrics` | Prometheus exporter on port 9191: MISP's database, the job queues in Redis and the sync partners (docs/metrics.md). It reads MISP's data and never changes it. |
@@ -133,8 +113,8 @@ Values of the misp chart. The comment above each top-level key describes it; doc
 | `ingress.yaml` | Ingress `misp` | The ingress component: an Ingress to the web Service. The default annotation makes the haproxy ingress replace X-Forwarded-For with the address it sees, so only that address reaches caddy (docs/kubernetes.md, Client addresses). Behind another load balancer, that is the balancer's address unless it speaks the PROXY protocol to HAProxy. |
 | `job-configure.yaml` | Job `configure-<revision>` | One-shot configuration: schema, settings, admin user, GPG, auth. Web and worker pods wait until this Job has set MISP.live=true and recorded their image version, so the order of the rollout does not depend on the tool that applies the chart. Each release revision has its own Job, because a Job's pod template cannot change; a run on a configured instance takes seconds. With the migrate component, the copy runs first, in an init container. |
 | `job-org-sync.yaml` | Job `org-sync-<revision>` | Declarative org sync: applies the misp-orgs ConfigMap (orgs.yaml) through the MISP API once the web Deployment serves. Exits 0 at once when ADMIN_KEY is empty or orgs.yaml has nothing to apply. Each release revision has its own Job; Argo CD: a Sync hook in wave 3, recreated on every sync. |
-| `networkpolicy.yaml` | NetworkPolicy `web`, NetworkPolicy `configure`, NetworkPolicy `org-sync`, NetworkPolicy `worker`, NetworkPolicy `cronjob`, NetworkPolicy `console-task`, NetworkPolicy `housekeeping`, NetworkPolicy `modules`, NetworkPolicy `metrics`, NetworkPolicy `postgres`, NetworkPolicy `cache` | The networkPolicy component: NetworkPolicies for every pod, for a cluster whose CNI enforces the Kubernetes NetworkPolicy API but is not Cilium. The flows are those of ciliumnetworkpolicy.yaml, whose header lists them: pod and namespace selectors, ports, and ipBlocks for the outside. A destination in or outside the cluster (the mail relay, an LDAP server) is a port rule without a peer. |
-| `pdb.yaml` | PodDisruptionBudget `web`, PodDisruptionBudget `worker` | The pdb component: one voluntary disruption at a time for web and worker. maxUnavailable, not minAvailable, so a single replica never blocks a node drain. |
+| `networkpolicy.yaml` | NetworkPolicy `web`, NetworkPolicy `configure`, NetworkPolicy `org-sync`, NetworkPolicy `worker`, NetworkPolicy `cronjob`, NetworkPolicy `console-task`, NetworkPolicy `housekeeping`, NetworkPolicy `modules`, NetworkPolicy `metrics`, NetworkPolicy `postgres`, NetworkPolicy `cache` | The networkPolicy component: NetworkPolicies for every pod, for any CNI that enforces the Kubernetes NetworkPolicy API, Cilium included. A destination in or outside the cluster (the mail relay, an LDAP server) is a port rule without a peer. |
+| `pdb.yaml` | PodDisruptionBudget `web`, PodDisruptionBudget `worker` | One voluntary disruption at a time for web and worker. maxUnavailable, not minAvailable, so a single replica never blocks a node drain. |
 | `postgres.yaml` | Service `postgres`, StatefulSet `postgres` | The postgres component: single-node PostgreSQL on a ReadWriteOnce claim, the database misp owned by DB_USER, UTF8, behind the Service postgres that DB_HOST names by default. |
 | `pvc-attachments.yaml` | PersistentVolumeClaim `attachments` | Attachments and malware samples, org logos and custom images. Web and worker pods on different nodes write here, so the storage class must support ReadWriteMany. With attachments.claim: false (attachments in S3) the chart renders no claim. |
 | `redis.yaml` | Service `redis`, Deployment `redis` | The redis component: a single Redis without persistence, so sessions and queued jobs do not survive a restart. The password is MISP_REDIS_PASSWORD. |
@@ -142,8 +122,7 @@ Values of the misp chart. The comment above each top-level key describes it; doc
 | `service-metrics.yaml` | Service `metrics` | The exporter on port 9191, for Prometheus to scrape. |
 | `service-modules.yaml` | Service `modules` | misp-modules on port 6666, for MISP's enrichment, import, export and action calls. |
 | `service-web.yaml` | Service `web` | MISP over HTTP: caddy in the web pods, port 8080. The ingress or HTTPRoute routes here. |
-| `service-worker.yaml` | Service `worker` | supervisord in the worker pods, port 9001: the web pods list, start and stop the background workers here (SimpleBackgroundJobs.supervisor_host). |
-| `tests/test-misp.yaml` | Pod `misp-test` | helm test: checks a release from inside the cluster. It loads the login page through the web Service and, with ADMIN_KEY in misp-admin, calls the API as the admin: MISP.live, and a worker on every queue behind a reachable supervisord. The pod carries the API task label, so the ciliumNetworkPolicy component lets it reach web. |
+| `tests/test-misp.yaml` | Pod `misp-test` | helm test: checks a release from inside the cluster. It loads the login page through the web Service and, with ADMIN_KEY in misp-admin, calls the API as the admin and reads MISP.live. The pod carries the API task label, so the networkPolicy component lets it reach web. |
 
 Values:
 
@@ -159,7 +138,7 @@ Values:
 | `database` | DB_USER and DB_PASSWORD from a Secret the release does not make, such as the one a database operator (StackGres, CloudNativePG) keeps: a name and a key for each. They replace the same keys of misp-db in every pod, the postgres component included. |
 | `configure` | The configure Job: schema, settings, admin user, GPG and auth, on every install and upgrade. |
 | `web` | MISP's web tier: PHP-FPM and the caddy sidecar in each pod. Replicas scale freely. |
-| `worker` | The background workers. Replicas scale freely; the web pods reach supervisord on TCP 9001. |
+| `worker` | The background workers, which take their jobs from Redis. Replicas scale freely. |
 | `metrics` | The Prometheus exporter (docs/metrics.md). |
 | `modules` | misp-modules: the enrichment, import, export and action modules. |
 | `orgSync` | The org-sync Job applies orgs, the content of orgs.yaml (deploy/orgs.yaml.example), through the API after each install and upgrade. It exits at once when ADMIN_KEY is empty. |
@@ -173,11 +152,8 @@ Components, each off by default:
 | `redis` | Single Redis without persistence: sessions and queued jobs do not survive a restart. Leave it off for an external Redis (MISP_REDIS_HOST in env). |
 | `ingress` | An Ingress to the web Service. The default annotation makes the haproxy ingress replace X-Forwarded-For with the address it sees (docs/kubernetes.md, Client addresses). |
 | `httpRoute` | An HTTPRoute for a Gateway API implementation, in place of the ingress. The Gateway must allow routes from this namespace; set TRUSTED_PROXY_CIDR in env to its proxy pods. |
-| `ciliumNetworkPolicy` | CiliumNetworkPolicies for every pod: the paths MISP needs, DNS, HTTPS out and SMTP out. ingressNamespace holds the ingress or Gateway proxies, monitoringNamespace Prometheus. |
-| `networkPolicy` | NetworkPolicies with the same flows as ciliumNetworkPolicy, in the Kubernetes API, for a cluster whose CNI enforces NetworkPolicy but is not Cilium. ingressNamespace holds the ingress or Gateway proxies, monitoringNamespace Prometheus. |
-| `pdb` | PodDisruptionBudgets for web and worker (maxUnavailable: 1). |
+| `networkPolicy` | NetworkPolicies for every pod: the paths MISP needs, DNS, HTTPS out and SMTP out, for any CNI that enforces the NetworkPolicy API, Cilium included. ingressNamespace holds the ingress or Gateway proxies, monitoringNamespace Prometheus. |
 | `cronjobs` | The periodic tasks as CronJobs: tasks maps a task to its schedule, workflows a workflow ID to its schedule. API tasks need ADMIN_KEY in secrets.admin and dispatch nothing while maxQueued jobs or more wait. |
-| `userValidity` | A daily check of every account against the OIDC or LDAP provider, through MISP's console. Needs the oidc or ldap group. check-user-validity reports; block-invalid-users disables the accounts the provider no longer backs. |
 | `housekeeping` | Nightly deletes of old rows in jobs, logs and audit_logs (HOUSEKEEPING_<TABLE>_DAYS in env, defaults 2, 30 and 90). |
 | `migrate` | A copy of an existing MySQL or MariaDB MISP into the database, before the configure Job runs (docs/migration.md). secret: entries on top of files/secrets-migrate.env for the misp-migrate Secret. volumes and volumeMounts: the source's attachments directory. |
 
@@ -227,7 +203,6 @@ Fail when MISP no longer matches what this image patches or depends on. A failur
 | Check | MISP file | Ours |
 |---|---|---|
 | `worker-queues` | app/Lib/Tools/BackgroundJobsTool.php | files/misp_container/__init__.py WORKER_QUEUES |
-| `worker-group` | app/Lib/Tools/BackgroundJobsTool.php | files/misp_container/__init__.py WORKER_GROUP |
 | `job-keys` | app/Lib/Tools/BackgroundJobsTool.php | files/misp_container/metrics.py _collect_queue_metrics() |
 | `scheduler-tasks` | app/Console/Command/SchedulerWorkerShell.php | files/misp_container/task.py SCHEDULER_COVERAGE |
 | `api-routes` | app/Controller | the file and line named in each problem |
@@ -305,6 +280,7 @@ Unit tests (`tests/`, no containers):
 | `test_sync.py` | Unit tests for the org sync engine. |
 | `test_task.py` | Unit tests for the periodic task runner. |
 | `test_update_settings.py` | Unit tests for the settings catalogue updater (scripts/update_settings.py). |
+| `test_worker.py` | Unit tests for the worker supervisor (misp_container.worker): the programs, restarts and stop. |
 
 Stack files and runners:
 

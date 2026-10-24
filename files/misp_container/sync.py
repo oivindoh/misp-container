@@ -9,14 +9,17 @@ import json
 import os
 import re
 import secrets
+import sys
+import time
+import urllib.request
 
 import yaml
 
 from misp_container import db
 from misp_container.admin import has_authkey, has_password
 from misp_container.api import MISPClient, APIError
-from misp_container.env import env
-from misp_container.log import get as getlog
+from misp_container.env import apply_defaults, env
+from misp_container.log import get as getlog, setup as setup_logging
 
 log = getlog("sync")
 
@@ -893,3 +896,74 @@ def apply(client: MISPClient, config: dict) -> dict:
 
     log.info("sync summary: %s", summary)
     return summary
+
+
+# ---------------------------------------------------------------------------
+# The org-sync role
+# ---------------------------------------------------------------------------
+
+def wait_for_login_page(base_url: str, timeout: int = 360) -> None:
+    """Exit 1 unless the login page answers 200 within the timeout."""
+    log.info("waiting for MISP at %s", base_url)
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            req = urllib.request.Request(f"{base_url.rstrip('/')}/users/login", headers={"Accept": "text/html"})
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                if resp.status == 200:
+                    log.info("MISP is ready")
+                    return
+        except Exception:
+            pass
+        if time.monotonic() > deadline:
+            log.error("MISP did not answer within %d s", timeout)
+            sys.exit(1)
+        time.sleep(3)
+
+
+def main(argv: list[str]) -> None:
+    """Wait for MISP, then apply orgs.yaml (or the file argv names) through the API.
+
+    Runs as the org-sync Job, the sync service in Compose, or by hand:
+    python3 -m misp_container.sync [/path/to/orgs.yaml]
+    """
+    setup_logging("sync")
+    log.info("MISP org sync starting")
+    apply_defaults()
+    base_url = env("SYNC_BASE_URL", env("MISP_BASEURL"))
+    api_key = env("ADMIN_KEY")
+    if not api_key:
+        log.info("ADMIN_KEY not set, skipping org sync")
+        sys.exit(0)
+    try:
+        config = load_config(file_path=argv[0] if argv else None)
+    except (ConfigError, ValueError) as e:
+        log.error("cannot load the org config: %s", e)
+        sys.exit(1)
+    if is_empty(config):
+        log.info("no org config to apply, exiting")
+        sys.exit(0)
+
+    wait_for_login_page(base_url)
+    # The configure step and the migrate Job hold this lock while they write; a
+    # sync that starts during one waits for it
+    db.acquire_config_lock()
+    try:
+        summary = apply(client=MISPClient(base_url, api_key), config=config)
+    finally:
+        db.release_config_lock()
+
+    errors = [v for v in summary.values() if isinstance(v, dict) and "error" in v]
+    # The run's count in its system_settings row, for the metrics exporter
+    try:
+        db.record_run("org-sync", not errors)
+    except Exception as e:
+        log.warning("could not record the sync run: %s", e)
+    if errors:
+        log.error("sync completed with errors: %s", summary)
+        sys.exit(1)
+    log.info("sync completed successfully")
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])

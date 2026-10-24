@@ -62,7 +62,7 @@ web:
       requests: {cpu: 10m, memory: 32Mi}
       limits: {cpu: 500m, memory: 128Mi}
 
-# The background workers. Replicas scale freely; the web pods reach supervisord on TCP 9001.
+# The background workers, which take their jobs from Redis. Replicas scale freely.
 worker:
   replicas: 1
   resources:
@@ -142,24 +142,13 @@ httpRoute:
   hostnames:
     - misp.example.com
 
-# CiliumNetworkPolicies for every pod: the paths MISP needs, DNS, HTTPS out and SMTP out.
-# ingressNamespace holds the ingress or Gateway proxies, monitoringNamespace Prometheus.
-ciliumNetworkPolicy:
-  enabled: false
-  ingressNamespace: haproxy-controller
-  monitoringNamespace: monitoring
-
-# NetworkPolicies with the same flows as ciliumNetworkPolicy, in the Kubernetes API, for a
-# cluster whose CNI enforces NetworkPolicy but is not Cilium. ingressNamespace holds the ingress
-# or Gateway proxies, monitoringNamespace Prometheus.
+# NetworkPolicies for every pod: the paths MISP needs, DNS, HTTPS out and SMTP out, for any CNI
+# that enforces the NetworkPolicy API, Cilium included. ingressNamespace holds the ingress or
+# Gateway proxies, monitoringNamespace Prometheus.
 networkPolicy:
   enabled: false
   ingressNamespace: haproxy-controller
   monitoringNamespace: monitoring
-
-# PodDisruptionBudgets for web and worker (maxUnavailable: 1).
-pdb:
-  enabled: false
 
 # The periodic tasks as CronJobs: tasks maps a task to its schedule, workflows a workflow ID to
 # its schedule. API tasks need ADMIN_KEY in secrets.admin and dispatch nothing while maxQueued
@@ -181,6 +170,10 @@ cronjobs:
     push-taxii: "7 * * * *"
     sharing-group-blueprints: "37 * * * *"
     periodic-summary: "0 6 * * *"
+    # Need the oidc or ldap group: give check-user-validity a schedule, such as "30 5 * * *",
+    # to report each account the provider no longer backs, or block-invalid-users to disable it
+    check-user-validity: ""
+    block-invalid-users: ""
   workflows: {}
   resources:
     api:
@@ -189,14 +182,6 @@ cronjobs:
     console:
       requests: {cpu: 50m, memory: 256Mi}
       limits: {cpu: 1000m, memory: 1Gi}
-
-# A daily check of every account against the OIDC or LDAP provider, through MISP's console.
-# Needs the oidc or ldap group. check-user-validity reports; block-invalid-users disables the
-# accounts the provider no longer backs.
-userValidity:
-  enabled: false
-  schedule: "30 5 * * *"
-  task: check-user-validity
 
 # Nightly deletes of old rows in jobs, logs and audit_logs (HOUSEKEEPING_<TABLE>_DAYS in env,
 # defaults 2, 30 and 90).

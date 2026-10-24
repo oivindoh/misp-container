@@ -85,7 +85,7 @@ is on. So an account that the org sync creates for a person cannot log in throug
 At the end of a run the org sync disables:
 
 - each local account the file does not name: one with no OIDC subject and no external auth.
-  It never disables user 1. Keycloak and the `userValidity` component handle the accounts the
+  It never disables user 1. Keycloak and the `check-user-validity` task handle the accounts the
   identity provider backs.
 - each server the file does not name: it turns its push and pull off.
 

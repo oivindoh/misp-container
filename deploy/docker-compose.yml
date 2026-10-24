@@ -67,7 +67,7 @@ services:
   # -- One-shot configure: schema, settings, admin, GPG, sets MISP.live -----
   configure:
     <<: [*misp-admin, *misp-scratch]
-    command: ["python3", "/entrypoint-configure.py"]
+    command: ["python3", "-m", "misp_container.configure"]
     volumes:
       - misp-files-scripts-tmp:/var/www/MISP/app/files/scripts/tmp
       - misp-files-certs:/var/www/MISP/app/files/certs
@@ -86,7 +86,7 @@ services:
   # -- PHP-FPM (scale freely: podman compose up -d --scale web=2) ------------
   web:
     <<: [*misp-common, *misp-scratch]
-    command: ["python3", "/entrypoint-web.py"]
+    command: ["python3", "-m", "misp_container.web"]
     volumes:
       - misp-files-scripts-tmp:/var/www/MISP/app/files/scripts/tmp
       - misp-files-certs:/var/www/MISP/app/files/certs
@@ -113,24 +113,17 @@ services:
       # the address of each client, not an X-Forwarded-For the client sent. With a
       # reverse proxy in front, set this to its address.
       TRUSTED_PROXY_CIDR: 127.0.0.1/32
-      # Set CADDY_ADDRESS to a domain (e.g. misp.example.com) for automatic HTTPS.
-      # Leave unset for plain HTTP on :8080 (when behind a load balancer).
-      # CADDY_ADDRESS: misp.example.com
+    read_only: true
     ports:
       - "8080:8080"
-      # - "443:443"   # uncomment for HTTPS
-      # - "80:80"     # uncomment for HTTP->HTTPS redirect
-    volumes:
-      - caddy-data:/data
-      - caddy-config:/config
     depends_on:
       - web
 
   # -- Background workers -------------------------------------------------
   worker:
     <<: [*misp-common, *misp-scratch]
-    command: ["python3", "/entrypoint-worker.py"]
-    # supervisord lets a running job finish for WORKER_STOP_GRACE seconds (default 300)
+    command: ["python3", "-m", "misp_container.worker"]
+    # The entrypoint lets a running job finish for WORKER_STOP_GRACE seconds (default 300)
     stop_grace_period: 330s
     volumes:
       - misp-files-scripts-tmp:/var/www/MISP/app/files/scripts/tmp
@@ -151,7 +144,7 @@ services:
   # -- Org sync (runs once after MISP is ready, then exits) ----------------
   sync:
     <<: *misp-admin
-    command: ["python3", "/entrypoint-sync.py"]
+    command: ["python3", "-m", "misp_container.sync"]
     environment:
       SYNC_BASE_URL: http://caddy:8080
     # volumes:
@@ -176,7 +169,7 @@ services:
   # -- Prometheus metrics exporter ------------------------------------------
   metrics:
     <<: *misp-common
-    command: ["python3", "/entrypoint-metrics.py"]
+    command: ["python3", "-m", "misp_container.metrics"]
     ports:
       - "9191:9191"
     depends_on:
@@ -264,5 +257,3 @@ volumes:
   misp-attachments:
   misp-gnupg-key:
   postgres-data:
-  caddy-data:
-  caddy-config:

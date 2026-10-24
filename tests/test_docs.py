@@ -156,13 +156,6 @@ def table_names(doc: Path, header: str, section: str = "") -> set[str]:
     return names
 
 
-def test_the_components_table_lists_every_component():
-    listed = table_names(REPO / "docs/kubernetes.md", "| Component |")
-    present = set(chart.components())
-    assert listed == present, (f"docs/kubernetes.md lists {sorted(listed - present)} that deploy/chart/values.yaml "
-                               f"lacks, and lacks {sorted(present - listed)}")
-
-
 # A backticked dotted name whose first part is a top-level value: a chart value
 VALUE_TOKEN = re.compile(r"([a-z][A-Za-z]*)((?:\.[\w-]+)+)(?:=\S*)?")
 FILE_SUFFIX = re.compile(r"\.(md|py|ya?ml|env|sh|json|php|log|tpl|txt|conf|pem|asc|ini|tgz)$")
@@ -184,12 +177,6 @@ def test_every_chart_value_a_doc_names_exists():
                 break
             node = node[part]
     assert not unknown, "docs name chart values that deploy/chart/values.yaml lacks:\n" + "\n".join(unknown)
-
-
-def test_the_periodic_tasks_table_lists_every_task():
-    listed = {name.split()[0] for name in table_names(REPO / "docs/kubernetes.md", "| Task |")}
-    assert listed == set(task.TASKS), (f"docs/kubernetes.md lists {sorted(listed - set(task.TASKS))} that "
-                                       f"misp_container.task lacks, and lacks {sorted(set(task.TASKS) - listed)}")
 
 
 def test_the_oidc_table_lists_every_short_name():
@@ -300,16 +287,16 @@ def test_the_task_runner_defaults():
     kube = " ".join((REPO / "docs/kubernetes.md").read_text().split())
     expected = f"`TASK_MAX_QUEUED` jobs (default {task.DEFAULT_MAX_QUEUED})"
     assert expected in kube, f"docs/kubernetes.md should say: {expected}"
-    grace = re.search(r'env\("WORKER_STOP_GRACE", "(\d+)"\)', (REPO / "files/entrypoint-worker.py").read_text()).group(1)
+    grace = re.search(r'env\("WORKER_STOP_GRACE", "(\d+)"\)', (REPO / "files/misp_container/worker.py").read_text()).group(1)
     expected = f"`WORKER_STOP_GRACE` seconds (default {grace})"
     assert expected in " ".join((REPO / "docs/architecture.md").read_text().split()), \
         f"docs/architecture.md should say: {expected}"
 
 
 def test_the_mail_ports_of_the_network_policy():
-    policies = [d for d in chart.objects(every_component=True) if d["kind"] == "CiliumNetworkPolicy"]
+    policies = [d for d in chart.objects(every_component=True) if d["kind"] == "NetworkPolicy"]
     ports = sorted({int(p["port"]) for d in policies for rule in d["spec"].get("egress", [])
-                    for to in rule.get("toPorts", []) for p in to.get("ports", []) if int(p["port"]) in (25, 465, 587, 2525)})
+                    for p in rule.get("ports", []) if int(p["port"]) in (25, 465, 587, 2525)})
     text = " ".join((REPO / "docs/kubernetes.md").read_text().split())
     expected = f"SMTP (ports {', '.join(map(str, ports[:-1]))} and {ports[-1]}"
     assert expected in text, f"docs/kubernetes.md should say: {expected}"

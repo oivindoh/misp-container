@@ -34,7 +34,7 @@ def task_cronjobs() -> dict[str, list[tuple[str, str]]]:
     for template, doc in chart.render(every_component=True):
         if doc["kind"] != "CronJob":
             continue
-        command = chart.pod_spec(doc)["containers"][0]["command"]
+        command = chart.pod_spec(doc)["containers"][0]["args"]
         if "misp_container.task" in command:
             name = command[command.index("misp_container.task") + 1]
             found.setdefault(name, []).append((doc["spec"]["schedule"], chart.template_component(template)))

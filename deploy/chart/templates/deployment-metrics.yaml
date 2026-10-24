@@ -26,7 +26,7 @@ spec:
       containers:
         - name: metrics
           {{- include "misp.image" . | nindent 10 }}
-          command: ["/usr/bin/tini", "--", "python3", "/entrypoint-metrics.py"]
+          args: ["python3", "-m", "misp_container.metrics"]
           ports:
             - name: metrics
               containerPort: 9191

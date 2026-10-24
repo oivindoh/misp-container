@@ -31,7 +31,7 @@ helm test misp --namespace misp --logs
 ```
 
 The test pod loads the login page through the `web` Service. With `ADMIN_KEY` set, it also
-checks through the API that `MISP.live` is true and that a worker runs every queue.
+checks through the API that `MISP.live` is true.
 
 ```yaml
 # values.yaml
@@ -41,7 +41,7 @@ env:
   MISP_UUID: 06732f0d-87e3-4ede-8767-4e0e9879414c
 secrets:
   db: {DB_PASSWORD: ...}
-  app: {MISP_REDIS_PASSWORD: ..., GNUPG_PASSWORD: ..., SIMPLEBACKGROUNDJOBS_SUPERVISOR_PASSWORD: ..., SECURITY_SALT: ...}
+  app: {MISP_REDIS_PASSWORD: ..., GNUPG_PASSWORD: ..., SECURITY_SALT: ...}
   admin: {ADMIN_PASSWORD: ..., ADMIN_KEY: ...}
 postgres: {enabled: true}
 redis: {enabled: true}
@@ -68,7 +68,7 @@ below come from them.
 | `database` | DB_USER and DB_PASSWORD from a Secret the release does not make, such as the one a database operator (StackGres, CloudNativePG) keeps: a name and a key for each. They replace the same keys of misp-db in every pod, the postgres component included. |
 | `configure` | The configure Job: schema, settings, admin user, GPG and auth, on every install and upgrade. |
 | `web` | MISP's web tier: PHP-FPM and the caddy sidecar in each pod. Replicas scale freely. |
-| `worker` | The background workers. Replicas scale freely; the web pods reach supervisord on TCP 9001. |
+| `worker` | The background workers, which take their jobs from Redis. Replicas scale freely. |
 | `metrics` | The Prometheus exporter (docs/metrics.md). |
 | `modules` | misp-modules: the enrichment, import, export and action modules. |
 | `orgSync` | The org-sync Job applies orgs, the content of orgs.yaml (deploy/orgs.yaml.example), through the API after each install and upgrade. It exits at once when ADMIN_KEY is empty. |
@@ -86,11 +86,8 @@ Each component is off by default:
 | `redis` | Single Redis without persistence: sessions and queued jobs do not survive a restart. Leave it off for an external Redis (MISP_REDIS_HOST in env). |
 | `ingress` | An Ingress to the web Service. The default annotation makes the haproxy ingress replace X-Forwarded-For with the address it sees (docs/kubernetes.md, Client addresses). |
 | `httpRoute` | An HTTPRoute for a Gateway API implementation, in place of the ingress. The Gateway must allow routes from this namespace; set TRUSTED_PROXY_CIDR in env to its proxy pods. |
-| `ciliumNetworkPolicy` | CiliumNetworkPolicies for every pod: the paths MISP needs, DNS, HTTPS out and SMTP out. ingressNamespace holds the ingress or Gateway proxies, monitoringNamespace Prometheus. |
-| `networkPolicy` | NetworkPolicies with the same flows as ciliumNetworkPolicy, in the Kubernetes API, for a cluster whose CNI enforces NetworkPolicy but is not Cilium. ingressNamespace holds the ingress or Gateway proxies, monitoringNamespace Prometheus. |
-| `pdb` | PodDisruptionBudgets for web and worker (maxUnavailable: 1). |
+| `networkPolicy` | NetworkPolicies for every pod: the paths MISP needs, DNS, HTTPS out and SMTP out, for any CNI that enforces the NetworkPolicy API, Cilium included. ingressNamespace holds the ingress or Gateway proxies, monitoringNamespace Prometheus. |
 | `cronjobs` | The periodic tasks as CronJobs: tasks maps a task to its schedule, workflows a workflow ID to its schedule. API tasks need ADMIN_KEY in secrets.admin and dispatch nothing while maxQueued jobs or more wait. |
-| `userValidity` | A daily check of every account against the OIDC or LDAP provider, through MISP's console. Needs the oidc or ldap group. check-user-validity reports; block-invalid-users disables the accounts the provider no longer backs. |
 | `housekeeping` | Nightly deletes of old rows in jobs, logs and audit_logs (HOUSEKEEPING_<TABLE>_DAYS in env, defaults 2, 30 and 90). |
 | `migrate` | A copy of an existing MySQL or MariaDB MISP into the database, before the configure Job runs (docs/migration.md). secret: entries on top of files/secrets-migrate.env for the misp-migrate Secret. volumes and volumeMounts: the source's attachments directory. |
 <!-- end generated -->
@@ -110,8 +107,8 @@ into the header never reaches the audit log, whether the proxy in front replaces
 | Kubernetes, set in `env` to the ingress or Gateway proxy pods | those pods | every client |
 | Compose | `127.0.0.1/32` on the caddy service: clients reach caddy directly | every client |
 
-With `ciliumNetworkPolicy`, only the ingress namespace reaches the web pods. For a Gateway,
-set `ciliumNetworkPolicy.ingressNamespace` to the namespace of the Gateway's proxies.
+With `networkPolicy`, only the ingress namespace reaches the web pods. For a Gateway,
+set `networkPolicy.ingressNamespace` to the namespace of the Gateway's proxies.
 
 ## Secrets
 
@@ -122,8 +119,8 @@ workload gets a whole Secret, or only the keys the table names:
 <!-- generated: secrets -->
 | Secret | File | Keys | Read by |
 |---|---|---|---|
-| `misp-db` | `deploy/chart/files/secrets-db.env` | `DB_USER`, `DB_PASSWORD` | configure, cronjobs, housekeeping, metrics (`DB_PASSWORD`, `DB_USER`), migrate, org-sync, postgres (`DB_PASSWORD`, `DB_USER`), userValidity, web, worker |
-| `misp-app` | `deploy/chart/files/secrets-app.env` | `MISP_REDIS_PASSWORD`, `GNUPG_PASSWORD`, `SIMPLEBACKGROUNDJOBS_SUPERVISOR_PASSWORD`, `SECURITY_ENCRYPTION_KEY`, `SECURITY_SALT` | configure, cronjobs, metrics (`MISP_REDIS_PASSWORD`), migrate, redis (`MISP_REDIS_PASSWORD`), userValidity, web, worker |
+| `misp-db` | `deploy/chart/files/secrets-db.env` | `DB_USER`, `DB_PASSWORD` | configure, cronjobs, housekeeping, metrics (`DB_PASSWORD`, `DB_USER`), migrate, org-sync, postgres (`DB_PASSWORD`, `DB_USER`), web, worker |
+| `misp-app` | `deploy/chart/files/secrets-app.env` | `MISP_REDIS_PASSWORD`, `GNUPG_PASSWORD`, `SECURITY_ENCRYPTION_KEY`, `SECURITY_SALT` | configure, cronjobs, metrics (`MISP_REDIS_PASSWORD`), migrate, redis (`MISP_REDIS_PASSWORD`), web, worker |
 | `misp-admin` | `deploy/chart/files/secrets-admin.env` | `ADMIN_PASSWORD`, `ADMIN_KEY` | configure, cronjobs (`ADMIN_KEY`), misp-test (`ADMIN_KEY`), org-sync |
 | `misp-migrate` | `deploy/chart/files/secrets-migrate.env` | `MIGRATE_SOURCE_HOST`, `MIGRATE_SOURCE_USER`, `MIGRATE_SOURCE_PASSWORD`, `MIGRATE_FORCE`, `MIGRATE_REPLACE_COPY`, `MIGRATE_SOURCE_FILES`, `MIGRATE_SOURCE_S3_BUCKET`, `MIGRATE_SOURCE_S3_ENDPOINT`, `MIGRATE_SOURCE_S3_REGION`, `MIGRATE_SOURCE_S3_ACCESS_KEY`, `MIGRATE_SOURCE_S3_SECRET_KEY` | migrate |
 <!-- end generated -->
@@ -181,20 +178,17 @@ on one replica only; use the `misp-certs` Secret.
 
 ## Network policies
 
-The `ciliumNetworkPolicy` component allows only the paths in the diagram in
+The `networkPolicy` component allows only the paths in the diagram in
 [architecture.md](architecture.md) plus DNS, HTTPS to the outside for web, worker, modules,
 metrics and the console tasks, SMTP (ports 25, 465 and 587, in or outside the cluster)
 for web, worker and the console tasks, and LDAP (ports 389 and 636, in or outside the
 cluster) for web and the console tasks. A mail relay or an LDAP server on another port
-needs a change to the template. `ciliumNetworkPolicy.ingressNamespace` (default `haproxy-controller`) and
-`ciliumNetworkPolicy.monitoringNamespace` (default `monitoring`) name the namespaces of the
-ingress and of Prometheus. The header of `deploy/chart/templates/ciliumnetworkpolicy.yaml`
-lists every flow.
-
-The `networkPolicy` component renders the same flows as Kubernetes `NetworkPolicy` objects,
-with the same two namespace values, for a cluster whose CNI enforces that API but is not
-Cilium. A cluster whose CNI enforces neither leaves every pod open to the namespace and,
-without a default-deny elsewhere, to the cluster.
+needs a change to the template. `networkPolicy.ingressNamespace` (default `haproxy-controller`) and
+`networkPolicy.monitoringNamespace` (default `monitoring`) name the namespaces of the
+ingress and of Prometheus. The header of `deploy/chart/templates/networkpolicy.yaml`
+lists every flow. Any CNI that enforces the NetworkPolicy API applies them, Cilium included.
+A cluster whose CNI enforces none leaves every pod open to the namespace and, without a
+default-deny elsewhere, to the cluster.
 
 ## Sizing
 
@@ -233,7 +227,7 @@ remote server, do not use a scheduler: the workers run them.
 | `sharing-group-blueprints` | Apply the sharing group blueprints | API | `37 * * * *` (`cronjobs`) |
 | `workflow` | Run one ad-hoc workflow, by its ID | API | none |
 | `periodic-summary` | Send the daily, weekly (Mondays) and monthly (the first) summaries users subscribed to | console | `0 6 * * *` (`cronjobs`) |
-| `check-user-validity` | Report every account as valid or invalid at the OIDC or LDAP provider | console | `30 5 * * *` (`userValidity`) |
+| `check-user-validity` | Report every account as valid or invalid at the OIDC or LDAP provider | console | none |
 | `block-invalid-users` | Disable the accounts the OIDC or LDAP provider no longer backs | console | none |
 <!-- end generated -->
 
@@ -252,8 +246,9 @@ needs a mail relay (`SMTP_FQDN`, `SMTP_PORT`).
 drop the CronJob. `cronjobs.workflows` maps a workflow ID to a schedule, one CronJob
 `workflow-<id>` each. Every task CronJob pod carries `app.kubernetes.io/component:
 misp-task` (API) or `misp-console-task` (console); the network policies select on that
-label. To disable users instead of reporting them, set `userValidity.task` to
-`block-invalid-users`.
+label. `check-user-validity` and `block-invalid-users` have no schedule, because MISP runs them
+only with the oidc or ldap group: give `check-user-validity` one to report the accounts the
+provider no longer backs, or `block-invalid-users` to disable them.
 
 On demand:
 

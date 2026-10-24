@@ -49,7 +49,6 @@ PARTNER = ("c-db", "c-redis", "c-core", "c-nginx")
 
 def instance_env(inst):
     return {"DB_HOST": f"{inst}-postgres", "MISP_REDIS_HOST": f"{inst}-redis",
-            "SIMPLEBACKGROUNDJOBS_SUPERVISOR_HOST": f"{inst}-worker",
             "MISP_BASEURL": f"http://localhost:{PORTS[inst]}", "MISP_UUID": MISP_UUIDS[inst],
             "ADMIN_EMAIL": "admin@admin.test", "ADMIN_ORG": f"Org-{inst.upper()}",
             "ADMIN_ORG_UUID": ORG_UUIDS[inst], "ADMIN_KEY": ADMIN_KEYS[inst]}

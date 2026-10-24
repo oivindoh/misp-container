@@ -73,7 +73,7 @@ spec:
         # PHP-FPM - the MISP application
         - name: php-fpm
           {{- include "misp.image" . | nindent 10 }}
-          command: ["/usr/bin/tini", "--", "python3", "/entrypoint-web.py"]
+          args: ["python3", "-m", "misp_container.web"]
           ports:
             - name: php-fpm
               containerPort: 9002

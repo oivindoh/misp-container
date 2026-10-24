@@ -33,7 +33,7 @@ URLs, and `ADMIN_ORG` `MISP.org`, the hosting organisation in e-mail subjects an
 exports.
 
 A few settings are rendered into `config.php` in every pod, because MISP reads them before
-the database (Redis, supervisor, salt, encryption key, paths). Those come from the
+the database (Redis, salt, encryption key, paths). Those come from the
 `minimum_config` group and the same env vars.
 
 Container-level defaults (database and Redis hosts, PHP limits, worker counts) are in
@@ -58,13 +58,8 @@ engine needs MySQL, so it is not available.
 
 ## HTTPS
 
-Caddy serves plain HTTP on 8080, for an ingress or load balancer in front. Set
-`CADDY_ADDRESS` to a domain name for automatic HTTPS with Let's Encrypt instead:
-
-```yaml
-environment:
-  CADDY_ADDRESS: misp.example.com
-```
+Caddy serves plain HTTP on 8080, for an ingress, a Gateway or a load balancer in front, which
+terminates TLS.
 
 ## Authentication plugins
 
@@ -132,7 +127,7 @@ In MISP:
 | `OIDC_ROLES_MAPPING` | The client roles, highest first: `{"admin": "admin", "org-admin": "Org Admin", "publisher": "Publisher", "user": "User", "read-only": "Read Only"}`. OidcAuth takes the first match, so a user gets the highest role held |
 | `OIDCAUTH_ORGANISATION_PROPERTY` | `misp_organisation` |
 | `OIDC_DEFAULT_ORG` | Optional: the organisation of a user in no Keycloak organisation. Empty refuses that login |
-| `OIDCAUTH_OFFLINE_ACCESS` | Optional: `true` for the `userValidity` check. Users then need the realm role `offline_access`, which Keycloak's default roles hold |
+| `OIDCAUTH_OFFLINE_ACCESS` | Optional: `true` for the `check-user-validity` task. Users then need the realm role `offline_access`, which Keycloak's default roles hold |
 
 A user in several Keycloak organisations lands in any one of them. A user whose organisation
 has no MISP organisation of that name cannot log in. The accounts of a migrated instance need
@@ -157,15 +152,6 @@ leaves the account enabled.
 `LDAPAUTH_LDAPSERVER`, `LDAPAUTH_LDAPDN`, `LDAPAUTH_LDAPREADERUSER`, `LDAPAUTH_LDAPREADERPASSWORD`
 are required; `LDAPAUTH_LDAPSEARCHFILTER`, `LDAPAUTH_LDAPDEFAULTORGID`, `LDAPAUTH_LDAPDEFAULTROLEID`,
 `LDAPAUTH_LDAPROLEFIELD` and the rest of the `ldap` group follow the plugin's README.
-
-## Custom scripts
-
-Two hook points for custom Python, mounted as files, skipped when absent:
-
-| Script | Where | When |
-|--------|-------|------|
-| `/custom/setup.py` | configure Job | After the database is ready, before configuration |
-| `/custom/pre-start.py` | every web replica | Before PHP-FPM starts |
 
 ## Logging
 

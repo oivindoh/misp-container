@@ -180,13 +180,7 @@
         "hostnames": {"type": "array", "items": {"type": "string"}}
       }
     },
-    "ciliumNetworkPolicy": {"$ref": "#/definitions/networkPolicy"},
     "networkPolicy": {"$ref": "#/definitions/networkPolicy"},
-    "pdb": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {"enabled": {"type": "boolean"}}
-    },
     "cronjobs": {
       "type": "object",
       "additionalProperties": false,
@@ -203,15 +197,6 @@
             "console": {"$ref": "#/definitions/resources"}
           }
         }
-      }
-    },
-    "userValidity": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "enabled": {"type": "boolean"},
-        "schedule": {"type": "string"},
-        "task": {"type": "string", "enum": ["check-user-validity", "block-invalid-users"]}
       }
     },
     "housekeeping": {

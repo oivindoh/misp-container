@@ -9,7 +9,7 @@ migrate Job. See [docs/misp-3.md](docs/misp-3.md).
 
 ## TL;DR
 
-- One image, one entrypoint per role: a `configure` Job sets the database and settings up,
+- One image, one module per role: a `configure` Job sets the database and settings up,
   then web and worker pods start and scale freely. Two small extra images: caddy and modules.
 - Non-root (UID 1000), read-only root filesystem, all capabilities dropped, sessions in Redis.
 - Every MISP setting has an env var (`MISP.redis_host` -> `MISP_REDIS_HOST`). Curated defaults
@@ -86,7 +86,7 @@ values and lists the components, Secrets, storage, network policies and periodic
 | Document | Covers |
 |----------|--------|
 | [docs/architecture.md](docs/architecture.md) | The roles, the configure Job, startup and footprint, rollout order, scaling |
-| [docs/configuration.md](docs/configuration.md) | Settings and their env vars, database, HTTPS, authentication plugins and Keycloak, custom scripts, logging |
+| [docs/configuration.md](docs/configuration.md) | Settings and their env vars, database, HTTPS, authentication plugins and Keycloak, logging |
 | [docs/kubernetes.md](docs/kubernetes.md) | Install, values, components, client addresses, Secrets, storage, network policies, periodic tasks |
 | [docs/org-sync.md](docs/org-sync.md) | Organisations, users, servers, tags and taxonomies from a YAML file |
 | [docs/metrics.md](docs/metrics.md) | The Prometheus metrics and example alerts |

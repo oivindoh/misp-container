@@ -35,7 +35,7 @@ spec:
         # before unless MIGRATE_REPLACE_COPY=true.
         - name: migrate
           {{- include "misp.image" . | nindent 10 }}
-          command: ["/usr/bin/tini", "--", "python3", "-m", "misp_container.migrate"]
+          args: ["python3", "-m", "misp_container.migrate"]
           {{- include "misp.appEnv" (list . "misp-db" "misp-app" "misp-migrate") | nindent 10 }}
           volumeMounts:
             - name: attachments
@@ -57,7 +57,7 @@ spec:
       containers:
         - name: configure
           {{- include "misp.image" . | nindent 10 }}
-          command: ["/usr/bin/tini", "--", "python3", "/entrypoint-configure.py"]
+          args: ["python3", "-m", "misp_container.configure"]
           {{- include "misp.appEnv" (list . "misp-db" "misp-app" "misp-admin") | nindent 10 }}
           volumeMounts:
             {{- include "misp.appVolumeMounts" . | nindent 12 }}

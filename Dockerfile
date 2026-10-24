@@ -3,7 +3,7 @@
 # Non-root MISP 2.5 Docker image
 #
 # Build targets:
-#   final    PHP-FPM, workers, configure, org sync, metrics (one image, entrypoint per role)
+#   final    PHP-FPM, workers, configure, org sync, metrics (one image, a module per role)
 #   caddy    static files + FastCGI reverse proxy (scratch)
 #   modules  misp-modules (distroless)
 # Build through compose: podman compose build
@@ -242,7 +242,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
               /usr/share/doc \
               /usr/share/man
 
-# The pinned Python packages, and their commands such as supervisord: uv
+# The pinned Python packages and their commands: uv
 # installs both under /usr/local (no pip in the final image)
 COPY --from=python /usr/local /usr/local
 
@@ -288,13 +288,8 @@ RUN for dir in app/files/scripts/tmp app/files/certs app/files/terms app/files/i
         mkdir -p /var/www/MISP/$dir && chown ${MISP_UID}:${MISP_GID} /var/www/MISP/$dir && chmod 0770 /var/www/MISP/$dir; \
     done
 
-# Copy Python entrypoint package and scripts
+# The Python package: each role starts as python3 -m misp_container.<role>
 COPY --chown=${MISP_UID}:${MISP_GID} files/misp_container/ /opt/misp_container/
-COPY --chown=${MISP_UID}:${MISP_GID} --chmod=0550 files/entrypoint-configure.py /entrypoint-configure.py
-COPY --chown=${MISP_UID}:${MISP_GID} --chmod=0550 files/entrypoint-web.py /entrypoint-web.py
-COPY --chown=${MISP_UID}:${MISP_GID} --chmod=0550 files/entrypoint-worker.py /entrypoint-worker.py
-COPY --chown=${MISP_UID}:${MISP_GID} --chmod=0550 files/entrypoint-sync.py /entrypoint-sync.py
-COPY --chown=${MISP_UID}:${MISP_GID} --chmod=0550 files/entrypoint-metrics.py /entrypoint-metrics.py
 
 # Config templates and settings
 COPY --chown=${MISP_UID}:${MISP_GID} files/php-fpm-pool.conf /etc/misp-docker/php-fpm-pool.conf
@@ -315,7 +310,7 @@ USER ${MISP_UID}
 EXPOSE 9002
 
 ENTRYPOINT ["/usr/bin/tini", "--"]
-CMD ["python3", "/entrypoint-web.py"]
+CMD ["python3", "-m", "misp_container.web"]
 
 # =============================================================================
 # Stage 8: caddy - Static files + FastCGI reverse proxy (scratch image)
@@ -342,18 +337,11 @@ COPY --from=misp-source --chown=1000:1000 /var/www/MISP/app/webroot /var/www/MIS
 # Caddyfile
 COPY --chown=1000:1000 files/Caddyfile /etc/caddy/Caddyfile
 
-# Writable dirs for TLS cert storage and config autosave
-COPY --from=caddy-bin --chown=1000:1000 /config /config
-COPY --from=caddy-bin --chown=1000:1000 /data /data
-
-ENV XDG_CONFIG_HOME=/config
-ENV XDG_DATA_HOME=/data
 ENV PHP_FPM_HOST=127.0.0.1
 
 USER 1000
 
 EXPOSE 8080
-EXPOSE 443
 
 CMD ["caddy", "run", "--config", "/etc/caddy/Caddyfile"]
 
