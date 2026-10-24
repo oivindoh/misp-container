@@ -108,7 +108,7 @@ Run with: `mise run test-integration`
 --strict`, renders the chart with the default values, with each component on, with every
 component on, and with supplied Secrets, attachments in S3 and a workflow CronJob. It
 validates each render with `kubeconform -strict` against the Kubernetes schemas and, for the
-Cilium policies and the HTTPRoute, the copies of the datree CRD catalog in `tests/schemas/`. It needs `helm` and `kubeconform` (`mise
+HTTPRoute, the copy of the datree CRD catalog in `tests/schemas/`. It needs `helm` and `kubeconform` (`mise
 install` in the repository); without `kubeconform` the render tests skip, and in CI they
 fail. It runs with the unit tests (CI job: `unit`). `test_chart.py` checks what the renders
 hold.

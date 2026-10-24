@@ -1,8 +1,26 @@
-# The networkPolicy component: NetworkPolicies for every pod, for a cluster whose
-# CNI enforces the Kubernetes NetworkPolicy API but is not Cilium. The flows are
-# those of ciliumnetworkpolicy.yaml, whose header lists them: pod and namespace
-# selectors, ports, and ipBlocks for the outside. A destination in or outside
-# the cluster (the mail relay, an LDAP server) is a port rule without a peer.
+# The networkPolicy component: NetworkPolicies for every pod, for any CNI that
+# enforces the Kubernetes NetworkPolicy API, Cilium included. A destination in or
+# outside the cluster (the mail relay, an LDAP server) is a port rule without a peer.
+#
+# Traffic flow:
+#   ingress or Gateway ns --> caddy :8080
+#   task cronjobs         --> caddy :8080, metrics :9191
+#   console task cronjobs --> postgres :5432, redis :6379, SMTP out, HTTPS out (IdP), LDAP out
+#   caddy                 --> php-fpm :9002  (localhost in same pod)
+#   php-fpm               --> postgres :5432, redis :6379, modules :6666, worker :9001,
+#                             HTTPS out (IdP, partners), SMTP out, LDAP out
+#   worker                --> postgres :5432, redis :6379, modules :6666, HTTPS out (partners, feeds), SMTP out
+#   configure job         --> postgres :5432, redis :6379; with migrate, the source database and S3
+#   org-sync job          --> caddy :8080, postgres :5432
+#   housekeeping          --> postgres :5432
+#   metrics               --> postgres :5432, redis :6379, HTTPS out (partner probes)
+#   all pods              --> kube-dns :53
+#
+# Task CronJob pods carry app.kubernetes.io/component: misp-task (API tasks),
+# misp-console-task (tasks that run MISP's console) or misp-housekeeping; the
+# rules select on that label.
+#
+# Everything else is denied by default.
 
 {{/* An egress rule to one pod of this release, by app.kubernetes.io/name, on one TCP port */}}
 {{- define "misp.np.toPod" -}}

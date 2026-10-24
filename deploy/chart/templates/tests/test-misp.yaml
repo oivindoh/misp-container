@@ -1,7 +1,7 @@
 # helm test: checks a release from inside the cluster. It loads the login page
 # through the web Service and, with ADMIN_KEY in misp-admin, calls the API as
 # the admin: MISP.live, and a worker on every queue behind a reachable
-# supervisord. The pod carries the API task label, so the ciliumNetworkPolicy
+# supervisord. The pod carries the API task label, so the networkPolicy
 # component lets it reach web.
 apiVersion: v1
 kind: Pod

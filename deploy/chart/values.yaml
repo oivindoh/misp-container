@@ -142,16 +142,9 @@ httpRoute:
   hostnames:
     - misp.example.com
 
-# CiliumNetworkPolicies for every pod: the paths MISP needs, DNS, HTTPS out and SMTP out.
-# ingressNamespace holds the ingress or Gateway proxies, monitoringNamespace Prometheus.
-ciliumNetworkPolicy:
-  enabled: false
-  ingressNamespace: haproxy-controller
-  monitoringNamespace: monitoring
-
-# NetworkPolicies with the same flows as ciliumNetworkPolicy, in the Kubernetes API, for a
-# cluster whose CNI enforces NetworkPolicy but is not Cilium. ingressNamespace holds the ingress
-# or Gateway proxies, monitoringNamespace Prometheus.
+# NetworkPolicies for every pod: the paths MISP needs, DNS, HTTPS out and SMTP out, for any CNI
+# that enforces the NetworkPolicy API, Cilium included. ingressNamespace holds the ingress or
+# Gateway proxies, monitoringNamespace Prometheus.
 networkPolicy:
   enabled: false
   ingressNamespace: haproxy-controller

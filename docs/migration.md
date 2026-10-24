@@ -158,7 +158,7 @@ Onto a deployment that has run once, set `MIGRATE_FORCE=true` in `migrate.secret
 The web and worker pods keep running; they answer with errors while the copy runs, and MISP
 shows itself as offline (`MISP.live=false`) until the configure Job has configured the copy.
 
-With the `ciliumNetworkPolicy` or `networkPolicy` component the configure pod may reach the
+With the `networkPolicy` component the configure pod may reach the
 source on port 3306 and S3 on 443, in the cluster or outside it, while `migrate` is on;
 another port needs a change to the template.
 

@@ -2,9 +2,9 @@
 
 The renders: the default values, each component on, every component on, and the
 values a release changes most. kubeconform validates each against the Kubernetes
-schemas (a cache under the user's cache directory) and, for the Cilium policies
-and the HTTPRoute, the copies of the datree CRD catalog in tests/schemas: take a
-new copy when the chart moves to another API version of either. Needs helm and
+schemas (a cache under the user's cache directory) and, for the HTTPRoute, the
+copy of the datree CRD catalog in tests/schemas: take a new copy when the chart
+moves to another API version of it. Needs helm and
 kubeconform on PATH (mise install); without kubeconform the tests skip, except in
 CI, where they fail.
 """

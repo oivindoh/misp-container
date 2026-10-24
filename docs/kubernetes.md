@@ -110,8 +110,8 @@ into the header never reaches the audit log, whether the proxy in front replaces
 | Kubernetes, set in `env` to the ingress or Gateway proxy pods | those pods | every client |
 | Compose | `127.0.0.1/32` on the caddy service: clients reach caddy directly | every client |
 
-With `ciliumNetworkPolicy`, only the ingress namespace reaches the web pods. For a Gateway,
-set `ciliumNetworkPolicy.ingressNamespace` to the namespace of the Gateway's proxies.
+With `networkPolicy`, only the ingress namespace reaches the web pods. For a Gateway,
+set `networkPolicy.ingressNamespace` to the namespace of the Gateway's proxies.
 
 ## Secrets
 
@@ -181,20 +181,17 @@ on one replica only; use the `misp-certs` Secret.
 
 ## Network policies
 
-The `ciliumNetworkPolicy` component allows only the paths in the diagram in
+The `networkPolicy` component allows only the paths in the diagram in
 [architecture.md](architecture.md) plus DNS, HTTPS to the outside for web, worker, modules,
 metrics and the console tasks, SMTP (ports 25, 465 and 587, in or outside the cluster)
 for web, worker and the console tasks, and LDAP (ports 389 and 636, in or outside the
 cluster) for web and the console tasks. A mail relay or an LDAP server on another port
-needs a change to the template. `ciliumNetworkPolicy.ingressNamespace` (default `haproxy-controller`) and
-`ciliumNetworkPolicy.monitoringNamespace` (default `monitoring`) name the namespaces of the
-ingress and of Prometheus. The header of `deploy/chart/templates/ciliumnetworkpolicy.yaml`
-lists every flow.
-
-The `networkPolicy` component renders the same flows as Kubernetes `NetworkPolicy` objects,
-with the same two namespace values, for a cluster whose CNI enforces that API but is not
-Cilium. A cluster whose CNI enforces neither leaves every pod open to the namespace and,
-without a default-deny elsewhere, to the cluster.
+needs a change to the template. `networkPolicy.ingressNamespace` (default `haproxy-controller`) and
+`networkPolicy.monitoringNamespace` (default `monitoring`) name the namespaces of the
+ingress and of Prometheus. The header of `deploy/chart/templates/networkpolicy.yaml`
+lists every flow. Any CNI that enforces the NetworkPolicy API applies them, Cilium included.
+A cluster whose CNI enforces none leaves every pod open to the namespace and, without a
+default-deny elsewhere, to the cluster.
 
 ## Sizing
 

@@ -192,11 +192,12 @@ def test_attachments_in_s3_render_no_claim():
 
 
 def test_the_helm_test_reaches_web_through_the_network_policy():
-    pod = chart.find("Pod", "misp-test", "ciliumNetworkPolicy.enabled=true")
+    pod = chart.find("Pod", "misp-test", "networkPolicy.enabled=true")
     assert pod["metadata"]["annotations"]["helm.sh/hook"] == "test"
     component = pod["metadata"]["labels"]["app.kubernetes.io/component"]
-    web = chart.find("CiliumNetworkPolicy", "web", "ciliumNetworkPolicy.enabled=true")
-    allowed = [e["matchLabels"] for rule in web["spec"]["ingress"] for e in rule["fromEndpoints"]]
+    web = chart.find("NetworkPolicy", "web", "networkPolicy.enabled=true")
+    allowed = [peer["podSelector"]["matchLabels"] for rule in web["spec"]["ingress"] for peer in rule["from"]
+               if "podSelector" in peer]
     assert {"app.kubernetes.io/component": component} in allowed
 
 
@@ -204,7 +205,7 @@ def test_every_component_renders_and_the_default_renders_none():
     for component in chart.components():
         assert chart.render_text(*chart.component_sets(component)) != chart.render_text(), (
             f"{component}.enabled=true changes nothing in the render")
-    assert not any(d["kind"] in ("StatefulSet", "CronJob", "Ingress", "HTTPRoute", "PodDisruptionBudget", "CiliumNetworkPolicy")
+    assert not any(d["kind"] in ("StatefulSet", "CronJob", "Ingress", "HTTPRoute", "PodDisruptionBudget", "NetworkPolicy")
                    for d in chart.objects())
 
 

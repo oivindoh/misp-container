@@ -180,7 +180,6 @@
         "hostnames": {"type": "array", "items": {"type": "string"}}
       }
     },
-    "ciliumNetworkPolicy": {"$ref": "#/definitions/networkPolicy"},
     "networkPolicy": {"$ref": "#/definitions/networkPolicy"},
     "pdb": {
       "type": "object",

@@ -307,9 +307,9 @@ def test_the_task_runner_defaults():
 
 
 def test_the_mail_ports_of_the_network_policy():
-    policies = [d for d in chart.objects(every_component=True) if d["kind"] == "CiliumNetworkPolicy"]
+    policies = [d for d in chart.objects(every_component=True) if d["kind"] == "NetworkPolicy"]
     ports = sorted({int(p["port"]) for d in policies for rule in d["spec"].get("egress", [])
-                    for to in rule.get("toPorts", []) for p in to.get("ports", []) if int(p["port"]) in (25, 465, 587, 2525)})
+                    for p in rule.get("ports", []) if int(p["port"]) in (25, 465, 587, 2525)})
     text = " ".join((REPO / "docs/kubernetes.md").read_text().split())
     expected = f"SMTP (ports {', '.join(map(str, ports[:-1]))} and {ports[-1]}"
     assert expected in text, f"docs/kubernetes.md should say: {expected}"
