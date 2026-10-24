@@ -18,8 +18,8 @@ metadata:
     argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
     argocd.argoproj.io/sync-wave: "1"
 spec:
-  # A failed copy or conversion stops for the operator to read, not for a retry
-  backoffLimit: {{ ternary 0 3 (or .Values.migrate.enabled .Values.upgrade.enabled) }}
+  # A failed copy stops for the operator to read, not for a retry
+  backoffLimit: {{ ternary 0 3 .Values.migrate.enabled }}
   template:
     metadata:
       labels:
@@ -28,13 +28,8 @@ spec:
       restartPolicy: Never
       {{- include "misp.podSecurityContext" . | nindent 6 }}
       {{- include "misp.podScheduling" . | nindent 6 }}
-      {{- if and .Values.upgrade.enabled (not .Values.upgrade.backupConfirmed) }}
-      {{- fail "upgrade.enabled converts the database to MISP 3.0 one-way: back it up, check the restore, then set upgrade.backupConfirmed: true" }}
-      {{- end }}
-      {{- if or .Values.migrate.enabled .Values.upgrade.enabled }}
-      initContainers:
-      {{- end }}
       {{- if .Values.migrate.enabled }}
+      initContainers:
         # Copies the source database and attachments (docs/migration.md). It
         # holds the configure lock while it copies, and keeps a copy it made
         # before unless MIGRATE_REPLACE_COPY=true.
@@ -57,36 +52,6 @@ spec:
             {{- end }}
           resources:
             {{- toYaml .Values.migrate.resources | nindent 12 }}
-          {{- include "misp.containerSecurityContext" . | nindent 10 }}
-      {{- end }}
-      {{- if .Values.upgrade.enabled }}
-        # Converts a MISP 2.5 database to MISP 3.0 (docs/misp-3.md), after a
-        # migrate copy when both are on. Exits at once on a converted database.
-        - name: upgrade
-          {{- include "misp.image" . | nindent 10 }}
-          command: ["/usr/bin/tini", "--", "python3", "-m", "misp_container.upgrade"]
-          env:
-            {{- with include "misp.dbEnv" . }}
-            {{- . | nindent 12 }}
-            {{- end }}
-            - name: UPGRADE_BACKUP_CONFIRMED
-              value: {{ .Values.upgrade.backupConfirmed | toString | quote }}
-          envFrom:
-            - configMapRef:
-                name: misp-env
-            - secretRef:
-                name: misp-db
-            - secretRef:
-                name: misp-app
-          volumeMounts:
-            - name: tmp
-              mountPath: /tmp
-            - name: misp-config
-              mountPath: /var/www/MISP/app/Config
-            - name: misp-tmp
-              mountPath: /var/www/MISP/app/tmp
-          resources:
-            {{- toYaml .Values.upgrade.resources | nindent 12 }}
           {{- include "misp.containerSecurityContext" . | nindent 10 }}
       {{- end }}
       containers:

@@ -14,7 +14,6 @@ metadata:
     app.kubernetes.io/component: misp-housekeeping
 spec:
   schedule: {{ $schedule | quote }}
-  suspend: {{ $.Values.upgrade.enabled }}
   concurrencyPolicy: Forbid
   successfulJobsHistoryLimit: 1
   failedJobsHistoryLimit: 3

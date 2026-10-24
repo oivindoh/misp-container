@@ -1,8 +1,0 @@
-# A merge of master keeps this branch's MISP 3.0 lock, settings catalogue, Python pins and
-# generated AGENTS.md whole; git needs merge.ours.driver=true, which
-# scripts/merge_into_misp3.py sets, and the sync workflow regenerates AGENTS.md and the
-# Python pins afterwards
-files/composer.lock merge=ours
-files/misp-config/settings-upstream.yaml merge=ours
-files/requirements-misp.txt merge=ours
-AGENTS.md merge=ours

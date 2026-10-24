@@ -42,15 +42,10 @@ run = "python scripts/generate_agents_md.py"
 description = "Regenerate the generated regions of the docs and AGENTS.md from the code"
 run = ["python scripts/generate_docs.py", "python scripts/generate_agents_md.py"]
 
-[tasks.test-upgrade]
-description = "Run the upgrade suite: MISP 2.5.50 converted to this tree's MISP 3.0 (requires podman)"
-run = "python -m pytest tests/e2e/test_upgrade.py -v ${@}"
-
 [tasks.test-all]
-description = "Run unit + integration + sync + migration + upgrade tests"
-# One after the other: the integration, migration and upgrade suites share a compose project
-run = ["mise run test", "mise run test-integration", "mise run test-sync", "mise run test-migration",
-       "mise run test-upgrade"]
+description = "Run unit + integration + sync + migration tests"
+# One after the other: the integration and migration suites share a compose project
+run = ["mise run test", "mise run test-integration", "mise run test-sync", "mise run test-migration"]
 
 [tasks.smoketest]
 description = "Run smoke test against a live MISP instance"
@@ -74,5 +69,5 @@ description = "Resolve the Python packages of MISP's own scripts for the current
 run = "python scripts/update_misp_requirements.py"
 
 [tasks.release]
-description = "Prepare a release of one kind (hotfix, normal or breaking): tag, image tags, chart version"
+description = "Prepare a release: the next 3.0.0-wip.N while MISP is a work-in-progress pin, else of one kind (hotfix, normal or breaking)"
 run = "python scripts/release.py ${@}"

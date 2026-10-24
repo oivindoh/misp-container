@@ -2,12 +2,12 @@ apiVersion: v2
 name: misp
 description: MISP threat intelligence platform - web, workers, configure Job, periodic tasks and optional database, cache, routes and network policies
 type: application
-# The chart's own SemVer: mise run release hotfix raises the patch, normal the
-# minor, breaking the major (scripts/release.py).
-version: 2.0.0
-# The image tag of the release: the MISP version, with -rN for a hotfix. The
-# images default to it.
-appVersion: "2.5.50"
+# Set by mise run release (scripts/release.py): while MISP is a work-in-progress
+# pin, the chart, the images and the git tag share the pre-release version
+# 3.0.0-wip.N.
+version: 3.0.0-wip.1
+# The image tag of the release. The images default to it.
+appVersion: "3.0.0-wip.1"
 home: https://github.com/oivindoh/misp-container
 sources:
   - https://github.com/oivindoh/misp-container

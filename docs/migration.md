@@ -189,11 +189,8 @@ Sessions, the Redis cache, the CakePHP cache and log files are not copied.
 ## Cut-over
 
 The old instance stays read-only while the migration runs, so time a trial run against a
-copy of the source first. The migration logs each table and each index it builds. Most of
-the time for a large instance goes to one index: MISP's hash index on `attributes.value2`,
-which is empty for most attributes. A hash index keeps equal values in one bucket, so its
-build time grows faster than the table ([MISP#11173](https://github.com/MISP/MISP/issues/11173)).
-In one test with two million attributes, the copy took 14 minutes, 11 of them for that index.
+copy of the source first. The migration logs the conversion to MISP 3.0, each table and each
+index it builds. On a large instance the conversion takes hours.
 
 1. Set `MISP.live=false` on the old instance so no event changes during the copy.
 2. Run the migration and the first sync. Check the copy: log in, open an event with an

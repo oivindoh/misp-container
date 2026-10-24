@@ -21,13 +21,9 @@ SOURCE = re.compile(r"^# Source: [\w-]+/(templates/[\w./-]+)$", re.M)
 TOP_KEY = re.compile(r"^([A-Za-z]\w*):")
 
 
-# The values a component refuses to render without
-COMPONENT_VALUES = {"upgrade": ["upgrade.backupConfirmed=true"]}
-
-
 def component_sets(component: str) -> list[str]:
     """The --set values that switch a component on."""
-    return [f"{component}.enabled=true", *COMPONENT_VALUES.get(component, [])]
+    return [f"{component}.enabled=true"]
 
 
 def components() -> list[str]:

@@ -69,9 +69,9 @@ def test_the_app_version_is_the_image_tag_the_compose_files_default_to():
         assert tags <= {meta["appVersion"]}, f"{path.relative_to(REPO)} defaults to {sorted(tags)}, the chart's appVersion is {meta['appVersion']}"
 
 
-def test_the_chart_version_is_a_release_semver():
-    # A pre-release suffix would hide the version from helm upgrade and from semver ranges
-    assert re.fullmatch(r"\d+\.\d+\.\d+", yaml.safe_load((chart.CHART / "Chart.yaml").read_text())["version"])
+def test_the_chart_version_is_a_release_or_a_wip_pre_release():
+    # Helm skips a pre-release unless asked for it by version: only the wip pre-releases of a MISP pin are one
+    assert re.fullmatch(r"\d+\.\d+\.\d+(-wip\.\d+)?", yaml.safe_load((chart.CHART / "Chart.yaml").read_text())["version"])
 
 
 def test_every_image_of_ours_carries_the_app_version():
@@ -238,36 +238,3 @@ def test_every_volume_mount_names_a_volume_of_its_pod():
                 mounts = {m["name"] for m in container.get("volumeMounts", [])}
                 assert mounts <= volumes, (f"{doc['kind']} {doc['metadata']['name']} ({' '.join(sets) or 'defaults'}): "
                                            f"{container['name']} mounts {sorted(mounts - volumes)}, which the pod lacks")
-
-
-UPGRADE = ("upgrade.enabled=true", "upgrade.backupConfirmed=true")
-
-
-def test_the_upgrade_needs_a_confirmed_backup():
-    import pytest
-    with pytest.raises(RuntimeError, match="upgrade.backupConfirmed"):
-        chart.objects("upgrade.enabled=true")
-
-
-def test_the_upgrade_runs_after_the_migration_and_before_configure_and_is_not_retried():
-    job = chart.find("Job", "configure", "migrate.enabled=true", *UPGRADE)
-    spec = chart.pod_spec(job)
-    assert [c["name"] for c in spec["initContainers"]] == ["migrate", "upgrade"]
-    upgrade = spec["initContainers"][1]
-    assert upgrade["command"][-1] == "misp_container.upgrade"
-    assert {"name": "UPGRADE_BACKUP_CONFIRMED", "value": "true"} in upgrade["env"]
-    assert {m["mountPath"] for m in upgrade["volumeMounts"]} >= {"/var/www/MISP/app/Config", "/var/www/MISP/app/tmp"}
-    assert job["spec"]["backoffLimit"] == 0
-
-
-def test_nothing_else_touches_misp_while_the_upgrade_converts_it():
-    """No 2.5 pod may write to the tables runUpgrade alters, and nothing may call the API meanwhile."""
-    for name in ("web", "worker"):
-        assert chart.find("Deployment", name, *UPGRADE)["spec"]["replicas"] == 0
-        assert chart.find("Deployment", name)["spec"]["replicas"] >= 1
-    cronjobs = [d for d in chart.objects(*UPGRADE, every_component=True) if d["kind"] == "CronJob"]
-    assert cronjobs and all(d["spec"]["suspend"] is True for d in cronjobs)
-    assert all(d["spec"]["suspend"] is False for d in kinds(
-        "cronjobs.enabled=true", "housekeeping.enabled=true", "userValidity.enabled=true")["CronJob"])
-    assert not [d for d in chart.objects(*UPGRADE) if d["metadata"]["name"].startswith("org-sync-")]
-

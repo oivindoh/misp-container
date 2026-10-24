@@ -2,14 +2,13 @@
 
 ## TL;DR
 
-Unit tests on the Python library, an upstream guard that checks the MISP in the image against what this repository patches or depends on, and four stack suites in pytest (`tests/e2e/`): an integration suite on one Compose stack, a hub-spoke sync suite on two instances, a migration suite that copies a seeded MISP 2.5.50 on MariaDB into PostgreSQL, and an upgrade suite that converts a seeded MISP 2.5 to MISP 3.0. A smoke test checks any live MISP through its API. Two Kubernetes checks cover the Helm chart: every render validated against the schemas, and the chart installed and upgraded on a kind cluster with the smoke test.
+Unit tests on the Python library, an upstream guard that checks the MISP in the image against what this repository patches or depends on, and three stack suites in pytest (`tests/e2e/`): an integration suite on one Compose stack, a hub-spoke sync suite on two instances, and a migration suite that imports a seeded MISP 2.5.50 on MariaDB into PostgreSQL, converting it to MISP 3.0. A smoke test checks any live MISP through its API. Two Kubernetes checks cover the Helm chart: every render validated against the schemas, and the chart installed and upgraded on a kind cluster with the smoke test.
 
 ```bash
 mise run test                # unit tests, the chart lint and every chart render validated against the schemas
 mise run test-integration    # the upstream guard, then single-instance integration tests (~2min)
 mise run test-sync           # hub-spoke sync test with 2 instances (~2min)
 mise run test-migration      # the migration: MISP 2.5.50 on MariaDB into PostgreSQL (~3min)
-mise run test-upgrade        # MISP 2.5.50 converted to MISP 3.0
 mise run smoketest https://misp.example.com   # a live MISP; asks for an API key
 mise run test-all            # every suite
 mise run test-kind           # the chart on a kind cluster: install, helm test, task runs, upgrade, rollback (build the images first)
@@ -39,7 +38,6 @@ Tests of the Python entrypoint library (`files/misp_container/`), the scripts an
 | `test_init.py` | Unit tests for init container logic (file operations, no containers needed). |
 | `test_log.py` | Unit tests for the container log formats (LOG_FORMAT json or text). |
 | `test_logrelay.py` | Unit tests for the log relay (misp_container.logrelay). |
-| `test_merge_into_misp3.py` | The merge of master into misp-3.0 (scripts/merge_into_misp3.py), on real git repositories. |
 | `test_metrics.py` | Unit tests for the Prometheus metrics exporter. |
 | `test_migrate.py` | Unit tests for the migration Job (misp_container.migrate). |
 | `test_release.py` | Unit tests for the release tool (scripts/release.py): the next tag and chart version. |
@@ -47,7 +45,6 @@ Tests of the Python entrypoint library (`files/misp_container/`), the scripts an
 | `test_sync.py` | Unit tests for the org sync engine. |
 | `test_task.py` | Unit tests for the periodic task runner. |
 | `test_update_settings.py` | Unit tests for the settings catalogue updater (scripts/update_settings.py). |
-| `test_upgrade.py` | Unit tests for the MISP 3.0 upgrade step (misp_container.upgrade) and the configure step's layout check. |
 <!-- end generated -->
 
 Run with: `mise run test` or `PYTHONPATH=files python -m pytest tests/ -v --ignore=tests/e2e`
@@ -185,7 +182,8 @@ MariaDB (`MISP_TEST_ENV=tests/migrate-source.env`), seeds it (an org with a user
 with a known authkey, a sync server, an event with an attachment) and records the row counts.
 The mounted source files hold an attachment in each place MISP keeps one on disk: flat, under
 `bucket_<n>/` and under `shadow/`. The suite then runs the migrate Job of this tree's image
-into PostgreSQL with `MIGRATE_SOURCE_UPGRADE=true` and checks the refusals (a non-empty
+into PostgreSQL with `MIGRATE_SOURCE_UPGRADE=true`, which converts the source to MISP 3.0
+first, and checks the refusals (a non-empty
 target, an identity mismatch, `MIGRATE_FORCE` alone on the Job's own copy, then with
 `MIGRATE_REPLACE_COPY`). It runs this tree's images on the copy and checks it: row counts,
 both authkeys, the org, the server, the event, the attachment download, the fixture
@@ -204,26 +202,6 @@ copies that bucket into a second one and compares every key and byte.
 - `migrate-orgs.yaml` -- seed content for the org sync
 
 Run with: `mise run test-migration` (`-- --skip-build`, `-- --keep`)
-
-## Upgrade suite
-
-`e2e/test_upgrade.py` starts the integration stack on the published 2.5.50 images, on
-PostgreSQL (`MISP_TEST_ENV=tests/upgrade-source.env`), and seeds it:
-two events that share an IP address, values of five types with a non-ASCII one, an
-attachment and a sighting. It stops web and worker and checks two refusals: the 3.0
-configure step on the 2.5 database, and the upgrade step without a confirmed backup. Then it
-converts the database with the upgrade step of this tree's images, runs the step again to
-see it convert nothing, and starts the stack on the 3.0 images. The checks: MISP reports
-3.x, the text column is gone, every attribute keeps its type and value, the attachment
-downloads whole, the sightings stay, and the workers rebuild the correlation between the two
-events.
-
-**Files:**
-- `e2e/test_upgrade.py` -- the suite; module fixtures carry each step's state to the next
-- `docker-compose.test.yml` -- the upgrade service with the test env
-- `upgrade-source.env` -- points the 2.5.50 containers at PostgreSQL, which they do not take by default
-
-Run with: `mise run test-upgrade` (`-- --skip-build`, `-- --keep`)
 
 ## Smoke test
 
@@ -264,20 +242,18 @@ The suites behave the same under podman-compose, locally, and docker compose, in
 
 ## CI
 
-GitHub Actions on every push to master and `misp-3.0`, every tag and every pull request. Both
-branches carry the same `ci.yaml`:
+GitHub Actions on every push to master, every tag and every pull request:
 
 | Job | Runs |
 |-----|------|
-| `gate` | Decides what the run does: nothing on a master push whose commit carries a release tag, since the tag run tests and releases that commit; the unit tests only on a draft; no unit tests and no suites on a push to `misp-3.0` that merges a pull request, which ran them on the same tree |
-| `master-merged` | On `misp-3.0` and its pull requests: fails while master has commits the branch lacks |
+| `gate` | Decides what the run does: nothing on a master push whose commit carries a release tag, since the tag run tests and releases that commit; the unit tests only on a draft; no unit tests and no suites on a push to master that merges a pull request, which ran them on the same tree |
 | `build` | The three images into the layer cache. The misp image's final stage is built fresh each run, so it carries the current Debian packages |
 | `unit` | The unit tests, the chart lint and every chart render validated against the schemas |
-| `suite` | The stack suites, one job each, in parallel, against the images from `build` (`MISP_IMAGE_TAG=ci`): `integration` (the upstream guard, then the integration suite), `hub-spoke`, `migration`, and `upgrade` where the upgrade suite exists. Each uploads its JUnit report and, after a failure, the compose logs |
+| `suite` | The stack suites, one job each, in parallel, against the images from `build` (`MISP_IMAGE_TAG=ci`): `integration` (the upstream guard, then the integration suite), `hub-spoke` and `migration`. Each uploads its JUnit report and, after a failure, the compose logs |
 | `kind` | The chart on a kind cluster: install, smoke test, `helm test`, task runs, upgrade, rollback |
 | `scan` | Trivy on the three images, one scan each: CRITICAL and HIGH findings with a fix go to the Security tab, and a CRITICAL one fails the job, which blocks `publish` |
 | `ci-ok` | The one required check: fails when a job failed or was cancelled, and on a draft |
-| `publish` | After every other job: on a tag, the images, the chart and the GitHub Release; on a push to `misp-3.0`, the Early Access images and chart |
+| `publish` | After every other job, on a tag: the images, the chart and the GitHub Release |
 
 ## Environment
 
