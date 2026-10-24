@@ -76,14 +76,21 @@ services:
       - compose-secrets.env
       - ../tests/test-compose-secrets.env
 
-  # OIDC provider for the login test (tests/dex.yaml)
-  dex:
-    image: ghcr.io/dexidp/dex:v2.45.1
-    command: ["dex", "serve", "/etc/dex/config.yaml"]
+  # OIDC provider for the login test: Keycloak with the realm of tests/keycloak-realm.json.
+  # MISP (token exchange) and the test client reach it under the same name, so the
+  # issuer matches and the login flow runs inside the compose network
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.8.0@sha256:27b3230fbabb8c9ff3c66c864cf09dcd8a41aca82e5100679d109ef0eeb05741
+    command: ["start-dev", "--import-realm"]
+    environment:
+      KC_HEALTH_ENABLED: "true"
     volumes:
-      - ../tests/dex.yaml:/etc/dex/config.yaml:ro
-    ports:
-      - "15556:5556"
+      - ../tests/keycloak-realm.json:/opt/keycloak/data/import/misp-realm.json:ro
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/9000 && printf 'GET /health/ready HTTP/1.0\\r\\n\\r\\n' >&3 && grep -q UP <&3"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
 
   # S3-compatible storage for attachment testing
   garage:

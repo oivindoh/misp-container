@@ -41,22 +41,20 @@ teams:
     sector: academic
     default_role: User
 
+    # People log in through the identity provider and stay out of this list
+    # (docs/org-sync.md, Keycloak)
     users:
-      - email: analyst@example.com
-        role: User
-
-    feide_users:
-      - email: feide-user@university.no
-        role: User
-        # allow_external: true  # let an external config source move this user
-
-    sync_users:
       - email: sync-inbound@partner.no
         role: Sync user
         authkey: ${PARTNER_SYNC_KEY}
-
-    # service_users:
-    #   - email: bot@example.com
+      - email: break-glass@example.com
+        role: Org Admin
+        password: ${BREAK_GLASS_PASSWORD}
+      # - email: bot@example.com
+      #   role: User
+      #   authkey: ${BOT_KEY}
+      # - email: header-user@example.com
+      #   external_auth: true
 
     servers:
       - name: Partner MISP

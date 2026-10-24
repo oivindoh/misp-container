@@ -194,8 +194,8 @@ def spoke(hub_server=True):
     users:
       - email: admin@admin.test
         role: admin
-    sync_users:
       - email: sync-b@a.test
+        role: Sync user
         authkey: "{SYNC_KEY[('a', 'b')]}"
 '''
     if hub_server:
@@ -238,10 +238,11 @@ teams:
     users:
       - email: admin@admin.test
         role: admin
-    sync_users:
       - email: sync-a@b.test
+        role: Sync user
         authkey: "{SYNC_KEY[('b', 'a')]}"
       - email: sync-c@b.test
+        role: Sync user
         authkey: "{SYNC_KEY[('b', 'c')]}"
     servers:
 {server}'''

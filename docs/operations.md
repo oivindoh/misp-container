@@ -10,6 +10,7 @@
 - The salt and the encryption key do not rotate. The GPG key rotates through its Secret.
 - A new PostgreSQL major version cannot read the data of the one before: move it with a dump
   and a restore.
+- While Keycloak is down, turn OIDC off and log in with a break-glass account.
 
 ## What to back up
 
@@ -71,6 +72,21 @@ A MISP on MySQL or MariaDB is copied by the `migrate` component instead
 | `MISP_REDIS_PASSWORD`, `SIMPLEBACKGROUNDJOBS_SUPERVISOR_PASSWORD`, `DB_PASSWORD` | Change the value in the Secret and on the service it names, then upgrade: the checksum rolls every pod that reads it |
 | The GPG key (`misp-gnupg`) | Replace `private.asc` in the Secret and upgrade: each pod imports the key of the Secret at start. Compose: replace `private.asc` in the `misp-gnupg-key` volume and recreate the containers. Sync partners need the new public key |
 | The sync server certificates (`misp-certs`) | Replace the file in the Secret and upgrade |
+
+## Break-glass accounts
+
+A break-glass account is a `users` entry in `orgs.yaml` with a `password`
+([org-sync.md](org-sync.md#users)). It keeps MISP open to an administrator while Keycloak is
+down. With `OIDC_MIXEDAUTH=false` the password form is closed, so open it this way:
+
+1. Set `OIDC_ENABLE=false` in `env` and upgrade the release. Compose: set it in `compose.env`
+   and recreate the `web` containers. The web pods start without OidcAuth and show the
+   password form.
+2. Log in with the break-glass account.
+3. Once Keycloak answers again, set `OIDC_ENABLE=true` and upgrade the release.
+
+API keys work throughout. `OIDC_MIXEDAUTH=true` keeps the password form open beside Keycloak
+at all times instead, which leaves every local password open to guessing.
 
 ## Upgrades
 

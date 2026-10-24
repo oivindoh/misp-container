@@ -90,6 +90,8 @@ short names below are aliases of the derived ones (`OidcAuth.provider_url` is
 | `OIDC_ROLES_PROPERTY` | `OidcAuth.roles_property` | `roles`: the claim with the user's roles |
 | `OIDC_ROLES_MAPPING` | `OidcAuth.role_mapper` | `{}`: JSON, IdP role to MISP role id or name, first match wins. A user with no matching role is refused |
 | `OIDC_DEFAULT_ORG` | `OidcAuth.default_org` | organisation id, UUID or name when the IdP sends none |
+| `OIDCAUTH_ORGANISATION_PROPERTY` | `OidcAuth.organisation_property` | `organization`: the claim with the user's organisation. A UUID only finds an organisation; a name also creates a missing one ([org-sync.md](org-sync.md#keycloak)) |
+| `OIDCAUTH_ORGANISATION_UUID_PROPERTY` | `OidcAuth.organisation_uuid_property` | `organization_uuid`: with a name in the claim above, the UUID to find the organisation by; OidcAuth renames it to that name |
 | `OIDC_SCOPES` | `OidcAuth.scopes` | `profile,email` |
 | `OIDC_MIXEDAUTH` | `OidcAuth.mixedAuth` | `false`: every login goes to the IdP. `true` keeps the password form and adds a button |
 | `OIDC_LOGOUT_URL` | `Plugin.CustomAuth_custom_logout` | the IdP's logout URL |
@@ -99,8 +101,36 @@ short names below are aliases of the derived ones (`OidcAuth.provider_url` is
 
 The redirect URI is `MISP_BASEURL/users/login`; register it at the IdP. Every other
 `OidcAuth.*` key in `settings.yaml` (offline access, user validity checks, email linking)
-takes its derived env var. The integration suite logs in through a dex instance with a role
-mapped by name and the default organisation.
+takes its derived env var.
+
+### Keycloak
+
+In Keycloak:
+
+1. Create a confidential OpenID Connect client for MISP, such as `misp`, with the standard
+   flow on and the redirect URI `MISP_BASEURL/users/login`.
+2. Create a client role on it for each MISP role, such as `read-only`, `user`, `publisher`,
+   `org-admin` and `admin`, and grant them to users or groups.
+3. Add a mapper of type User Client Role for the client: claim name `roles`, multivalued, in
+   the ID token.
+4. Give each team a group with an attribute `organization` that holds the team's UUID from
+   `orgs.yaml` ([org-sync.md](org-sync.md#keycloak)), and put its users in the group. Add a
+   mapper of type User Attribute for `organization`: claim name `organization`, single
+   valued, in the ID token.
+
+In MISP:
+
+| Variable | Value |
+|----------|-------|
+| `OIDC_ENABLE` | `true` |
+| `OIDC_PROVIDER_URL` | `https://<keycloak>/realms/<realm>` |
+| `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET` | The client's ID and secret; the secret belongs in `misp-app` |
+| `OIDC_ROLES_MAPPING` | The client roles, highest first: `{"admin": "admin", "org-admin": "Org Admin", "publisher": "Publisher", "user": "User", "read-only": "Read Only"}`. OidcAuth takes the first match, so a user gets the highest role held |
+| `OIDC_DEFAULT_ORG` | Optional: the organisation of a user whose groups send no `organization`. Empty refuses that login |
+| `OIDCAUTH_OFFLINE_ACCESS` | Optional: `true` for the `userValidity` check. Users then need the realm role `offline_access`, which Keycloak's default roles hold |
+
+The integration suite logs in through a Keycloak with this setup (`tests/keycloak-realm.json`),
+then checks that an org sync run leaves the account enabled.
 
 ### Header authentication
 

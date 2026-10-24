@@ -1,20 +1,19 @@
 """Declarative org/team sync engine.
 
-Loads YAML config (local file + optional remote source), diffs against
-current MISP state via REST API, and applies changes. Designed to be
-fast on warm runs: with nothing changed, it only reads.
+Loads the YAML config file, diffs it against the current MISP state through
+the REST API, and applies the changes. Designed to be fast on warm runs:
+with nothing changed, it only reads.
 """
 
 import json
 import os
+import re
 import secrets
-import ssl
-import urllib.request
-import urllib.error
 
 import yaml
 
-from misp_container.admin import has_authkey
+from misp_container import db
+from misp_container.admin import has_authkey, has_password
 from misp_container.api import MISPClient, APIError
 from misp_container.env import env
 from misp_container.log import get as getlog
@@ -38,20 +37,25 @@ ROLE_FIELDS = ("name", "permission", "perm_site_admin", "perm_admin", "perm_sync
 
 TAG_DEFAULTS = {"colour": "#004daa", "exportable": True, "hide_tag": False}
 
-# The user lists of a team: the role a list gives its users (None: the team's
-# default_role) and whether they log in through an external provider
-USER_KINDS = {
-    "users": (None, False),
-    "feide_users": (None, True),
-    "sync_users": ("Sync user", False),
-    "service_users": (None, False),
+# Team keys of earlier formats, and what replaces each in the one users list
+RETIRED_USER_LISTS = {
+    "feide_users": "external_auth: true",
+    "sync_users": "role: Sync user",
+    "service_users": "a role",
 }
-USER_LIST_KEYS = tuple(USER_KINDS)
 
 # The lists apply() reconciles; a config without any of them is empty
 RESOURCE_KEYS = ("teams", "roles", "tags", "taxonomies", "warninglists", "sharing_groups")
 
-import re
+# The model MISP nests each kind of record under, and its add and edit paths
+MODELS = {
+    "role": ("Role", "/admin/roles/add", "/admin/roles/edit/{id}"),
+    "org": ("Organisation", "/admin/organisations/add", "/admin/organisations/edit/{id}"),
+    "tag": ("Tag", "/tags/add", "/tags/edit/{id}"),
+    "user": ("User", "/admin/users/add", "/admin/users/edit/{id}"),
+    "server": ("Server", "/servers/add", "/servers/edit/{id}"),
+    "sharing group": ("SharingGroup", "/sharing_groups/add", "/sharing_groups/edit/{id}"),
+}
 
 
 class ConfigError(Exception):
@@ -99,24 +103,12 @@ SERVER_DEFAULTS = {
 
 
 # ---------------------------------------------------------------------------
-# Config loading and merging
+# Config loading
 # ---------------------------------------------------------------------------
 
-def load_config(
-    file_path: str | None = None,
-    url: str | None = None,
-    token: str | None = None,
-) -> dict:
-    """Load and merge local + remote config. Local takes precedence."""
-    file_path = file_path or env("ORG_CONFIG_FILE")
-    url = url or env("ORG_CONFIG_URL")
-    token = token or env("ORG_CONFIG_TOKEN")
-
-    local = _load_local(file_path)
-    remote = _fetch_remote(url, token) if url else {}
-
-    merged = _merge_configs(local, remote) if remote else local
-    return _normalize(_expand_env_recursive(merged))
+def load_config(file_path: str | None = None) -> dict:
+    """Load the config file, expand ${VAR} and normalise it."""
+    return _normalize(_expand_env_recursive(_load_local(file_path or env("ORG_CONFIG_FILE"))))
 
 
 def _load_local(path: str) -> dict:
@@ -124,122 +116,6 @@ def _load_local(path: str) -> dict:
         return {}
     with open(path) as f:
         return yaml.safe_load(f) or {}
-
-
-def _fetch_remote(url: str, token: str) -> dict:
-    """Fetch config from an HTTPS endpoint with bearer token.
-
-    A remote source that is set is part of the truth: a run without it would
-    disable every user it places, so a failed fetch fails the run.
-    """
-    headers = {"Accept": "application/json, application/yaml"}
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
-    req = urllib.request.Request(url, headers=headers)
-    ctx = ssl.create_default_context()
-    try:
-        with urllib.request.urlopen(req, context=ctx, timeout=30) as resp:
-            body = resp.read().decode()
-            if "json" in resp.headers.get("Content-Type", ""):
-                return json.loads(body)
-            return yaml.safe_load(body) or {}
-    except Exception as e:
-        raise ConfigError(f"cannot fetch the remote config from {url}: {e}") from e
-
-
-def _merge_configs(local: dict, remote: dict) -> dict:
-    """Merge local and remote. Local wins for top-level lists; teams merge by UUID.
-
-    Users with allow_external: true in the local config can be moved to a
-    different team by the external source. All other users are pinned to
-    whatever team the local config specifies.
-    """
-    merged = {}
-
-    # Top-level lists: local replaces remote entirely
-    for key in ("taxonomies", "warninglists", "tags", "sharing_groups", "roles"):
-        if key in local:
-            merged[key] = local[key]
-        elif key in remote:
-            merged[key] = remote[key]
-
-    # Index local users by email to find allow_external flags
-    local_teams = {t["uuid"]: t for t in local.get("teams", []) if "uuid" in t}
-    remote_teams = {t["uuid"]: t for t in remote.get("teams", []) if "uuid" in t}
-
-    # Build index: email -> (team_uuid, user_dict, allow_external)
-    local_user_index = {}
-    for team_uuid, team in local_teams.items():
-        for key in USER_LIST_KEYS:
-            for user in team.get(key, []):
-                email = user.get("email", "").lower()
-                if email:
-                    local_user_index[email] = (
-                        team_uuid, key, user,
-                        user.get("allow_external", False),
-                    )
-
-    # Build index of remote user placements: email -> (team_uuid, user_list_key, user_dict)
-    remote_user_index = {}
-    for team_uuid, team in remote_teams.items():
-        for key in USER_LIST_KEYS:
-            for user in team.get(key, []):
-                email = user.get("email", "").lower()
-                if email:
-                    remote_user_index[email] = (team_uuid, key, user)
-
-    # Determine final user placements.
-    # For allow_external users, external source can override the team.
-    # Result: team_uuid -> user_list_key -> [user_dicts]
-    from collections import defaultdict
-    user_placements = defaultdict(lambda: defaultdict(list))
-
-    # Start with local placements
-    placed_emails = set()
-    for email, (team_uuid, list_key, user, allow_ext) in local_user_index.items():
-        if allow_ext and email in remote_user_index:
-            # External source can override team placement
-            ext_team, ext_key, ext_user = remote_user_index[email]
-            # Merge: local user fields on top of external, but use external team
-            merged_user = {**ext_user, **user}
-            user_placements[ext_team][ext_key].append(merged_user)
-        else:
-            user_placements[team_uuid][list_key].append(user)
-        placed_emails.add(email)
-
-    # Add remote-only users (not in local at all)
-    for email, (team_uuid, list_key, user) in remote_user_index.items():
-        if email not in placed_emails:
-            user_placements[team_uuid][list_key].append(user)
-
-    # Merge teams
-    all_uuids = list(dict.fromkeys(
-        list(local_teams.keys()) + list(remote_teams.keys())
-    ))
-
-    merged_teams = []
-    for uuid in all_uuids:
-        lt = local_teams.get(uuid, {})
-        rt = remote_teams.get(uuid, {})
-
-        # Team metadata: local wins
-        team = {**rt, **lt}
-
-        # User lists: use computed placements (not raw local/remote lists)
-        for key in USER_LIST_KEYS:
-            team[key] = user_placements.get(uuid, {}).get(key, [])
-
-        # Non-user lists (servers, tags): local wins if present
-        for key in ("servers", "tags"):
-            if key in lt:
-                team[key] = lt[key]
-            elif key in rt:
-                team[key] = rt[key]
-
-        merged_teams.append(team)
-
-    merged["teams"] = merged_teams
-    return merged
 
 
 def _normalize(raw: dict) -> dict:
@@ -255,6 +131,10 @@ def _normalize(raw: dict) -> dict:
 
     for team in raw.get("teams", []):
         default_role = team.get("default_role", "User")
+        for key, replacement in RETIRED_USER_LISTS.items():
+            if key in team:
+                raise ConfigError(f"team '{team.get('name', '?')}': {key} is gone; "
+                                  f"list these users under users, with {replacement}")
 
         t = {
             "uuid": _validate_uuid(team["uuid"], f"team '{team.get('name', '?')}'"),
@@ -266,16 +146,16 @@ def _normalize(raw: dict) -> dict:
             "contacts": team.get("contacts", ""),
             "default_role": default_role,
             "users": team.get("users", []),
-            "feide_users": team.get("feide_users", []),
-            "sync_users": team.get("sync_users", []),
-            "service_users": team.get("service_users", []),
             "servers": [{**SERVER_DEFAULTS, **s} for s in team.get("servers", [])],
             "tags": [_normalize_tag(tg) for tg in team.get("tags", [])],
         }
-        for key, (role, _) in USER_KINDS.items():
-            for u in t[key]:
-                u.setdefault("role", role or default_role)
-                u.setdefault("disabled", False)
+        for u in t["users"]:
+            if "allow_external" in u:
+                raise ConfigError(f"user {u.get('email', '?')}: allow_external is gone with the remote "
+                                  "config source; delete it")
+            u.setdefault("role", default_role)
+            u.setdefault("disabled", False)
+            u.setdefault("external_auth", False)
         config["teams"].append(t)
 
     return config
@@ -307,7 +187,7 @@ class MISPState:
 
     def __init__(self, client: MISPClient):
         self.orgs = client.get_organisations()
-        self.users = client.get_users()
+        self.refresh_users(client)
         self.roles = client.get_roles()
         self.servers = client.get_servers()
         self.tags = client.get_tags()
@@ -334,7 +214,14 @@ class MISPState:
         self.orgs = client.get_organisations()
 
     def refresh_users(self, client: MISPClient):
+        """The users, with the login fields that only the database holds."""
         self.users = client.get_users()
+        for row in db.dict_query("SELECT email, sub, external_auth_required, external_auth_key FROM users"):
+            user = self.users.get(str(row["email"]).lower())
+            if user is not None:
+                user["sub"] = row["sub"] or ""
+                user["external_auth_required"] = row["external_auth_required"]
+                user["external_auth_key"] = row["external_auth_key"] or ""
 
     def refresh_roles(self, client: MISPClient):
         self.roles = client.get_roles()
@@ -343,6 +230,28 @@ class MISPState:
 # ---------------------------------------------------------------------------
 # Apply functions
 # ---------------------------------------------------------------------------
+
+def _reconcile(client: MISPClient, kind: str, label: str, existing: dict | None, desired: dict,
+               fields, unread: dict | None = None) -> tuple[str, dict | None]:
+    """Create a missing record, or post the fields of desired that differ from existing.
+
+    unread holds values MISP never returns, such as a server's authkey: they go
+    with every edit, so a changed one reaches MISP. Returns the outcome
+    ('created', 'updated' or 'unchanged') and MISP's answer to the post.
+    """
+    model, add, edit = MODELS[kind]
+    if existing is None:
+        log.info("creating %s '%s'", kind, label)
+        return "created", client.post(add, {model: desired})
+    changes = {f: desired[f] for f in fields
+               if f in desired and not _values_equal(desired[f], existing.get(f, ""))}
+    if changes:
+        log.info("updating %s '%s': %s", kind, label, list(changes))
+    elif not unread:
+        return "unchanged", None
+    result = client.post(edit.format(id=existing["id"]), {model: {**changes, **(unread or {})}})
+    return ("updated" if changes else "unchanged"), result
+
 
 def _apply_roles(client: MISPClient, state: MISPState, roles: list) -> dict:
     """Create or update MISP roles. Returns {created: N, updated: N}."""
@@ -353,24 +262,11 @@ def _apply_roles(client: MISPClient, state: MISPState, roles: list) -> dict:
             log.warning("skipping role with no name")
             continue
 
-        existing = state.roles.get(name)
         role_data = {k: role_def[k] for k in role_def if k in ROLE_FIELDS}
-
-        if not existing:
-            log.info("creating role '%s'", name)
-            client.post("/admin/roles/add", {"Role": role_data})
-            counts["created"] += 1
-        else:
-            changes = {}
-            for field, value in role_data.items():
-                if field == "name":
-                    continue
-                if not _values_equal(value, existing.get(field)):
-                    changes[field] = value
-            if changes:
-                log.info("updating role '%s': %s", name, list(changes.keys()))
-                client.post(f"/admin/roles/edit/{existing['id']}", {"Role": changes})
-                counts["updated"] += 1
+        outcome, _ = _reconcile(client, "role", name, state.roles.get(name), role_data,
+                                [f for f in role_data if f != "name"])
+        if outcome in counts:
+            counts[outcome] += 1
 
     if counts["created"]:
         state.refresh_roles(client)
@@ -382,24 +278,11 @@ def _apply_orgs(client: MISPClient, state: MISPState, teams: list) -> dict:
     counts = {"created": 0, "updated": 0}
     for team in teams:
         uuid = team["uuid"]
-        existing = state.orgs.get(uuid)
-
-        org_data = {k: team[k] for k in ORG_FIELDS}
-        org_data["uuid"] = uuid
-        org_data["local"] = True
-
-        if not existing:
-            log.info("creating org '%s' (%s)", team["name"], uuid)
-            client.post("/admin/organisations/add", {"Organisation": org_data})
-            counts["created"] += 1
-        else:
-            changes = {k: org_data[k] for k in ORG_FIELDS
-                       if str(existing.get(k, "")) != str(org_data[k])}
-            if changes:
-                log.info("updating org '%s': %s", team["name"], list(changes.keys()))
-                client.post(f"/admin/organisations/edit/{existing['id']}",
-                            {"Organisation": changes})
-                counts["updated"] += 1
+        org_data = {**{k: team[k] for k in ORG_FIELDS}, "uuid": uuid, "local": True}
+        outcome, _ = _reconcile(client, "org", f"{team['name']} ({uuid})", state.orgs.get(uuid), org_data,
+                                ORG_FIELDS)
+        if outcome in counts:
+            counts[outcome] += 1
 
     if counts["created"]:
         state.refresh_orgs(client)
@@ -434,7 +317,6 @@ def _apply_tags(client: MISPClient, state: MISPState,
 def _apply_one_tag(client: MISPClient, state: MISPState,
                    tag: dict, org_id: int) -> str:
     """Apply a single tag. Returns 'created', 'updated', or 'unchanged'."""
-    existing = state.tags.get(tag["name"])
     tag_data = {
         "name": tag["name"],
         "colour": tag.get("colour", TAG_DEFAULTS["colour"]),
@@ -442,29 +324,12 @@ def _apply_one_tag(client: MISPClient, state: MISPState,
         "hide_tag": tag.get("hide_tag", TAG_DEFAULTS["hide_tag"]),
         "org_id": org_id,
     }
-
-    if not existing:
-        log.info("creating tag '%s' (org_id=%d)", tag["name"], org_id)
-        client.post("/tags/add", {"Tag": tag_data})
-        return "created"
-
-    changes = {}
-    for field in TAG_FIELDS:
-        desired = tag_data[field]
-        current = existing.get(field)
-        if not _values_equal(desired, current):
-            changes[field] = desired
-    if changes:
-        log.info("updating tag '%s': %s", tag["name"], list(changes.keys()))
-        client.post(f"/tags/edit/{existing['id']}", {"Tag": changes})
-        return "updated"
-
-    return "unchanged"
+    return _reconcile(client, "tag", tag["name"], state.tags.get(tag["name"]), tag_data, TAG_FIELDS)[0]
 
 
 def _apply_users(client: MISPClient, state: MISPState,
                  teams: list) -> dict:
-    """Create or update all user types. Returns counts and set of managed emails."""
+    """Create or update the users of every team. Returns counts and set of managed emails."""
     counts = {"created": 0, "updated": 0}
     managed_emails = set()
 
@@ -474,18 +339,16 @@ def _apply_users(client: MISPClient, state: MISPState,
             log.warning("skipping users for unknown org %s", team["uuid"])
             continue
 
-        for key, (_, external_auth) in USER_KINDS.items():
-            for user in team.get(key, []):
-                managed_emails.add(user["email"].lower())
-                c = _apply_one_user(client, state, user, org_id, external_auth=external_auth)
-                if c in counts:
-                    counts[c] += 1
+        for user in team.get("users", []):
+            managed_emails.add(user["email"].lower())
+            c = _apply_one_user(client, state, user, org_id)
+            if c in counts:
+                counts[c] += 1
 
     return counts, managed_emails
 
 
-def _apply_one_user(client: MISPClient, state: MISPState,
-                    user: dict, org_id: int, external_auth: bool) -> str:
+def _apply_one_user(client: MISPClient, state: MISPState, user: dict, org_id: int) -> str:
     """Apply a single user. Returns 'created', 'updated', or 'unchanged'."""
     email = user["email"].lower()
     role_id = state.role_id(user.get("role", "User"))
@@ -494,7 +357,6 @@ def _apply_one_user(client: MISPClient, state: MISPState,
         return "unchanged"
 
     existing = state.users.get(email)
-
     user_data = {
         "email": user["email"],
         "org_id": org_id,
@@ -503,51 +365,37 @@ def _apply_one_user(client: MISPClient, state: MISPState,
         "termsaccepted": True,
         "change_pw": 0,
     }
-    if external_auth:
+    fields = ["org_id", "role_id", "disabled"]
+    if user.get("external_auth"):
         user_data["external_auth_required"] = True
         user_data["external_auth_key"] = user["email"]
+        fields += ["external_auth_required", "external_auth_key"]
 
-    if not existing:
-        # New user -- generate a strong random password (they'll use authkey or federated login)
-        user_data["password"] = secrets.token_hex(32)
-        log.info("creating user '%s' (org_id=%d, role=%s)", email, org_id, user.get("role"))
-        result = client.post("/admin/users/add", {"User": user_data})
-        # Set explicit authkey if provided in config (e.g. for sync users)
-        config_authkey = user.get("authkey", "")
-        if config_authkey:
-            # Extract user ID from the create response (MISP nests it variably)
+    # A user without a password in the file works through an API key or its identity provider
+    password = user.get("password", "")
+    unread = None
+    if existing is None:
+        user_data["password"] = password or secrets.token_hex(32)
+    elif password and not has_password(int(existing["id"]), password):
+        unread = {"password": password}
+    outcome, result = _reconcile(client, "user", email, existing, user_data, fields, unread)
+
+    authkey = user.get("authkey", "")
+    if authkey:
+        if existing is None:
+            # MISP nests the created user variably
             user_obj = result.get("User", result) if isinstance(result, dict) else {}
             user_id = user_obj.get("id") if isinstance(user_obj, dict) else None
-            if user_id:
-                _set_user_authkey(int(user_id), config_authkey)
-            else:
-                log.warning("could not extract user id from create response for %s, "
-                            "authkey not set", email)
-        return "created"
-
-    # Check for changes
-    changes = {}
-    for field in ("org_id", "role_id", "disabled"):
-        desired = user_data[field]
-        current = existing.get(field)
-        if not _values_equal(desired, current):
-            changes[field] = desired
-    if external_auth:
-        if not _values_equal(True, existing.get("external_auth_required")):
-            changes["external_auth_required"] = True
-        if existing.get("external_auth_key") != user["email"]:
-            changes["external_auth_key"] = user["email"]
-
-    if changes:
-        log.info("updating user '%s': %s", email, list(changes.keys()))
-        client.post(f"/admin/users/edit/{existing['id']}", {"User": changes})
-
-    # Set explicit authkey if configured (always re-apply -- we can't diff hashed keys)
-    config_authkey = user.get("authkey", "")
-    if config_authkey:
-        _set_user_authkey(int(existing["id"]), config_authkey)
-
-    return "updated" if changes else "unchanged"
+        else:
+            user_id = existing["id"]
+        if user_id:
+            _set_user_authkey(int(user_id), authkey)
+        else:
+            log.warning("could not extract user id from create response for %s, authkey not set", email)
+    if unread and outcome == "unchanged":
+        log.info("setting the password of user '%s'", email)
+        return "updated"
+    return outcome
 
 
 def _set_user_authkey(user_id: int, authkey: str):
@@ -562,7 +410,6 @@ def _set_user_authkey(user_id: int, authkey: str):
     try:
         import bcrypt
         import uuid as uuid_mod
-        from . import db
 
         if has_authkey(user_id, authkey):
             return
@@ -641,29 +488,11 @@ def _apply_servers(client: MISPClient, state: MISPState,
                 "push_rules": json.dumps(push_rules),
             }
 
-            if not existing_server:
-                log.info("creating server '%s' (%s)", server["name"], url)
-                client.post("/servers/add", {"Server": server_data})
-                counts["created"] += 1
-            else:
-                changes = {}
-                for field in SERVER_FIELDS:
-                    desired = str(server_data.get(field, ""))
-                    current = str(existing_server.get(field, ""))
-                    if desired != current:
-                        changes[field] = server_data[field]
-                if changes:
-                    log.info("updating server '%s': %s", server["name"], list(changes.keys()))
-                    # Include config authkey in the payload if set (can't diff it)
-                    if config_authkey:
-                        changes["authkey"] = config_authkey
-                    client.post(f"/servers/edit/{existing_server['id']}", {"Server": changes})
-                    counts["updated"] += 1
-                elif config_authkey:
-                    # No field changes but authkey configured -- always re-apply
-                    client.post(f"/servers/edit/{existing_server['id']}",
-                                {"Server": {"authkey": config_authkey}})
-                    log.debug("re-applied authkey for server '%s'", server["name"])
+            # MISP never returns a server's authkey, so a configured one goes with every edit
+            outcome, _ = _reconcile(client, "server", f"{server['name']} ({url})", existing_server, server_data,
+                                    SERVER_FIELDS, {"authkey": config_authkey} if config_authkey else None)
+            if outcome in counts:
+                counts[outcome] += 1
 
     return counts, managed_urls
 
@@ -850,21 +679,15 @@ def _apply_sharing_groups(client: MISPClient, state: MISPState,
             # Try name fallback
             existing = state.sharing_groups.get(sg["name"])
 
-        if not existing:
-            log.info("creating sharing group '%s'", sg["name"])
-            result = client.post("/sharing_groups/add", {"SharingGroup": sg_data})
-            sg_id = result.get("SharingGroup", result).get("id")
+        outcome, result = _reconcile(client, "sharing group", sg["name"], existing, sg_data, list(sg_data))
+        if outcome in counts:
+            counts[outcome] += 1
+        if existing is None:
+            sg_id = (result or {}).get("SharingGroup", result or {}).get("id")
             if sg_id:
                 _sync_sg_orgs(client, state, sg_id, sg.get("organisations", []))
-            counts["created"] += 1
         else:
-            sg_id = existing["id"]
-            changes = {k: v for k, v in sg_data.items() if not _values_equal(v, existing.get(k, ""))}
-            if changes:
-                log.info("updating sharing group '%s': %s", sg["name"], list(changes.keys()))
-                client.post(f"/sharing_groups/edit/{sg_id}", {"SharingGroup": changes})
-                counts["updated"] += 1
-            _sync_sg_orgs(client, state, sg_id, sg.get("organisations", []),
+            _sync_sg_orgs(client, state, existing["id"], sg.get("organisations", []),
                           current_orgs=existing.get("SharingGroupOrg", []))
 
     return counts
@@ -918,14 +741,19 @@ def _sync_sg_orgs(client: MISPClient, state: MISPState,
 
 def _disable_unmanaged_users(client: MISPClient, state: MISPState,
                              managed_emails: set | None):
-    """Disable users not in managed set (never touches user ID 1).
+    """Disable the local users the file does not name (never user ID 1).
 
-    None means the users step failed before it knew what it manages, so
-    nothing is unmanaged.
+    A user with an OIDC subject or external auth belongs to its identity
+    provider. LdapAuth marks none of the users it creates, so with an LDAP
+    login plugin on, no unnamed user is disabled. None means the users step
+    failed before it knew what it manages, so nothing is unmanaged.
     """
     count = 0
     if managed_emails is None:
         log.warning("the users step failed; no user is disabled this run")
+        return count
+    if "true" in (env("LDAPAUTH_ENABLE"), env("APACHESECUREAUTH_LDAP_ENABLE")):
+        log.info("an LDAP login plugin is on and marks none of its users; no unnamed user is disabled")
         return count
 
     for email, user in state.users.items():
@@ -933,6 +761,8 @@ def _disable_unmanaged_users(client: MISPClient, state: MISPState,
             continue
         # Never disable the site admin (user ID 1)
         if user.get("id") == 1 or str(user.get("id")) == "1":
+            continue
+        if user.get("sub") or _values_equal(True, user.get("external_auth_required")):
             continue
         if not user.get("disabled"):
             log.info("disabling unmanaged user '%s'", email)

@@ -4,7 +4,6 @@ import json
 import os
 import sys
 import tempfile
-import urllib.error
 from unittest.mock import MagicMock, call, patch
 
 import pytest
@@ -12,13 +11,13 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "files"))
 
 from misp_container.sync import (
-    _normalize, _normalize_tag, _merge_configs, _build_rules, _values_equal,
+    _normalize, _normalize_tag, _reconcile, _build_rules, _values_equal,
     _validate_uuid, _expand_env, _expand_env_recursive,
     _apply_roles, _apply_orgs, _apply_tags, _apply_one_tag, _apply_one_user,
     _apply_users, _apply_servers, _apply_taxonomies, _apply_warninglists,
     _apply_sharing_groups, _sync_sg_orgs,
     _disable_unmanaged_users, _disable_unmanaged_servers,
-    _fetch_remote, _set_user_authkey,
+    _set_user_authkey,
     load_config, apply, is_empty, ConfigError, MISPState, TAG_DEFAULTS,
 )
 from misp_container.api import APIError
@@ -109,20 +108,24 @@ class TestNormalize:
         with pytest.raises(ValueError, match="invalid UUID"):
             _normalize(raw)
 
-    def test_user_role_defaults(self):
-        raw = {"teams": [{
-            "uuid": "cc98c3e7-f415-4199-a805-898be218f68a", "name": "T",
-            "users": [{"email": "a@b.com"}],
-            "feide_users": [{"email": "f@b.com"}],
-            "sync_users": [{"email": "s@b.com"}],
-            "service_users": [{"email": "bot@b.com"}],
-        }]}
-        result = _normalize(raw)
-        team = result["teams"][0]
-        assert team["users"][0]["role"] == "User"
-        assert team["feide_users"][0]["role"] == "User"
-        assert team["sync_users"][0]["role"] == "Sync user"
-        assert team["service_users"][0]["role"] == "User"
+    def test_user_defaults(self):
+        raw = {"teams": [{"uuid": "cc98c3e7-f415-4199-a805-898be218f68a", "name": "T",
+                          "users": [{"email": "a@b.com"}]}]}
+        user = _normalize(raw)["teams"][0]["users"][0]
+        assert (user["role"], user["disabled"], user["external_auth"]) == ("User", False, False)
+
+    @pytest.mark.parametrize("key", ["feide_users", "sync_users", "service_users"])
+    def test_retired_user_list_refused(self, key):
+        raw = {"teams": [{"uuid": "cc98c3e7-f415-4199-a805-898be218f68a", "name": "T",
+                          key: [{"email": "a@b.com"}]}]}
+        with pytest.raises(ConfigError, match=f"{key} is gone; list these users under users"):
+            _normalize(raw)
+
+    def test_allow_external_refused(self):
+        raw = {"teams": [{"uuid": "cc98c3e7-f415-4199-a805-898be218f68a", "name": "T",
+                          "users": [{"email": "a@b.com", "allow_external": True}]}]}
+        with pytest.raises(ConfigError, match="allow_external is gone"):
+            _normalize(raw)
 
     def test_server_defaults(self):
         raw = {"teams": [{
@@ -152,15 +155,11 @@ class TestNormalize:
             "uuid": "cc98c3e7-f415-4199-a805-898be218f68a", "name": "T",
             "default_role": "Org Admin",
             "users": [{"email": "a@b.com"}],
-            "feide_users": [{"email": "f@b.com"}],
-            "service_users": [{"email": "bot@b.com"}],
         }]}
         result = _normalize(raw)
         team = result["teams"][0]
         assert team["default_role"] == "Org Admin"
         assert team["users"][0]["role"] == "Org Admin"
-        assert team["feide_users"][0]["role"] == "Org Admin"
-        assert team["service_users"][0]["role"] == "Org Admin"
 
     def test_default_role_does_not_override_explicit(self):
         raw = {"teams": [{
@@ -171,170 +170,11 @@ class TestNormalize:
         result = _normalize(raw)
         assert result["teams"][0]["users"][0]["role"] == "Admin"
 
-    def test_default_role_not_applied_to_sync_users(self):
-        """Sync users always default to 'Sync user' regardless of default_role."""
-        raw = {"teams": [{
-            "uuid": "cc98c3e7-f415-4199-a805-898be218f68a", "name": "T",
-            "default_role": "Org Admin",
-            "sync_users": [{"email": "s@b.com"}],
-        }]}
-        result = _normalize(raw)
-        assert result["teams"][0]["sync_users"][0]["role"] == "Sync user"
-
     def test_roles_in_config(self):
         raw = {"roles": [{"name": "Custom Role", "permission": 2, "perm_tagger": True}]}
         result = _normalize(raw)
         assert len(result["roles"]) == 1
         assert result["roles"][0]["name"] == "Custom Role"
-
-    def test_feide_user_disabled_default(self):
-        raw = {"teams": [{"uuid": "cc98c3e7-f415-4199-a805-898be218f68a", "name": "T",
-                          "feide_users": [{"email": "f@b.com"}]}]}
-        result = _normalize(raw)
-        assert result["teams"][0]["feide_users"][0]["disabled"] is False
-
-
-class TestMergeConfigs:
-    def test_local_wins_for_top_level_lists(self):
-        local = {"taxonomies": ["tlp"], "tags": ["local-tag"]}
-        remote = {"taxonomies": ["admiralty"], "tags": ["remote-tag"]}
-        result = _merge_configs(local, remote)
-        assert result["taxonomies"] == ["tlp"]
-        assert result["tags"] == ["local-tag"]
-
-    def test_remote_fills_missing_keys(self):
-        local = {"taxonomies": ["tlp"]}
-        remote = {"warninglists": ["Top 1000"]}
-        result = _merge_configs(local, remote)
-        assert result["taxonomies"] == ["tlp"]
-        assert result["warninglists"] == ["Top 1000"]
-
-    def test_teams_merge_by_uuid(self):
-        local = {"teams": [{"uuid": "ee8e368c-1587-4630-99f7-0b7a3ff2674f", "name": "Local Name"}]}
-        remote = {"teams": [
-            {"uuid": "ee8e368c-1587-4630-99f7-0b7a3ff2674f", "name": "Remote Name", "sector": "academic"},
-            {"uuid": "cb610191-6a92-4502-b5c9-9ab0b0153881", "name": "Remote Only"},
-        ]}
-        result = _merge_configs(local, remote)
-        assert len(result["teams"]) == 2
-        assert result["teams"][0]["name"] == "Local Name"
-        assert result["teams"][0]["sector"] == "academic"
-        assert result["teams"][1]["name"] == "Remote Only"
-
-    def test_local_user_pinned_to_local_team(self):
-        """User in local file stays in local team (allow_external defaults to false)."""
-        local = {"teams": [
-            {"uuid": "ee8e368c-1587-4630-99f7-0b7a3ff2674f", "name": "Team1",
-             "users": [{"email": "alice@x.com"}]},
-        ]}
-        remote = {"teams": [
-            {"uuid": "cb610191-6a92-4502-b5c9-9ab0b0153881", "name": "Team2",
-             "users": [{"email": "alice@x.com"}]},
-        ]}
-        result = _merge_configs(local, remote)
-        team1 = next(t for t in result["teams"] if t["name"] == "Team1")
-        team2 = next(t for t in result["teams"] if t["name"] == "Team2")
-        team1_emails = [u["email"] for u in team1.get("users", [])]
-        team2_emails = [u["email"] for u in team2.get("users", [])]
-        assert "alice@x.com" in team1_emails
-        assert "alice@x.com" not in team2_emails
-
-    def test_allow_external_lets_remote_move_user(self):
-        """User with allow_external: true can be moved by external source."""
-        local = {"teams": [
-            {"uuid": "ee8e368c-1587-4630-99f7-0b7a3ff2674f", "name": "Team1",
-             "users": [{"email": "alice@x.com", "allow_external": True, "role": "User"}]},
-        ]}
-        remote = {"teams": [
-            {"uuid": "cb610191-6a92-4502-b5c9-9ab0b0153881", "name": "Team2",
-             "users": [{"email": "alice@x.com"}]},
-        ]}
-        result = _merge_configs(local, remote)
-        team1 = next(t for t in result["teams"] if t["name"] == "Team1")
-        team2 = next(t for t in result["teams"] if t["name"] == "Team2")
-        team1_emails = [u["email"] for u in team1.get("users", [])]
-        team2_emails = [u["email"] for u in team2.get("users", [])]
-        # External moved alice to Team2
-        assert "alice@x.com" not in team1_emails
-        assert "alice@x.com" in team2_emails
-
-    def test_allow_external_preserves_local_user_fields(self):
-        """When external moves a user, local fields (like role) are preserved."""
-        local = {"teams": [
-            {"uuid": "ee8e368c-1587-4630-99f7-0b7a3ff2674f", "name": "Team1",
-             "users": [{"email": "alice@x.com", "allow_external": True, "role": "Admin"}]},
-        ]}
-        remote = {"teams": [
-            {"uuid": "cb610191-6a92-4502-b5c9-9ab0b0153881", "name": "Team2",
-             "users": [{"email": "alice@x.com", "role": "User"}]},
-        ]}
-        result = _merge_configs(local, remote)
-        team2 = next(t for t in result["teams"] if t["name"] == "Team2")
-        alice = next(u for u in team2["users"] if u["email"] == "alice@x.com")
-        # Local role wins (local fields overlay external)
-        assert alice["role"] == "Admin"
-
-    def test_remote_only_user_added(self):
-        """Users only in remote are added to the remote's team."""
-        local = {"teams": [
-            {"uuid": "ee8e368c-1587-4630-99f7-0b7a3ff2674f", "name": "Team1"},
-        ]}
-        remote = {"teams": [
-            {"uuid": "ee8e368c-1587-4630-99f7-0b7a3ff2674f", "name": "Team1",
-             "users": [{"email": "remote-only@x.com"}]},
-        ]}
-        result = _merge_configs(local, remote)
-        team1 = result["teams"][0]
-        emails = [u["email"] for u in team1.get("users", [])]
-        assert "remote-only@x.com" in emails
-
-    def test_allow_external_not_in_remote_stays_local(self):
-        """allow_external user not in remote stays in local team."""
-        local = {"teams": [
-            {"uuid": "ee8e368c-1587-4630-99f7-0b7a3ff2674f", "name": "Team1",
-             "users": [{"email": "alice@x.com", "allow_external": True}]},
-        ]}
-        remote = {"teams": []}
-        result = _merge_configs(local, remote)
-        team1 = result["teams"][0]
-        emails = [u["email"] for u in team1.get("users", [])]
-        assert "alice@x.com" in emails
-
-    def test_local_disabled_overrides_remote(self):
-        """Local disabled: true wins over remote disabled: false."""
-        local = {"teams": [
-            {"uuid": "ee8e368c-1587-4630-99f7-0b7a3ff2674f", "name": "Team1",
-             "users": [{"email": "alice@x.com", "disabled": True}]},
-        ]}
-        remote = {"teams": [
-            {"uuid": "ee8e368c-1587-4630-99f7-0b7a3ff2674f", "name": "Team1",
-             "users": [{"email": "alice@x.com", "disabled": False}]},
-        ]}
-        result = _merge_configs(local, remote)
-        team1 = result["teams"][0]
-        alice = next(u for u in team1["users"] if u["email"] == "alice@x.com")
-        assert alice["disabled"] is True
-
-    def test_local_disabled_overrides_remote_with_allow_external(self):
-        """Even with allow_external, local disabled field wins."""
-        local = {"teams": [
-            {"uuid": "ee8e368c-1587-4630-99f7-0b7a3ff2674f", "name": "Team1",
-             "users": [{"email": "alice@x.com", "allow_external": True, "disabled": True}]},
-        ]}
-        remote = {"teams": [
-            {"uuid": "cb610191-6a92-4502-b5c9-9ab0b0153881", "name": "Team2",
-             "users": [{"email": "alice@x.com", "disabled": False}]},
-        ]}
-        result = _merge_configs(local, remote)
-        # alice moved to Team2 (allow_external), but disabled stays True (local wins)
-        team2 = next(t for t in result["teams"] if t["name"] == "Team2")
-        alice = next(u for u in team2["users"] if u["email"] == "alice@x.com")
-        assert alice["disabled"] is True
-
-    def test_empty_local_and_remote(self):
-        result = _merge_configs({}, {})
-        assert result["teams"] == []
-
 
 class TestLoadConfig:
     def test_load_from_file(self):
@@ -684,7 +524,7 @@ class TestApplyOneUser:
 
         result = _apply_one_user(client, state,
                                  {"email": "new@test.com", "role": "User"},
-                                 org_id=1, external_auth=False)
+                                 org_id=1)
         assert result == "created"
         data = client.post.call_args[0][1]["User"]
         assert data["email"] == "new@test.com"
@@ -696,15 +536,15 @@ class TestApplyOneUser:
         assert "password" in data  # random password generated
         assert len(data["password"]) == 64  # hex(32 bytes)
 
-    def test_feide_user_sets_external_auth(self):
+    def test_external_auth_user_sets_external_auth(self):
         client = MagicMock()
         state = MagicMock()
         state.users = {}
         state.role_id = lambda name: 3
 
         _apply_one_user(client, state,
-                        {"email": "feide@inst.no", "role": "User"},
-                        org_id=1, external_auth=True)
+                        {"email": "feide@inst.no", "role": "User", "external_auth": True},
+                        org_id=1)
         data = client.post.call_args[0][1]["User"]
         assert data["external_auth_required"] is True
         assert data["external_auth_key"] == "feide@inst.no"
@@ -721,7 +561,7 @@ class TestApplyOneUser:
         result = _apply_one_user(client, state,
                                  {"email": "sync@partner.no", "role": "Sync user",
                                   "authkey": "inbound-key-for-partner-0000000000000000"},
-                                 org_id=1, external_auth=False)
+                                 org_id=1)
         assert result == "created"
 
         # User created via API, then authkey set via direct DB write
@@ -740,7 +580,7 @@ class TestApplyOneUser:
         result = _apply_one_user(client, state,
                                  {"email": "sync@partner.no", "role": "Sync user",
                                   "authkey": "inbound-key-for-partner-0000000000000000"},
-                                 org_id=1, external_auth=False)
+                                 org_id=1)
         # No field changes, but authkey always re-applied
         assert result == "unchanged"
         mock_set_key.assert_called_once_with(42, "inbound-key-for-partner-0000000000000000")
@@ -753,7 +593,7 @@ class TestApplyOneUser:
 
         result = _apply_one_user(client, state,
                                  {"email": "x@x.com", "role": "Nonexistent"},
-                                 org_id=1, external_auth=False)
+                                 org_id=1)
         assert result == "unchanged"
         client.post.assert_not_called()
 
@@ -766,7 +606,7 @@ class TestApplyOneUser:
 
         result = _apply_one_user(client, state,
                                  {"email": "user@test.com", "role": "User"},
-                                 org_id=2, external_auth=False)
+                                 org_id=2)
         assert result == "updated"
         data = client.post.call_args[0][1]["User"]
         assert data["org_id"] == 2
@@ -780,7 +620,7 @@ class TestApplyOneUser:
 
         result = _apply_one_user(client, state,
                                  {"email": "user@test.com", "role": "User"},
-                                 org_id=1, external_auth=False)
+                                 org_id=1)
         assert result == "unchanged"
         client.post.assert_not_called()
 
@@ -794,14 +634,77 @@ class TestApplyOneUser:
         result = _apply_one_user(client, state,
                                  {"email": "user@test.com", "role": "User",
                                   "disabled": True},
-                                 org_id=1, external_auth=False)
+                                 org_id=1)
         assert result == "updated"
         data = client.post.call_args[0][1]["User"]
         assert data["disabled"] is True
 
 
+    def test_new_user_gets_the_configured_password(self):
+        client = MagicMock()
+        state = MagicMock()
+        state.users = {}
+        state.role_id = lambda name: 3
+        _apply_one_user(client, state, {"email": "glass@x.com", "role": "User", "password": "Br3ak-Glass#2026"},
+                        org_id=1)
+        assert client.post.call_args[0][1]["User"]["password"] == "Br3ak-Glass#2026"
+
+    @patch("misp_container.sync.has_password", return_value=False)
+    def test_password_that_no_longer_verifies_is_set(self, _):
+        client = MagicMock()
+        state = MagicMock()
+        state.users = {"glass@x.com": {"id": 10, "org_id": "1", "role_id": "3", "disabled": "0"}}
+        state.role_id = lambda name: 3
+        result = _apply_one_user(client, state, {"email": "glass@x.com", "role": "User",
+                                                 "password": "Br3ak-Glass#2026"}, org_id=1)
+        assert result == "updated"
+        assert client.post.call_args[0] == ("/admin/users/edit/10", {"User": {"password": "Br3ak-Glass#2026"}})
+
+    @patch("misp_container.sync.has_password", return_value=True)
+    def test_password_that_verifies_is_left_alone(self, _):
+        client = MagicMock()
+        state = MagicMock()
+        state.users = {"glass@x.com": {"id": 10, "org_id": "1", "role_id": "3", "disabled": "0"}}
+        state.role_id = lambda name: 3
+        result = _apply_one_user(client, state, {"email": "glass@x.com", "role": "User",
+                                                 "password": "Br3ak-Glass#2026"}, org_id=1)
+        assert result == "unchanged"
+        client.post.assert_not_called()
+
+    def test_external_auth_user_matching_the_database_is_unchanged(self):
+        client = MagicMock()
+        state = MagicMock()
+        state.users = {"ext@x.com": {"id": 10, "org_id": "1", "role_id": "3", "disabled": "0",
+                                     "external_auth_required": "1", "external_auth_key": "ext@x.com"}}
+        state.role_id = lambda name: 3
+        assert _apply_one_user(client, state, {"email": "ext@x.com", "role": "User", "external_auth": True},
+                               org_id=1) == "unchanged"
+        client.post.assert_not_called()
+
+
+class TestReconcile:
+    def test_creates_a_missing_record(self):
+        client = MagicMock()
+        assert _reconcile(client, "tag", "t", None, {"name": "t"}, ["name"])[0] == "created"
+        client.post.assert_called_once_with("/tags/add", {"Tag": {"name": "t"}})
+
+    def test_posts_only_the_fields_that_differ(self):
+        client = MagicMock()
+        outcome, _ = _reconcile(client, "org", "o", {"id": 4, "name": "o", "sector": "a"},
+                                {"name": "o", "sector": "b"}, ["name", "sector"])
+        assert outcome == "updated"
+        client.post.assert_called_once_with("/admin/organisations/edit/4", {"Organisation": {"sector": "b"}})
+
+    def test_unread_values_go_with_every_edit_without_counting(self):
+        client = MagicMock()
+        outcome, _ = _reconcile(client, "server", "s", {"id": 2, "name": "s"}, {"name": "s"}, ["name"],
+                                {"authkey": "k"})
+        assert outcome == "unchanged"
+        client.post.assert_called_once_with("/servers/edit/2", {"Server": {"authkey": "k"}})
+
+
 class TestApplyUsers:
-    def test_creates_all_user_types_in_team(self):
+    def test_creates_every_user_of_the_list(self):
         client = MagicMock()
         state = MagicMock()
         state.users = {}
@@ -810,18 +713,14 @@ class TestApplyUsers:
         state.role_id = lambda name: {"User": 3, "Sync user": 4}.get(name)
 
         teams = [{"uuid": "ee8e368c-1587-4630-99f7-0b7a3ff2674f", "name": "T",
-                  "users": [{"email": "regular@x.com", "role": "User"}],
-                  "feide_users": [{"email": "feide@x.com", "role": "User"}],
-                  "sync_users": [{"email": "sync@x.com", "role": "Sync user"}],
-                  "service_users": [{"email": "bot@x.com"}],
+                  "users": [{"email": "regular@x.com", "role": "User"},
+                            {"email": "ext@x.com", "role": "User", "external_auth": True},
+                            {"email": "sync@x.com", "role": "Sync user"}],
                   "servers": [], "tags": []}]
 
         counts, managed = _apply_users(client, state, teams)
-        assert counts["created"] == 4
-        assert "regular@x.com" in managed
-        assert "feide@x.com" in managed
-        assert "sync@x.com" in managed
-        assert "bot@x.com" in managed
+        assert counts["created"] == 3
+        assert managed == {"regular@x.com", "ext@x.com", "sync@x.com"}
 
 
 # ---------------------------------------------------------------------------
@@ -1187,6 +1086,26 @@ class TestDisableUnmanaged:
         assert "/users/edit/3" in path
         assert data["User"]["disabled"] is True
 
+    @patch("misp_container.sync.env", return_value="")
+    def test_leaves_identity_provider_users_alone(self, mock_env):
+        client = MagicMock()
+        state = MagicMock()
+        state.users = {
+            "oidc@x.com": {"id": 2, "disabled": False, "sub": "CiQwOGE4Njg0Yi1kYjg4", "external_auth_required": "0"},
+            "header@x.com": {"id": 3, "disabled": False, "sub": "", "external_auth_required": "1"},
+        }
+        assert _disable_unmanaged_users(client, state, set()) == 0
+        client.post.assert_not_called()
+
+    @pytest.mark.parametrize("plugin", ["LDAPAUTH_ENABLE", "APACHESECUREAUTH_LDAP_ENABLE"])
+    def test_ldap_login_disables_no_unnamed_user(self, plugin):
+        client = MagicMock()
+        state = MagicMock()
+        state.users = {"ldap@x.com": {"id": 2, "disabled": False, "sub": "", "external_auth_required": "0"}}
+        with patch("misp_container.sync.env", side_effect=lambda k, d="": "true" if k == plugin else d):
+            assert _disable_unmanaged_users(client, state, set()) == 0
+        client.post.assert_not_called()
+
     @patch("misp_container.sync.env", return_value="admin@admin.test")
     def test_skips_already_disabled_users(self, mock_env):
         client = MagicMock()
@@ -1347,14 +1266,6 @@ class TestFailedStepDisablesNothing:
         assert summary["disabled_users"] == 0
         disabled = [p for p in client.post.call_args_list if p[0][1].get("User", {}).get("disabled") is True]
         assert disabled == []
-
-
-class TestRemoteConfig:
-    def test_failed_fetch_fails_the_load(self):
-        with patch("misp_container.sync.urllib.request.urlopen",
-                   side_effect=urllib.error.URLError("timed out")):
-            with pytest.raises(ConfigError, match="cannot fetch the remote config"):
-                _fetch_remote("https://source.example/orgs.yaml", "token")
 
 
 class TestIsEmpty:

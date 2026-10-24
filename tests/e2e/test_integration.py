@@ -441,12 +441,12 @@ def test_custom_auth_without_header_redirects(custom_auth):
     assert custom_auth.http("GET", "/events/index", json_api=False, redirects=False)[0] == 302
 
 
-# -- OIDC login through dex ----------------------------------------------------------
+# -- OIDC login through Keycloak -----------------------------------------------------
 
 # The browser side of the login, in the compose network. The sync container is
 # read-only like the Kubernetes Jobs, so the cookies stay in memory.
 OIDC_FLOW = """
-import http.cookiejar, json, urllib.error, urllib.parse, urllib.request
+import html, http.cookiejar, json, re, urllib.error, urllib.parse, urllib.request
 jar = urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar())
 class Stay(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, *args, **kwargs):
@@ -461,9 +461,10 @@ def open_(opener, url, data=None, accept=None):
         return e
 auth = open_(stay, "http://caddy:8080/users/login?OidcAuth=enable").headers.get("Location", "")
 print("auth=" + auth)
-form = open_(follow, auth).geturl()
+page = open_(follow, auth).read().decode()
+form = html.unescape(re.search(r'<form id="kc-form-login"[^>]*action="([^"]+)"', page).group(1))
 print("form=" + form)
-login = urllib.parse.urlencode({"login": "oidc@example.com", "password": "oidc-test-password"}).encode()
+login = urllib.parse.urlencode({"username": "oidc", "password": "oidc-test-password"}).encode()
 final = open_(follow, form, data=login)
 print(f"final={final.geturl()} {final.status}")
 me = open_(follow, "http://caddy:8080/users/view/me.json", accept="application/json").read()
@@ -476,19 +477,19 @@ except ValueError:
 
 @pytest.fixture(scope="module")
 def oidc(stack):
-    # Mixed auth needs ?OidcAuth=enable to start the flow; dex's local connector
+    # Mixed auth needs ?OidcAuth=enable to start the flow; Keycloak's login form
     # takes the credentials, and the callback lands on http://caddy:8080/users/login
     _, out = stack.run("sync", "python3", "-c", OIDC_FLOW)
     user = next((json.loads(line) for line in reversed(out.splitlines()) if line.startswith("{")), {})
     return {"out": out, "user": user}
 
 
-def test_oidc_login_redirects_to_dex(oidc):
-    assert "auth=http://dex:5556/dex/auth" in oidc["out"]
+def test_oidc_login_redirects_to_keycloak(oidc):
+    assert "auth=http://keycloak:8080/realms/misp/protocol/openid-connect/auth" in oidc["out"]
 
 
-def test_oidc_dex_offers_its_password_form(oidc):
-    assert "form=http://dex:5556/dex/auth/local/login" in oidc["out"]
+def test_oidc_keycloak_offers_its_login_form(oidc):
+    assert "form=http://keycloak:8080/realms/misp/login-actions/authenticate" in oidc["out"]
 
 
 def test_oidc_callback_lands_on_misp(oidc):
@@ -499,11 +500,13 @@ def test_oidc_user_has_the_idp_email(oidc):
     assert oidc["user"].get("User", {}).get("email") == "oidc@example.com"
 
 
-def test_oidc_role_mapped_by_name(oidc):
+def test_oidc_highest_client_role_wins(oidc):
+    # The user holds the client roles user and org-admin
     assert oidc["user"].get("Role", {}).get("name") == "Org Admin"
 
 
-def test_oidc_default_organisation(oidc):
+def test_oidc_organisation_from_the_claim(oidc):
+    # The group's organization attribute holds Test Org's UUID; no default organisation is set
     assert oidc["user"].get("Organisation", {}).get("name") == "Test Org"
 
 
@@ -620,10 +623,12 @@ teams:
       - email: sync-disabled-user@example.com
         role: User
         disabled: true
-    sync_users:
       - email: sync-inbound@example.com
         role: Sync user
         authkey: inbound0000000000000000000000000000000000
+      - email: break-glass@example.com
+        role: Org Admin
+        password: "Br3ak-Glass!Pass#2026"
     tags:
       - name: "sync-test:org-tag"
         colour: "#445566"
@@ -639,6 +644,29 @@ teams:
 """
 
 
+# A password login through the form, as a break-glass account makes it while
+# Keycloak is down; the CakePHP form wants its hidden token fields back
+LOGIN_FLOW = """
+import http.cookiejar, json, re, sys, urllib.parse, urllib.request
+opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
+page = opener.open("http://caddy:8080/users/login", timeout=30).read().decode()
+form = next(f for f in re.findall(r"<form.*?</form>", page, re.S) if "data[User][password]" in f)
+fields = {}
+for tag in re.findall(r"<input[^>]*>", form):
+    attrs = dict(re.findall(r'(\\w+)="([^"]*)"', tag))
+    if attrs.get("type") == "hidden" and "name" in attrs:
+        fields[attrs["name"]] = attrs.get("value", "")
+fields.update({"data[User][email]": sys.argv[1], "data[User][password]": sys.argv[2]})
+opener.open("http://caddy:8080/users/login", urllib.parse.urlencode(fields).encode(), timeout=30)
+me = opener.open(urllib.request.Request("http://caddy:8080/users/view/me.json",
+                                        headers={"Accept": "application/json"}), timeout=30).read()
+try:
+    print(json.dumps(json.loads(me)))
+except ValueError:
+    print("{}")
+"""
+
+
 def org_sync(stack, config):
     path = scratch_dir() / "test-orgs.yaml"
     path.write_text(config)
@@ -650,7 +678,10 @@ def org_sync(stack, config):
 
 
 @pytest.fixture(scope="module")
-def synced(stack):
+def synced(stack, oidc):
+    # A local user the file does not name, beside the OIDC user of the login above
+    stack.api("POST", "/admin/users/add", stack.key, {"User": {
+        "email": "unnamed-local@example.com", "org_id": 1, "role_id": 3, "password": "Unnamed-L0cal#2026"}})
     org_sync(stack, ORGS.format(version=1, extra=""))
     servers = stack.api("GET", "/servers", stack.key) or []
     server = next((s["Server"] for s in servers if s["Server"]["url"] == "https://sync-test.example.com"), {})
@@ -729,6 +760,20 @@ def test_sync_disabled_user_created(stack, synced):
 
 def test_sync_disabled_user_is_disabled(stack, synced):
     assert search_user(stack, "sync-disabled-user@example.com").get("User", {}).get("disabled") in (True, 1, "1")
+
+
+def test_sync_disables_an_unnamed_local_user(stack, synced):
+    assert search_user(stack, "unnamed-local@example.com").get("User", {}).get("disabled") in (True, 1, "1")
+
+
+def test_sync_leaves_the_unnamed_oidc_user_enabled(stack, synced):
+    assert search_user(stack, "oidc@example.com").get("User", {}).get("disabled") in (False, 0, "0")
+
+
+def test_sync_break_glass_password_logs_in(stack, synced):
+    _, out = stack.run("sync", "python3", "-c", LOGIN_FLOW, "break-glass@example.com", "Br3ak-Glass!Pass#2026")
+    me = next((json.loads(line) for line in reversed(out.splitlines()) if line.startswith("{")), {})
+    assert me.get("User", {}).get("email") == "break-glass@example.com", out[-2000:]
 
 
 def test_sync_custom_warninglist_created(stack, synced):
