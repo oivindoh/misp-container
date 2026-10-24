@@ -15,7 +15,7 @@
 
 | Data | Where | How |
 |------|-------|-----|
-| The database | The `mariadb` or `postgres` component's claim, or the external database | A logical dump (below), or a volume snapshot of the claim |
+| The database | The `postgres` component's claim, or the external database | A logical dump (below), or a volume snapshot of the claim |
 | Attachments, org logos, custom images | The claim `attachments`, or the S3 bucket | A volume snapshot, a copy of the directory, or the bucket's own versioning |
 | The Secrets | `misp-db`, `misp-app`, `misp-admin`, `misp-gnupg`, `misp-certs` | Whatever manages them (SOPS, External Secrets); the backup is useless without `SECURITY_SALT`, `SECURITY_ENCRYPTION_KEY` and `MISP_UUID` |
 | The values | `values.yaml`, `orgs.yaml` | Version control |
@@ -27,14 +27,11 @@ are rendered or copied in at every start.
 A logical dump, from the database pod of the release:
 
 ```bash
-# MariaDB
-kubectl -n misp exec sts/mysql -- sh -c 'mariadb-dump --single-transaction -u misp -p"$MARIADB_PASSWORD" misp' > misp.sql
-# PostgreSQL
 kubectl -n misp exec sts/postgres -- pg_dump --clean --if-exists -U misp misp > misp.sql
 ```
 
-The PostgreSQL dump drops each table before it creates it, so it loads over the empty MISP
-that the configure Job creates.
+The dump drops each table before it creates it, so it loads over the empty MISP that the
+configure Job creates.
 
 An external database is dumped the same way from wherever it runs. The attachments, when
 the storage class offers no snapshots:
@@ -53,7 +50,6 @@ Into a release that carries the same Secrets, in this order:
 2. Load the dump into the database: it replaces the empty tables.
 
    ```bash
-   kubectl -n misp exec -i sts/mysql -- sh -c 'mariadb -u misp -p"$MARIADB_PASSWORD" misp' < misp.sql
    kubectl -n misp exec -i sts/postgres -- psql -U misp misp < misp.sql
    ```
 
@@ -61,9 +57,8 @@ Into a release that carries the same Secrets, in this order:
 4. Upgrade the release with the replicas back. The configure Job runs MISP's schema updates on
    the copy and records the image version; the pods then serve.
 
-A source that still runs, on MySQL or MariaDB, can be copied by the `migrate` component
-instead ([migration.md](migration.md)); it reads the source database and its attachments
-directly and needs no dump.
+A MISP on MySQL or MariaDB is copied by the `migrate` component instead
+([migration.md](migration.md)); it reads the source database and its attachments directly.
 
 ## Keys and secrets
 
@@ -74,7 +69,7 @@ directly and needs no dump.
 | `MISP_UUID` | None. Sync partners know the instance by it |
 | `ADMIN_PASSWORD`, `ADMIN_KEY` | Change the value in `misp-admin` and upgrade: the configure Job sets both on user 1 |
 | `MISP_REDIS_PASSWORD`, `SIMPLEBACKGROUNDJOBS_SUPERVISOR_PASSWORD`, `DB_PASSWORD` | Change the value in the Secret and on the service it names, then upgrade: the checksum rolls every pod that reads it |
-| The GPG key (`misp-gnupg`) | Replace `private.asc` in the Secret and upgrade. Each pod imports the key of the Secret at start, next to any earlier one in a homedir that outlived the pod (a Compose volume). Sync partners need the new public key |
+| The GPG key (`misp-gnupg`) | Replace `private.asc` in the Secret and upgrade: each pod imports the key of the Secret at start. Compose: replace `private.asc` in the `misp-gnupg-key` volume and recreate the containers. Sync partners need the new public key |
 | The sync server certificates (`misp-certs`) | Replace the file in the Secret and upgrade |
 
 ## Upgrades

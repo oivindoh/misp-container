@@ -106,10 +106,11 @@ def test_misp_env_holds_base_env_and_the_env_value_wins():
     assert data["MISP_BASEURL"] == "https://misp.example.org"
 
 
-def test_the_postgres_component_points_misp_at_it():
-    data = env_data("postgres.enabled=true")
-    assert (data["DB_ENGINE"], data["DB_HOST"], data["DB_PORT"]) == ("postgres", "postgres", "5432")
-    assert env_data("postgres.enabled=true", "env.DB_HOST=pg.example.org")["DB_HOST"] == "pg.example.org"
+def test_misp_points_at_the_postgres_component_unless_env_says_otherwise():
+    data = env_data()
+    assert (data["DB_HOST"], data["DB_PORT"]) == ("postgres", "5432")
+    assert chart.find("Service", "postgres", "postgres.enabled=true")
+    assert env_data("env.DB_HOST=pg.example.org")["DB_HOST"] == "pg.example.org"
 
 
 def test_the_postgres_pod_refuses_a_claim_from_chart_1(tmp_path):
@@ -159,7 +160,7 @@ def test_every_pod_takes_the_database_credentials_from_the_database_secret():
                 assert refs.get("DB_PASSWORD") == {"name": "pg-app", "key": "password"}, where
             if any(r["name"] == "pg-app" for r in refs.values()):
                 pods.add(doc["metadata"]["name"])
-    assert {"web", "worker", "metrics", "mysql", "postgres", "housekeeping-logs", "periodic-summary"} <= pods
+    assert {"web", "worker", "metrics", "postgres", "housekeeping-logs", "periodic-summary"} <= pods
 
 
 def test_a_database_secret_needs_a_name_and_a_key():
@@ -212,7 +213,7 @@ def test_the_chart_pins_the_images_the_compose_stack_pins():
     """dependabot bumps the Compose files; values.yaml follows by hand, and this fails until it does."""
     values = yaml.safe_load((chart.CHART / "values.yaml").read_text())
     compose = (REPO / "deploy/docker-compose.yml").read_text()
-    for component, service in (("mariadb", "mysql"), ("postgres", "postgres"), ("redis", "redis")):
+    for component, service in (("postgres", "postgres"), ("redis", "redis")):
         image = values[component]["image"]
         assert f"image: {image}\n" in compose, f"{component}.image is {image}, deploy/docker-compose.yml has another for {service}"
 

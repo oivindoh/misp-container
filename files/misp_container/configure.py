@@ -40,7 +40,7 @@ def run_custom_script(path: str, label: str) -> None:
 # deployment that still carries one of them forgot to set its secrets.
 PLACEHOLDER_MARKERS = ("change-me", "override-me", "REPLACE-WITH", "0000000000")
 CHECKED_SECRETS = ("SECURITY_SALT", "SECURITY_ENCRYPTION_KEY", "ADMIN_PASSWORD", "ADMIN_KEY",
-                   "DB_PASSWORD", "MYSQL_PASSWORD", "MYSQL_ROOT_PASSWORD", "POSTGRES_PASSWORD", "MISP_REDIS_PASSWORD",
+                   "DB_PASSWORD", "POSTGRES_PASSWORD", "MISP_REDIS_PASSWORD",
                    "GNUPG_PASSWORD", "SIMPLEBACKGROUNDJOBS_SUPERVISOR_PASSWORD")
 
 
@@ -95,7 +95,6 @@ def configure_misp() -> None:
         admin.setup_admin()
 
         log.info("GPG")
-        admin.configure_gnupg()
         apply_settings_fast("gpg", cache, all_specs)
 
         log.info("plugins")
@@ -109,21 +108,15 @@ def configure_misp() -> None:
         db.release_config_lock()
 
 
-def record_run(status: str, started: float, error: str = "") -> None:
-    """Write the run to misp_container_sync_log for the metrics exporter."""
-    from .metrics import init_sync_log_table, log_sync_result
-    import time
+def record_run(ok: bool) -> None:
+    """Count the run in its system_settings row, for the metrics exporter."""
     try:
-        init_sync_log_table()
-        log_sync_result(operation="configure", status=status,
-                        duration_seconds=time.monotonic() - started, error_message=error[:1000])
+        db.record_run("configure", ok)
     except Exception as e:
         log.warning("could not record the configure run: %s", e)
 
 
 def run() -> None:
-    import time
-    started = time.monotonic()
     check_identity()
     db.wait_for_db()
     db.init_schema()
@@ -135,7 +128,7 @@ def run() -> None:
         configure_misp()
         log.info("setting MISP.live = true")
         cake.set_setting("MISP.live", "true")
-    except BaseException as e:
-        record_run("error", started, repr(e))
+    except BaseException:
+        record_run(False)
         raise
-    record_run("success", started)
+    record_run(True)

@@ -578,7 +578,7 @@ def _set_user_authkey(user_id: int, authkey: str):
         db.execute("DELETE FROM auth_keys WHERE user_id = %s", (user_id,))
         db.execute(
             "INSERT INTO auth_keys (uuid, authkey, authkey_start, authkey_end, "
-            f"created, user_id, expiration) VALUES (%s, %s, %s, %s, {db.now_epoch()}, %s, 0)",
+            f"created, user_id, expiration) VALUES (%s, %s, %s, %s, {db.NOW_EPOCH}, %s, 0)",
             (str(uuid_mod.uuid4()), authkey_hash, authkey_start, authkey_end, user_id),
         )
         log.info("set authkey for user id=%s (start=%s)", user_id, authkey_start)

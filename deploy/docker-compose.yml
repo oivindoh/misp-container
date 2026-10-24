@@ -53,10 +53,20 @@ x-misp-admin: &misp-admin
     - compose-secrets.env
   user: "1000:1000"
 
+# Every MISP container renders app/Config and imports the GPG key into a scratch of
+# its own, as each pod of the chart does into its emptyDirs. podman gives a tmpfs
+# the mode of the image's directory and root as owner; mode=1777 lets the MISP user in
+x-misp-scratch: &misp-scratch
+  tmpfs:
+    - /var/www/MISP/app/Config:mode=1777
+    - /var/www/MISP/app/tmp:mode=1777
+    - /var/www/MISP/.gnupg:mode=1777
+    - /tmp:mode=1777
+
 services:
   # -- One-shot configure: schema, settings, admin, GPG, sets MISP.live -----
   configure:
-    <<: *misp-admin
+    <<: [*misp-admin, *misp-scratch]
     command: ["python3", "/entrypoint-configure.py"]
     volumes:
       - misp-files-scripts-tmp:/var/www/MISP/app/files/scripts/tmp
@@ -64,19 +74,18 @@ services:
       - misp-files-terms:/var/www/MISP/app/files/terms
       - misp-files-img-orgs:/var/www/MISP/app/files/img/orgs
       - misp-files-img-custom:/var/www/MISP/app/files/img/custom
-      - misp-config:/var/www/MISP/app/Config
-      - misp-tmp:/var/www/MISP/app/tmp
-      - misp-gnupg:/var/www/MISP/.gnupg
-      - configure-tmp:/tmp
+      # The instance GPG key: configure generates it here once, web and worker
+      # import it (the chart takes it from the misp-gnupg Secret)
+      - misp-gnupg-key:/etc/misp-docker/gnupg
     depends_on:
-      mysql:
+      postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
 
   # -- PHP-FPM (scale freely: podman compose up -d --scale web=2) ------------
   web:
-    <<: *misp-common
+    <<: [*misp-common, *misp-scratch]
     command: ["python3", "/entrypoint-web.py"]
     volumes:
       - misp-files-scripts-tmp:/var/www/MISP/app/files/scripts/tmp
@@ -85,14 +94,11 @@ services:
       - misp-files-img-orgs:/var/www/MISP/app/files/img/orgs
       - misp-files-img-custom:/var/www/MISP/app/files/img/custom
       - misp-attachments:/var/www/MISP/app/attachments
-      - misp-config:/var/www/MISP/app/Config
-      - misp-tmp:/var/www/MISP/app/tmp
-      - misp-gnupg:/var/www/MISP/.gnupg
-      - php-tmp:/tmp
+      - misp-gnupg-key:/etc/misp-docker/gnupg:ro
     depends_on:
       configure:
         condition: service_completed_successfully
-      mysql:
+      postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
@@ -122,7 +128,7 @@ services:
 
   # -- Background workers -------------------------------------------------
   worker:
-    <<: *misp-common
+    <<: [*misp-common, *misp-scratch]
     command: ["python3", "/entrypoint-worker.py"]
     # supervisord lets a running job finish for WORKER_STOP_GRACE seconds (default 300)
     stop_grace_period: 330s
@@ -133,14 +139,11 @@ services:
       - misp-files-img-orgs:/var/www/MISP/app/files/img/orgs
       - misp-files-img-custom:/var/www/MISP/app/files/img/custom
       - misp-attachments:/var/www/MISP/app/attachments
-      - misp-config:/var/www/MISP/app/Config
-      - worker-misp-tmp:/var/www/MISP/app/tmp
-      - misp-gnupg:/var/www/MISP/.gnupg
-      - worker-tmp:/tmp
+      - misp-gnupg-key:/etc/misp-docker/gnupg:ro
     depends_on:
       configure:
         condition: service_completed_successfully
-      mysql:
+      postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
@@ -177,17 +180,17 @@ services:
     ports:
       - "9191:9191"
     depends_on:
-      mysql:
+      postgres:
         condition: service_healthy
 
-  # -- Migration of an existing MySQL/MariaDB MISP into this stack (one-off):
+  # -- Migration of an existing MySQL/MariaDB MISP into this stack's PostgreSQL (one-off):
   #    podman compose --profile migrate run --rm migrate
   #    Source connection: chart/files/secrets-migrate.env. To copy the
   #    attachments, mount the source's attachments directory at /mnt/source and
   #    set MIGRATE_SOURCE_FILES=/mnt/source, or set MIGRATE_SOURCE_S3_* for the
   #    source's bucket. See docs/migration.md.
   migrate:
-    <<: *misp-image
+    <<: [*misp-image, *misp-scratch]
     profiles: [migrate]
     command: ["python3", "-m", "misp_container.migrate"]
     env_file:
@@ -200,14 +203,12 @@ services:
     user: "1000:1000"
     volumes:
       - misp-attachments:/var/www/MISP/app/attachments
-      - migrate-tmp:/tmp
-      # A copy into postgres runs MISP's updates on the baseline first, with an
-      # app/Config of its own that points at the target
-      - migrate-config:/var/www/MISP/app/Config
-      - migrate-app-tmp:/var/www/MISP/app/tmp
+      # The org logos and custom images of the old app/files go here
+      - misp-files-img-orgs:/var/www/MISP/app/attachments/img/orgs
+      - misp-files-img-custom:/var/www/MISP/app/attachments/img/custom
       # - /srv/old-misp/app/files:/mnt/source:ro
     depends_on:
-      mysql:
+      postgres:
         condition: service_healthy
 
   # -- Tools (podman compose --profile tools run --rm composer-lock) ---------
@@ -218,31 +219,8 @@ services:
       target: composer-lock
     command: ["cat", "/tmp/composer.lock"]
 
-  # -- MariaDB -------------------------------------------------------------
-  mysql:
-    image: docker.io/library/mariadb:11.8.9@sha256:79d59758afc91b89b120b0a8904d637f5a3b3e1c4900f29b740d6d46c72fef68
-    command:
-      - --character-set-server=utf8mb4
-      - --collation-server=utf8mb4_unicode_ci
-      - --max-allowed-packet=1G
-    env_file:
-      - chart/files/secrets-db.env
-      - compose-secrets.env
-    environment:
-      MARIADB_DATABASE: misp
-    volumes:
-      - mysql-data:/var/lib/mysql
-    healthcheck:
-      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-      start_period: 30s
-
-  # -- PostgreSQL (podman compose --profile postgres; set DB_ENGINE=postgres,
-  #    DB_HOST=postgres, DB_PORT=5432 in compose.env) ----------------------------
+  # -- PostgreSQL ------------------------------------------------------------
   postgres:
-    profiles: [postgres]
     image: docker.io/library/postgres:18.6-trixie@sha256:edb0c08dc33befd0262ab3b5cf1c4f3f8cfd8b09e88c05b45adee29d6761ddb6
     env_file:
       - chart/files/secrets-db.env
@@ -284,17 +262,7 @@ volumes:
   misp-files-img-orgs:
   misp-files-img-custom:
   misp-attachments:
-  misp-config:
-  misp-tmp:
-  misp-gnupg:
-  configure-tmp:
-  migrate-tmp:
-  migrate-config:
-  migrate-app-tmp:
-  php-tmp:
-  worker-misp-tmp:
-  worker-tmp:
-  mysql-data:
+  misp-gnupg-key:
   postgres-data:
   caddy-data:
   caddy-config:

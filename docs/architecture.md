@@ -15,7 +15,7 @@ flowchart LR
     cfg[configure Job<br/>sync wave 1] -->|MISP.live = true| web[web Deployment<br/>caddy + php-fpm, wave 2]
     cfg -->|MISP.live = true| worker[worker Deployment<br/>supervisord, wave 2]
     web --> sync[org-sync Job<br/>wave 3]
-    cfg --> db[(MariaDB)]
+    cfg --> db[(PostgreSQL)]
     cfg --> redis[(Redis)]
     web --> db
     web --> redis
@@ -29,9 +29,9 @@ flowchart LR
 ```
 
 The `misp-container` image serves six roles. Every entrypoint first renders `app/Config`
-from this image's MISP, `settings.yaml` and env, on every start, so a MISP upgrade reaches a
-Compose config volume too. It copies the GPG key and server certificates from their Secrets,
-then does its own job:
+from this image's MISP, `settings.yaml` and env into a scratch of its own: an emptyDir, or a
+tmpfs in Compose. It imports the GPG key and copies the server certificates from their
+Secrets, then does its own job:
 
 | Role | Entrypoint | Runs as | Does |
 |------|------------|---------|------|
@@ -50,8 +50,8 @@ never do, so they start in seconds and any number of them can run.
 1. Refuses to run with a placeholder secret, a missing or short `SECURITY_SALT`, or an empty
    `MISP_UUID`.
 2. Takes the database advisory lock `misp_configure` (a concurrent org sync waits on it).
-3. Imports the engine's schema baseline (`MYSQL.sql` or `POSTGRESQL.sql`) on an empty database,
-   then runs `cake Admin runUpdates`.
+3. Imports MISP's PostgreSQL baseline (`POSTGRESQL.sql`) on an empty database, then runs
+   `cake Admin runUpdates`.
 4. Reads every current setting once, compares with `settings.yaml`, and calls `cake` only for
    the differences: env-driven settings are enforced, and defaults are written once.
 5. Creates or updates the admin user, organisation, password and API key; configures GPG and
@@ -62,26 +62,26 @@ The Job is idempotent: run it as often as you like.
 
 ## Startup and footprint
 
-Measured on MISP 2.5.47 with the Compose stack on a podman machine (arm64, two cores):
+Measured on MISP 2.5.50 with the Compose stack on a podman machine (arm64, six cores):
 
 | What | Time |
 |------|------|
-| Configure Job on an empty database: schema import, `runUpdates`, about 150 settings, admin user, GPG | 14 s |
+| Configure Job on an empty database: schema import, `runUpdates`, about 150 settings, admin user, GPG | 16 s |
 | Configure Job on a configured instance | 1 to 3 s |
 | Web or worker pod, from start to serving, once the Job has run | 1 s |
-| Compose stack from `up` to the login page, images present, empty volumes | 40 s, of which MariaDB initialisation is 30 s |
+| Compose stack from `up` to the login page, images present, empty volumes | 42 s |
 
 Idle memory per container, after the first start:
 
 | Container | Idle RSS | Note |
 |-----------|----------|------|
-| web | 36 MB | Grows with the PHP-FPM children under load (`PHP_FCGI_CHILDREN`, `PHP_MEMORY_LIMIT` per request) |
+| web | 45 MB | Grows with the PHP-FPM children under load (`PHP_FCGI_CHILDREN`, `PHP_MEMORY_LIMIT` per request) |
 | worker | 470 MB | 21 PHP worker processes under supervisord (`NUM_WORKERS_*`) |
-| modules | 145 MB | |
-| metrics | 21 MB | |
+| modules | 140 MB | |
+| metrics | 26 MB | |
 | caddy | 11 MB | |
-| MariaDB | 140 MB | Default buffer pool |
-| Redis | 7 MB | `maxmemory` 128 MB |
+| PostgreSQL | 79 MB | Default `shared_buffers` (128 MB); the chart's component sets 512 MB |
+| Redis | 5 MB | `maxmemory` 128 MB |
 
 The chart's pods request 256 MiB for PHP-FPM in a web pod, 512 MiB for a worker pod and
 256 MiB for modules, with limits of 4 GiB, 2 GiB and 1 GiB: the requests cover the idle use above, the

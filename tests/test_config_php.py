@@ -16,7 +16,7 @@ from misp_container.config import (
     render_config_php,
 )
 from misp_container.env import apply_defaults
-from misp_container.init import _generate_database_config, _generate_email_config
+from misp_container.init import _generate_email_config, database_fields, write_database_php
 
 REPO = os.path.join(os.path.dirname(__file__), "..")
 
@@ -142,13 +142,13 @@ class TestAttachmentsDir:
 
 class TestGeneratedPhpEscaping:
     def test_database_password_with_quote(self, tmp_path):
-        env_vars = {"DB_HOST": "db", "DB_USER": "u", "DB_PORT": "3306",
+        env_vars = {"DB_HOST": "db", "DB_USER": "u", "DB_PORT": "5432",
                     "DB_PASSWORD": "pa'ss\\word", "DB_NAME": "misp", "DB_TLS": "false"}
-        with patch.dict(os.environ, env_vars):
-            _generate_database_config(tmp_path)
+        with patch.dict(os.environ, env_vars), patch("misp_container.init.MISP_CONFIG", str(tmp_path)):
+            write_database_php(database_fields())
         content = (tmp_path / "database.php").read_text()
         assert "'password' => 'pa\\'ss\\\\word'," in content
-        assert "'port' => 3306," in content
+        assert "'port' => 5432," in content
 
     def test_email_port_falls_back_when_not_numeric(self, tmp_path):
         env_vars = {"MISP_EMAIL": "m@x", "SMTP_FQDN": "smtp", "SMTP_PORT": ""}

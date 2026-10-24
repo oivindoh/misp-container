@@ -15,9 +15,8 @@
       protocol: TCP
 {{- end }}
 
-{{/* The database: MariaDB or PostgreSQL, whichever the release runs */}}
+{{/* The database: the postgres component; an external PostgreSQL needs a rule of its own */}}
 {{- define "misp.np.db" -}}
-{{ include "misp.np.toPod" (dict "name" "mysql" "port" 3306) }}
 {{ include "misp.np.toPod" (dict "name" "postgres" "port" 5432) }}
 {{- end }}
 
@@ -312,27 +311,6 @@ spec:
     {{- include "misp.np.redis" $ | nindent 4 }}
     # External HTTPS (server reachability + TLS cert checks)
     {{- include "misp.np.httpsOut" $ | nindent 4 }}
-    {{- include "misp.np.dns" $ | nindent 4 }}
----
-# -- MariaDB --
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: mysql
-  labels:
-    {{- include "misp.labels" (dict "root" $ "name" "mysql") | nindent 4 }}
-spec:
-  podSelector:
-    matchLabels:
-      app.kubernetes.io/name: mysql
-  policyTypes: [Ingress, Egress]
-  ingress:
-    {{- include "misp.np.fromPods" (dict "port" 3306 "selectors" (list
-          (dict "app.kubernetes.io/name" "web") (dict "app.kubernetes.io/name" "worker")
-          (dict "app.kubernetes.io/component" "misp-console-task") (dict "app.kubernetes.io/name" "configure")
-          (dict "app.kubernetes.io/name" "org-sync") (dict "app.kubernetes.io/component" "misp-housekeeping")
-          (dict "app.kubernetes.io/name" "metrics"))) | nindent 4 }}
-  egress:
     {{- include "misp.np.dns" $ | nindent 4 }}
 ---
 # -- PostgreSQL --

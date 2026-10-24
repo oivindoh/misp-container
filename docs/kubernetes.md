@@ -40,10 +40,10 @@ env:
   ADMIN_EMAIL: admin@example.com
   MISP_UUID: 06732f0d-87e3-4ede-8767-4e0e9879414c
 secrets:
-  db: {DB_PASSWORD: ..., MYSQL_ROOT_PASSWORD: ...}
+  db: {DB_PASSWORD: ...}
   app: {MISP_REDIS_PASSWORD: ..., GNUPG_PASSWORD: ..., SIMPLEBACKGROUNDJOBS_SUPERVISOR_PASSWORD: ..., SECURITY_SALT: ...}
   admin: {ADMIN_PASSWORD: ..., ADMIN_KEY: ...}
-mariadb: {enabled: true}
+postgres: {enabled: true}
 redis: {enabled: true}
 ingress:
   enabled: true
@@ -65,7 +65,7 @@ below come from them.
 | `affinity` | Affinity for every pod of the release. |
 | `env` | The misp-env ConfigMap: these entries on top of files/base.env. Every MISP pod reads it. |
 | `secrets` | The misp-db, misp-app and misp-admin Secrets: these entries on top of files/secrets-*.env, whose placeholders the configure Job refuses. With create: false the chart renders none of them: supply Secrets with the same names and keys (SOPS, External Secrets, Sealed Secrets). |
-| `database` | DB_USER and DB_PASSWORD from a Secret the release does not make, such as the one a database operator (StackGres, CloudNativePG) keeps: a name and a key for each. They replace the same keys of misp-db in every pod, the mariadb and postgres components included. |
+| `database` | DB_USER and DB_PASSWORD from a Secret the release does not make, such as the one a database operator (StackGres, CloudNativePG) keeps: a name and a key for each. They replace the same keys of misp-db in every pod, the postgres component included. |
 | `configure` | The configure Job: schema, settings, admin user, GPG and auth, on every install and upgrade. |
 | `web` | MISP's web tier: PHP-FPM and the caddy sidecar in each pod. Replicas scale freely. |
 | `worker` | The background workers. Replicas scale freely; the web pods reach supervisord on TCP 9001. |
@@ -82,8 +82,7 @@ Each component is off by default:
 <!-- generated: components -->
 | Component | Adds |
 |---|---|
-| `mariadb` | Single-node MariaDB on a ReadWriteOnce claim. Leave it off for an external database (DB_HOST in env). |
-| `postgres` | Single-node PostgreSQL on a ReadWriteOnce claim, as the alternative to mariadb. It sets DB_ENGINE, DB_HOST and DB_PORT in misp-env. Leave it off for an external PostgreSQL (StackGres and the like). |
+| `postgres` | Single-node PostgreSQL on a ReadWriteOnce claim. Leave it off for an external PostgreSQL (DB_HOST in env; StackGres and the like). |
 | `redis` | Single Redis without persistence: sessions and queued jobs do not survive a restart. Leave it off for an external Redis (MISP_REDIS_HOST in env). |
 | `ingress` | An Ingress to the web Service. The default annotation makes the haproxy ingress replace X-Forwarded-For with the address it sees (docs/kubernetes.md, Client addresses). |
 | `httpRoute` | An HTTPRoute for a Gateway API implementation, in place of the ingress. The Gateway must allow routes from this namespace; set TRUSTED_PROXY_CIDR in env to its proxy pods. |
@@ -123,7 +122,7 @@ workload gets a whole Secret, or only the keys the table names:
 <!-- generated: secrets -->
 | Secret | File | Keys | Read by |
 |---|---|---|---|
-| `misp-db` | `deploy/chart/files/secrets-db.env` | `DB_USER`, `DB_PASSWORD`, `MYSQL_ROOT_PASSWORD` | configure, cronjobs, housekeeping, mariadb (`DB_PASSWORD`, `DB_USER`, `MYSQL_ROOT_PASSWORD`), metrics (`DB_PASSWORD`, `DB_USER`), migrate, org-sync, postgres (`DB_PASSWORD`, `DB_USER`), userValidity, web, worker |
+| `misp-db` | `deploy/chart/files/secrets-db.env` | `DB_USER`, `DB_PASSWORD` | configure, cronjobs, housekeeping, metrics (`DB_PASSWORD`, `DB_USER`), migrate, org-sync, postgres (`DB_PASSWORD`, `DB_USER`), userValidity, web, worker |
 | `misp-app` | `deploy/chart/files/secrets-app.env` | `MISP_REDIS_PASSWORD`, `GNUPG_PASSWORD`, `SIMPLEBACKGROUNDJOBS_SUPERVISOR_PASSWORD`, `SECURITY_ENCRYPTION_KEY`, `SECURITY_SALT` | configure, cronjobs, metrics (`MISP_REDIS_PASSWORD`), migrate, redis (`MISP_REDIS_PASSWORD`), userValidity, web, worker |
 | `misp-admin` | `deploy/chart/files/secrets-admin.env` | `ADMIN_PASSWORD`, `ADMIN_KEY` | configure, cronjobs (`ADMIN_KEY`), misp-test (`ADMIN_KEY`), org-sync |
 | `misp-migrate` | `deploy/chart/files/secrets-migrate.env` | `MIGRATE_SOURCE_HOST`, `MIGRATE_SOURCE_USER`, `MIGRATE_SOURCE_PASSWORD`, `MIGRATE_FORCE`, `MIGRATE_REPLACE_COPY`, `MIGRATE_SOURCE_FILES`, `MIGRATE_SOURCE_S3_BUCKET`, `MIGRATE_SOURCE_S3_ENDPOINT`, `MIGRATE_SOURCE_S3_REGION`, `MIGRATE_SOURCE_S3_ACCESS_KEY`, `MIGRATE_SOURCE_S3_SECRET_KEY` | migrate |
@@ -147,17 +146,13 @@ database:
   user: {name: misp-pg, key: username}
   password: {name: misp-pg, key: password}
 env:
-  DB_ENGINE: postgres
   DB_HOST: misp-pg
-  DB_PORT: "5432"
 ```
 
 Every pod then reads `DB_USER` and `DB_PASSWORD` from that Secret, and the same keys of
 `misp-db` go unused. The Secret must be in the release's namespace. Set `database.user` or
-`database.password` alone to take only that one from it. The configure Job refuses the
-placeholder of `MYSQL_ROOT_PASSWORD` in `misp-db` also without the mariadb component, so set
-`secrets.db.MYSQL_ROOT_PASSWORD` to any other value. A change in the Secret does not roll the
-pods: restart them.
+`database.password` alone to take only that one from it. A change in the Secret does not roll
+the pods: restart them.
 
 These Secrets are optional and copied into every pod at start:
 
@@ -175,7 +170,7 @@ gpg --armor --export-secret-keys misp@example.com > private.asc
 
 | Resource | Default | Notes |
 |----------|---------|-------|
-| MariaDB or PostgreSQL | StatefulSet, 20Gi ReadWriteOnce claim (`mariadb` or `postgres` component) | `mariadb.size` and `mariadb.storageClass`, or the same under `postgres` |
+| PostgreSQL | StatefulSet, 20Gi ReadWriteOnce claim (`postgres` component) | `postgres.size` and `postgres.storageClass` |
 | Attachments, org logos, custom images | claim `attachments`, 20Gi ReadWriteMany | Web and worker pods share it, and `helm uninstall` leaves it. For S3, set `PLUGIN_S3_BUCKET_NAME` in `env` and `attachments.claim: false` |
 | Redis | No persistence (`redis` component) | Sessions and queued jobs are lost when Redis restarts |
 | Everything else | `emptyDir` per pod | `app/Config`, `app/tmp`, `.gnupg`, `app/files/{scripts/tmp,certs,terms}` |

@@ -150,7 +150,6 @@
         "storageClass": {"type": "string"}
       }
     },
-    "mariadb": {"$ref": "#/definitions/database"},
     "postgres": {"$ref": "#/definitions/database"},
     "redis": {
       "type": "object",

@@ -44,8 +44,8 @@ open http://localhost:8080
 Default login: `admin@admin.test` / `ChangeMe-Str0ng!Pass#2026`.
 
 `deploy/docker-compose.yml` is the single-host development stack: the same images and
-entrypoints, named volumes instead of claims, `AUTOCONF_GPG=true` (a key generated on first
-start), and no CronJobs: run periodic tasks on demand
+entrypoints, named volumes instead of claims, a GPG key that the configure container generates
+on first start, and no CronJobs: run periodic tasks on demand
 (see [Periodic tasks](docs/kubernetes.md#periodic-tasks)). Values come from
 `deploy/chart/files/*.env`, the chart's defaults, with `deploy/compose.env` and
 `deploy/compose-secrets.env` on top.

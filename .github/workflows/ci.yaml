@@ -89,16 +89,11 @@ jobs:
           suites='[
             {"name": "integration", "id": "integration", "timeout": 15,
              "tests": "tests/e2e/test_upstream.py tests/e2e/test_integration.py"},
-            {"name": "integration-postgres", "id": "integration-postgres", "timeout": 15,
-             "tests": "tests/e2e/test_integration.py --db-engine postgres"},
             {"name": "hub-spoke", "id": "sync", "timeout": 15, "tests": "tests/e2e/test_sync.py"},
             {"name": "migration", "id": "migration", "timeout": 20, "tests": "tests/e2e/test_migration.py"}]'
           if [ -f tests/e2e/test_upgrade.py ]; then
             suites=$(jq -c '. + [
-              {"name": "upgrade (mariadb)", "id": "upgrade-mariadb", "timeout": 30,
-               "tests": "tests/e2e/test_upgrade.py --db-engine mariadb"},
-              {"name": "upgrade (postgres)", "id": "upgrade-postgres", "timeout": 30,
-               "tests": "tests/e2e/test_upgrade.py --db-engine postgres"}]' <<<"$suites")
+              {"name": "upgrade", "id": "upgrade", "timeout": 30, "tests": "tests/e2e/test_upgrade.py"}]' <<<"$suites")
           fi
           {
             echo "build=$build"
@@ -237,7 +232,7 @@ jobs:
             ${{ runner.temp }}/*-compose-logs.txt
           if-no-files-found: ignore
 
-  # Installs the Helm chart with the mariadb and redis components on a kind
+  # Installs the Helm chart with the postgres and redis components on a kind
   # cluster, runs the smoke test, upgrades the release and runs it again
   kind:
     needs: [gate, build]
@@ -245,10 +240,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    strategy:
-      fail-fast: false
-      matrix:
-        database: [mariadb, postgres]
     env:
       MISP_IMAGE_TAG: ci
     steps:
@@ -270,9 +261,9 @@ jobs:
           pip install --quiet uv
           uv sync
 
-      - name: Kubernetes test on kind (${{ matrix.database }})
+      - name: Kubernetes test on kind
         timeout-minutes: 25
-        run: tests/run-kind-test.sh ${{ matrix.database == 'postgres' && '--postgres' || '' }}
+        run: tests/run-kind-test.sh
 
   scan:
     needs: [gate, build]

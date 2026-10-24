@@ -18,7 +18,6 @@ import urllib.request
 from functools import lru_cache
 
 from . import WORKER_QUEUES, db
-from .env import env
 from .log import get as getlog
 
 log = getlog("metrics")
@@ -234,30 +233,20 @@ def _collect_db_metrics() -> tuple[str, int]:
             # tables (attributes, shadow_attributes) to avoid full index scans.
             # Small tables (orgs, users, tags) use exact COUNT(*).
             try:
-                if db.is_postgres():
-                    cur.execute(
-                        'SELECT relname AS "TABLE_NAME", GREATEST(n_live_tup, 0) AS "TABLE_ROWS" '
-                        "FROM pg_stat_user_tables "
-                        "WHERE relname IN ('events', 'attributes', 'shadow_attributes')"
-                    )
-                else:
-                    cur.execute(
-                        "SELECT TABLE_NAME, TABLE_ROWS FROM information_schema.TABLES "
-                        "WHERE TABLE_SCHEMA = %s "
-                        "AND TABLE_NAME IN ('events', 'attributes', 'shadow_attributes')",
-                        (env("DB_NAME"),),
-                    )
-                approx = {r["TABLE_NAME"]: int(r["TABLE_ROWS"] or 0) for r in cur.fetchall()}
+                cur.execute(
+                    "SELECT relname, GREATEST(n_live_tup, 0) AS live_rows FROM pg_stat_user_tables "
+                    "WHERE relname IN ('events', 'attributes', 'shadow_attributes')"
+                )
+                approx = {r["relname"]: int(r["live_rows"] or 0) for r in cur.fetchall()}
 
                 # Small tables: exact counts are cheap
-                t, f = db.bool_lit(True), db.bool_lit(False)
                 cur.execute(
-                    f"""
+                    """
                     SELECT
                         (SELECT COUNT(*) FROM organisations) AS orgs,
-                        (SELECT COUNT(*) FROM organisations WHERE local = {t}) AS orgs_local,
-                        (SELECT COUNT(*) FROM users WHERE disabled = {f}) AS users_active,
-                        (SELECT COUNT(*) FROM users WHERE disabled = {t}) AS users_disabled,
+                        (SELECT COUNT(*) FROM organisations WHERE local = TRUE) AS orgs_local,
+                        (SELECT COUNT(*) FROM users WHERE disabled = FALSE) AS users_active,
+                        (SELECT COUNT(*) FROM users WHERE disabled = TRUE) AS users_disabled,
                         (SELECT COUNT(*) FROM sharing_groups) AS sharing_groups,
                         (SELECT COUNT(*) FROM tags) AS tags
                     """
@@ -334,12 +323,9 @@ def _collect_db_metrics() -> tuple[str, int]:
                 # All jobs in one query -- LEFT JOIN to servers for pull/push,
                 # split into server vs non-server in Python. The server id is the
                 # tail of job_input ("Server: 3"); a tail that is no number ("all")
-                # joins nothing: MySQL casts it to 0, PostgreSQL would refuse it.
-                if db.is_postgres():
-                    tail = "regexp_replace(j.job_input, '^.*: ', '')"
-                    server_id_expr = f"CASE WHEN {tail} ~ '^[0-9]+$' THEN {tail}::bigint END"
-                else:
-                    server_id_expr = "CAST(SUBSTRING_INDEX(j.job_input, ': ', -1) AS UNSIGNED)"
+                # joins nothing.
+                tail = "regexp_replace(j.job_input, '^.*: ', '')"
+                server_id_expr = f"CASE WHEN {tail} ~ '^[0-9]+$' THEN {tail}::bigint END"
                 cur.execute(
                     f"""
                     SELECT j.worker, j.job_type, j.status,
@@ -409,7 +395,7 @@ def _collect_db_metrics() -> tuple[str, int]:
             try:
                 cur.execute(
                     "SELECT type, COUNT(*) AS cnt FROM scheduled_tasks "
-                    f"WHERE enabled = {db.bool_lit(True)} GROUP BY type"
+                    "WHERE enabled = TRUE GROUP BY type"
                 )
                 rows = cur.fetchall()
                 blocks.append(
@@ -424,51 +410,26 @@ def _collect_db_metrics() -> tuple[str, int]:
                 log.warning("scheduled tasks: %s", e)
                 errors += 1
 
-            # Sync container log (our custom table)
+            # Runs of the container jobs, from their system_settings rows (db.record_run)
             try:
-                cur.execute(
-                    "SELECT operation, status, "
-                    "  COUNT(*) AS runs, "
-                    "  MAX(timestamp) AS last_run, "
-                    "  AVG(duration_seconds) AS avg_duration "
-                    "FROM misp_container_sync_log "
-                    f"WHERE timestamp > {db.ago(24, 'HOUR')} "
-                    "GROUP BY operation, status"
-                )
-                rows = cur.fetchall()
-                if rows:
-                    run_samples = []
-                    for r in rows:
-                        lbl = {"operation": r["operation"], "status": r["status"]}
-                        run_samples.append((lbl, r["runs"]))
-                    blocks.append(
-                        _metric(
-                            "misp_sync_runs_24h",
-                            "Container runs (org-sync, configure) in the last 24 hours by outcome",
-                            "gauge",
-                            run_samples,
-                        )
-                    )
-
-                # Last successful run per operation (org-sync, configure)
-                cur.execute(
-                    f"SELECT operation, {db.epoch('MAX(timestamp)')} AS ts "
-                    "FROM misp_container_sync_log WHERE status = 'success' GROUP BY operation"
-                )
-                last = [({"operation": r["operation"]}, int(r["ts"])) for r in cur.fetchall() if r.get("ts")]
+                cur.execute("SELECT setting, value FROM system_settings WHERE setting LIKE %s",
+                            (db.RUNS_PREFIX + "%",))
+                records = db.parse_run_records(cur.fetchall())
+                runs = [({"operation": op, "status": status}, int(r.get(status, 0)))
+                        for op, r in sorted(records.items()) for status in ("success", "error")]
+                last = [({"operation": op}, int(r["last_success"]))
+                        for op, r in sorted(records.items()) if r.get("last_success")]
+                if runs:
+                    blocks.append(_metric("misp_container_job_runs_total",
+                                          "Runs of the container jobs (configure, org-sync, migrate) by outcome",
+                                          "counter", runs))
                 if last:
-                    blocks.append(
-                        _metric(
-                            "misp_sync_last_success_timestamp_seconds",
-                            "Unix timestamp of the last successful run per operation",
-                            "gauge",
-                            last,
-                        )
-                    )
-            except Exception:
-                # The table exists once the org sync, the configure step or the
-                # migrate Job has run
-                pass
+                    blocks.append(_metric("misp_container_job_last_success_timestamp_seconds",
+                                          "Unix timestamp of the last successful run per container job",
+                                          "gauge", last))
+            except Exception as e:
+                log.warning("job runs: %s", e)
+                errors += 1
 
     except Exception as e:
         log.warning("error collecting DB metrics: %s", e)
@@ -508,7 +469,7 @@ def _check_server_auth(url: str, authkey: str, timeout: int = 5) -> bool:
     as reachable, including 401 and 403.
     """
     if isinstance(authkey, bytes):
-        # pymysql returns the column as bytes; latin-1 keeps the marker bytes intact
+        # The column is bytea; latin-1 keeps the marker bytes intact
         authkey = authkey.decode("latin-1")
     encrypted = authkey.startswith(ENCRYPTED_MAGIC)
     headers = {"Accept": "application/json"}
@@ -663,67 +624,3 @@ def collect_all() -> str:
 
     parts = [p for p in (db_output, queue_output, net_output, meta) if p]
     return "\n\n".join(parts) + "\n"
-
-
-def init_sync_log_table() -> None:
-    """Create the sync log table if it doesn't exist.
-
-    Called by the sync entrypoint before logging results.
-    """
-    conn = _connect()
-    try:
-        with db._cursor(conn) as cur:
-            if db.is_postgres():
-                ddl = """
-                CREATE TABLE IF NOT EXISTS misp_container_sync_log (
-                    id SERIAL PRIMARY KEY,
-                    timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    operation VARCHAR(64) NOT NULL,
-                    status VARCHAR(16) NOT NULL,
-                    summary TEXT,
-                    duration_seconds FLOAT,
-                    error_message TEXT
-                )
-                """
-            else:
-                ddl = """
-                CREATE TABLE IF NOT EXISTS misp_container_sync_log (
-                    id INT AUTO_INCREMENT PRIMARY KEY,
-                    timestamp DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    operation VARCHAR(64) NOT NULL,
-                    status VARCHAR(16) NOT NULL,
-                    summary TEXT,
-                    duration_seconds FLOAT,
-                    error_message TEXT
-                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-                """
-            cur.execute(ddl)
-            # Prune entries older than 30 days. The migrate Job's rows stay: it reads
-            # them to refuse dropping a copy it made (migrate.py)
-            cur.execute(f"DELETE FROM misp_container_sync_log WHERE timestamp < {db.ago(30, 'DAY')} "
-                        "AND operation <> 'migrate'")
-        conn.commit()
-    finally:
-        conn.close()
-
-
-def log_sync_result(
-    operation: str,
-    status: str,
-    summary: str = "",
-    duration_seconds: float = 0,
-    error_message: str = "",
-) -> None:
-    """Write a sync operation result to the log table."""
-    conn = _connect()
-    try:
-        with db._cursor(conn) as cur:
-            cur.execute(
-                "INSERT INTO misp_container_sync_log "
-                "(operation, status, summary, duration_seconds, error_message) "
-                "VALUES (%s, %s, %s, %s, %s)",
-                (operation, status, summary, duration_seconds, error_message),
-            )
-        conn.commit()
-    finally:
-        conn.close()
