@@ -108,23 +108,10 @@ def library() -> str:
 
 
 def periodic() -> str:
-    from misp_container import task
-    rows = [(f"`{name}`", f"POST `{path}`") for name, path in task.ENDPOINTS.items()]
-    rows += [(f"`{name}`", f"POST `{path}` for every server with `{flag}` on") for name, (flag, path) in task.SERVER_TASKS.items()]
-    rows += [(f"`{name}`", "lists the items, then acts on each") for name in task.INDEX_TASKS]
-    rows += [(f"`{task.WORKFLOW_TASK}`", "runs one workflow by ID")]
-    rows += [(f"`{name}`", f"`cake {' '.join(args)}` in the pod") for name, args in task.CAKE_TASKS.items()]
-    jobs = []
-    for template, doc in chart.render(every_component=True):
-        if doc["kind"] == "CronJob":
-            command = " ".join(chart.pod_spec(doc)["containers"][0]["args"][-3:])
-            jobs.append((f"`{doc['metadata']['name']}`", f"`{doc['spec']['schedule']}`", f"`{command}`",
-                         f"`{chart.template_component(template)}`"))
+    import generate_docs
     return ("## Periodic work\n\nMISP's own scheduler never runs. The task runner "
-            "(`python3 -m misp_container.task <task>`) does each piece of periodic work:\n\n"
-            + table(("Task", "Does"), rows)
-            + "\n\nThe chart's components run periodic work as CronJobs, with their default schedules:\n\n"
-            + table(("CronJob", "Schedule", "Runs", "Component"), jobs))
+            "(`python3 -m misp_container.task <task>`) does each piece of periodic work, from the CronJobs of the "
+            "`cronjobs` component (docs/kubernetes.md, Periodic tasks):\n\n" + generate_docs.periodic_tasks())
 
 
 def kubernetes() -> str:

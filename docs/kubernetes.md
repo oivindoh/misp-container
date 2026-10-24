@@ -31,7 +31,7 @@ helm test misp --namespace misp --logs
 ```
 
 The test pod loads the login page through the `web` Service. With `ADMIN_KEY` set, it also
-checks through the API that `MISP.live` is true and that a worker runs every queue.
+checks through the API that `MISP.live` is true.
 
 ```yaml
 # values.yaml

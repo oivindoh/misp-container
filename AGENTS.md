@@ -73,47 +73,26 @@ The roles, the task runner and the Jobs share this package; it is `/opt/misp_con
 
 ## Periodic work
 
-MISP's own scheduler never runs. The task runner (`python3 -m misp_container.task <task>`) does each piece of periodic work:
+MISP's own scheduler never runs. The task runner (`python3 -m misp_container.task <task>`) does each piece of periodic work, from the CronJobs of the `cronjobs` component (docs/kubernetes.md, Periodic tasks):
 
-| Task | Does |
-|---|---|
-| `cache-feeds` | POST `/feeds/cacheFeeds/all` |
-| `fetch-feeds` | POST `/feeds/fetchFromAllFeeds` |
-| `cache-servers` | POST `/servers/cache/all` |
-| `update-galaxies` | POST `/galaxies/update` |
-| `update-taxonomies` | POST `/taxonomies/update` |
-| `update-warninglists` | POST `/warninglists/update` |
-| `update-noticelists` | POST `/noticelists/update` |
-| `update-object-templates` | POST `/objectTemplates/update` |
-| `pull-servers` | POST `/servers/pull/{id}` for every server with `pull` on |
-| `push-servers` | POST `/servers/push/{id}` for every server with `push` on |
-| `push-taxii` | lists the items, then acts on each |
-| `sharing-group-blueprints` | lists the items, then acts on each |
-| `workflow` | runs one workflow by ID |
-| `periodic-summary` | `cake Server sendPeriodicSummaryToUsers` in the pod |
-| `check-user-validity` | `cake Admin checkUserValidity` in the pod |
-| `block-invalid-users` | `cake Admin blockInvalidUsers` in the pod |
-
-The chart's components run periodic work as CronJobs, with their default schedules:
-
-| CronJob | Schedule | Runs | Component |
+| Task | Does | Kind | CronJob schedule (component) |
 |---|---|---|---|
-| `housekeeping-audit-logs` | `10 3 * * *` | `-m misp_container.housekeeping audit_logs` | `housekeeping` |
-| `housekeeping-jobs` | `0 2 * * *` | `-m misp_container.housekeeping jobs` | `housekeeping` |
-| `housekeeping-logs` | `0 3 * * *` | `-m misp_container.housekeeping logs` | `housekeeping` |
-| `cache-feeds` | `20 2 * * *` | `-m misp_container.task cache-feeds` | `cronjobs` |
-| `cache-servers` | `40 2 * * *` | `-m misp_container.task cache-servers` | `cronjobs` |
-| `fetch-feeds` | `30 2 * * *` | `-m misp_container.task fetch-feeds` | `cronjobs` |
-| `periodic-summary` | `0 6 * * *` | `-m misp_container.task periodic-summary` | `cronjobs` |
-| `pull-servers` | `*/5 * * * *` | `-m misp_container.task pull-servers` | `cronjobs` |
-| `push-servers` | `*/15 * * * *` | `-m misp_container.task push-servers` | `cronjobs` |
-| `push-taxii` | `7 * * * *` | `-m misp_container.task push-taxii` | `cronjobs` |
-| `sharing-group-blueprints` | `37 * * * *` | `-m misp_container.task sharing-group-blueprints` | `cronjobs` |
-| `update-galaxies` | `0 3 * * *` | `-m misp_container.task update-galaxies` | `cronjobs` |
-| `update-noticelists` | `30 3 * * *` | `-m misp_container.task update-noticelists` | `cronjobs` |
-| `update-object-templates` | `40 3 * * *` | `-m misp_container.task update-object-templates` | `cronjobs` |
-| `update-taxonomies` | `10 3 * * *` | `-m misp_container.task update-taxonomies` | `cronjobs` |
-| `update-warninglists` | `20 3 * * *` | `-m misp_container.task update-warninglists` | `cronjobs` |
+| `cache-feeds` | Cache every feed | API | `20 2 * * *` (`cronjobs`) |
+| `fetch-feeds` | Fetch every enabled feed | API | `30 2 * * *` (`cronjobs`) |
+| `cache-servers` | Cache the events of every server | API | `40 2 * * *` (`cronjobs`) |
+| `update-galaxies` | Update MISP's bundled galaxies | API | `0 3 * * *` (`cronjobs`) |
+| `update-taxonomies` | Update MISP's bundled taxonomies | API | `10 3 * * *` (`cronjobs`) |
+| `update-warninglists` | Update MISP's bundled warninglists | API | `20 3 * * *` (`cronjobs`) |
+| `update-noticelists` | Update MISP's bundled noticelists | API | `30 3 * * *` (`cronjobs`) |
+| `update-object-templates` | Update MISP's bundled object templates | API | `40 3 * * *` (`cronjobs`) |
+| `pull-servers` | Pull from every server with pull enabled | API | `*/5 * * * *` (`cronjobs`) |
+| `push-servers` | Push to every server with push enabled | API | `*/15 * * * *` (`cronjobs`) |
+| `push-taxii` | Push to every enabled TAXII server | API | `7 * * * *` (`cronjobs`) |
+| `sharing-group-blueprints` | Apply the sharing group blueprints | API | `37 * * * *` (`cronjobs`) |
+| `workflow` | Run one ad-hoc workflow, by its ID | API | none |
+| `periodic-summary` | Send the daily, weekly (Mondays) and monthly (the first) summaries users subscribed to | console | `0 6 * * *` (`cronjobs`) |
+| `check-user-validity` | Report every account as valid or invalid at the OIDC or LDAP provider | console | none |
+| `block-invalid-users` | Disable the accounts the OIDC or LDAP provider no longer backs | console | none |
 
 ## Kubernetes: the Helm chart in `deploy/chart/`
 
