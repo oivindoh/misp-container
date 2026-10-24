@@ -1,6 +1,6 @@
 -- The content of the migration suite's MISP 2.5 source (tests/e2e/test_migration.py),
 -- loaded after MISP's own INSTALL/MYSQL.sql of 2.5. The admin org, the admin email and
--- MISP.uuid are those of tests/test-compose.env, so the configure step on the copy
+-- MISP.uuid are those of tests/k3s/values.yaml, so the configure step on the copy
 -- finds them and adds no rows. The authkeys are the suite's ADMIN_KEY and INBOUND_KEY,
 -- hashed as MISP 2.5 stores them. The suite writes the attachment's file as 1/1.
 

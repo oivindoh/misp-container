@@ -1,13 +1,11 @@
 """Per-pod preparation: tmp directories, app/Config rendering, GPG key import.
 
 Every entrypoint (configure, web, worker) calls prepare() at start. It renders
-every file of app/Config from the image defaults, settings.yaml and env: an
-emptyDir per pod in Kubernetes, a tmpfs per container in Compose. app/files
-ships in the image; only app/files/{scripts/tmp,certs,terms,img/orgs,img/custom}
-are volumes.
+every file of app/Config from the image defaults, settings.yaml and env, into
+an emptyDir of the pod. app/files ships in the image; only
+app/files/{scripts/tmp,certs,terms,img/orgs,img/custom} are volumes.
 """
 
-import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -134,13 +132,10 @@ def prepare_config():
 
 
 def populate_gnupg():
-    """Import the instance GPG key, and generate it first where its directory is writable.
+    """Import the instance GPG key, when the misp-gnupg Secret holds one.
 
-    The key is an armoured secret key export at GNUPG_KEY_FILE: the read-only
-    misp-gnupg Secret in Kubernetes. In Compose the configure container mounts
-    the misp-gnupg-key volume writable and generates the key there once; web
-    and worker mount it read-only. Every pod imports the key into a homedir of
-    its own, so all replicas sign with the same key.
+    The key is an armoured secret key export at GNUPG_KEY_FILE. Every pod
+    imports it into a homedir of its own, so all replicas sign with the same key.
     """
     key_file = Path(GNUPG_KEY_FILE)
     gpg_dir = Path(env("GNUPG_HOMEDIR"))
@@ -151,8 +146,6 @@ def populate_gnupg():
         pass  # a mount point the pod does not own: gpg warns and works
     gpg = [env("GNUPG_BINARY", "gpg"), "--batch", "--homedir", str(gpg_dir)]
 
-    if not key_file.is_file() and os.access(key_file.parent, os.W_OK):
-        generate_gnupg_key(gpg, key_file)
     if not key_file.is_file():
         return
 
@@ -165,23 +158,6 @@ def populate_gnupg():
         trust = "".join(f"{fpr}:6:\n" for fpr in sorted(fingerprints))
         subprocess.run(gpg + ["--import-ownertrust"], input=trust, text=True, check=True)
     log.info("GPG key imported (%d fingerprint(s))", len(fingerprints))
-
-
-def generate_gnupg_key(gpg: list[str], key_file: Path) -> None:
-    """Generate the instance key in the homedir and export it to key_file."""
-    email = env("MISP_EMAIL", env("ADMIN_EMAIL"))
-    passphrase = env("GNUPG_PASSWORD")
-    log.info("generating the instance GPG key for %s into %s", email, key_file)
-    # The parameters carry the passphrase, so they go over stdin, never a file
-    params = (f"Key-Type: RSA\nKey-Length: 3072\nName-Real: MISP Admin\nName-Email: {email}\n"
-              f"Expire-Date: 0\nPassphrase: {passphrase}\n%commit\n")
-    subprocess.run(gpg + ["--gen-key"], input=params, text=True, check=True)
-    exported = subprocess.run(gpg + ["--pinentry-mode", "loopback", "--passphrase-fd", "0", "--armor",
-                                     "--export-secret-keys", email],
-                              input=passphrase, capture_output=True, text=True, check=True).stdout
-    partial = key_file.with_name(key_file.name + ".new")
-    partial.write_text(exported)
-    partial.replace(key_file)
 
 
 def _fingerprints(command: list[str]) -> set[str]:

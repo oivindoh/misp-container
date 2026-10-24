@@ -924,7 +924,7 @@ def wait_for_login_page(base_url: str, timeout: int = 360) -> None:
 def main(argv: list[str]) -> None:
     """Wait for MISP, then apply orgs.yaml (or the file argv names) through the API.
 
-    Runs as the org-sync Job, the sync service in Compose, or by hand:
+    Runs as the org-sync Job, or by hand:
     python3 -m misp_container.sync [/path/to/orgs.yaml]
     """
     setup_logging("sync")

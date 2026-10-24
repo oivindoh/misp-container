@@ -10,9 +10,9 @@ the chart: v3.0.0-wip.1, then v3.0.0-wip.2. Once CORE_TAG is a MISP release
 tag, the git tag and the images carry that MISP version, with -rN from the
 second release of it on, and the chart has its own SemVer: hotfix raises the
 patch, normal the minor, breaking the major; the first after the pre-releases
-is their version without the suffix. The script sets the chart version,
-appVersion and the image tag of the Compose files, shows the plan, and commits
-and tags once you confirm. Run it on master, in step with origin.
+is their version without the suffix. The script sets the chart version and
+appVersion, shows the plan, and commits and tags once you confirm. Run it on
+master, in step with origin.
 """
 
 from __future__ import annotations
@@ -26,12 +26,10 @@ import yaml
 
 REPO = Path(__file__).resolve().parents[1]
 CHART_YAML = REPO / "deploy/chart/Chart.yaml"
-COMPOSE_FILES = [REPO / "deploy/docker-compose.yml", *sorted((REPO / "tests").glob("docker-compose*.yml"))]
 # The part of the chart version each kind raises: major, minor, patch
 KINDS = {"breaking": 0, "normal": 1, "hotfix": 2}
 TAG = re.compile(r"^v(\d+)\.(\d+)\.(\d+)(?:-r(\d+)|-wip\.(\d+))?$")
 WIP = re.compile(r"^(\d+)\.(\d+)_wip$")
-IMAGE_DEFAULT = re.compile(r"(ghcr\.io/oivindoh/misp-container(?:-[a-z]+)?):\$\{MISP_IMAGE_TAG:-[^}]+\}")
 
 
 def tag_key(tag: str) -> tuple[int, int, int, int, int]:
@@ -84,9 +82,6 @@ def set_chart(text: str, version: str, app_version: str) -> str:
     return re.sub(r"^appVersion: .*$", f'appVersion: "{app_version}"', text, count=1, flags=re.M)
 
 
-def set_image_default(text: str, image_tag: str) -> str:
-    return IMAGE_DEFAULT.sub(lambda m: f"{m.group(1)}:${{MISP_IMAGE_TAG:-{image_tag}}}", text)
-
 
 def git(*args: str) -> str:
     return subprocess.run(["git", *args], cwd=REPO, check=True, capture_output=True, text=True).stdout.strip()
@@ -137,8 +132,6 @@ def main(argv: list[str]) -> int:
         chart_version = next_chart_version(previous_chart, current_chart, kind)
 
     CHART_YAML.write_text(set_chart(CHART_YAML.read_text(), chart_version, image_tag))
-    for path in COMPOSE_FILES:
-        path.write_text(set_image_default(path.read_text(), image_tag))
 
     print(f"Release kind:   {kind}")
     print(f"Previous:       {previous or 'none'}, chart {previous_chart or 'none'}")
@@ -146,15 +139,19 @@ def main(argv: list[str]) -> int:
     print(f"Image tag:      {image_tag} (MISP {misp})")
     print(f"Chart version:  {chart_version}")
     print()
-    print(git("diff", "--stat"))
-    changed = [str(CHART_YAML), *map(str, COMPOSE_FILES)]
-    if input(f"\nCommit and tag {tag}? [y/N] ").strip().lower() != "y":
-        git("checkout", "--", *changed)
-        print("Aborted; the files are as they were.")
+    changed = [str(CHART_YAML)]
+    # Chart.yaml can name the release already, as for the first one; then HEAD takes the tag
+    pending = bool(git("status", "--porcelain", "--", *changed))
+    print(git("diff", "--stat") if pending else "Chart.yaml already names this release.")
+    if input(f"\n{'Commit and tag' if pending else 'Tag HEAD as'} {tag}? [y/N] ").strip().lower() != "y":
+        if pending:
+            git("checkout", "--", *changed)
+        print("Aborted; Chart.yaml is as it was.")
         return 1
 
-    git("add", *changed)
-    git("commit", "--quiet", "-m", f"release {tag}, chart {chart_version}")
+    if pending:
+        git("add", *changed)
+        git("commit", "--quiet", "-m", f"release {tag}, chart {chart_version}")
     git("tag", tag)
     print(f"\nDone. To publish:\n  git push --atomic origin master {tag}")
     return 0

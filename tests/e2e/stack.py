@@ -1,49 +1,73 @@
-"""A Compose stack under test: compose calls, container exec, SQL, HTTP and waits.
+"""A release of the chart under test: helm, pod exec, SQL, HTTP and waits.
 
-COMPOSE_CMD selects the compose runner (default "podman compose") and
-CONTAINER_CMD the engine behind it (default "podman"). The engine runs exec
-and logs directly: it costs a third of a compose call, which parses every
-compose file each time.
-
-podman mounts a writable tmpfs on /tmp, /run and /var/tmp of a read-only
-container; docker and Kubernetes (readOnlyRootFilesystem) do not. Under
-podman-compose the stack turns that off, so a local run fails on the same
-writes as CI and a cluster.
+A Release lives in one namespace of a Cluster (cluster.py) and takes the
+values of tests/k3s/values.yaml, then the suite's own. The host reaches its web
+Service through a NodePort the cluster publishes. One-off commands, such as an
+org sync, a migration or a task, run in the toolbox: a pod from the pod
+template of the release's configure Job, so with its image, env and mounts.
 """
 
 from __future__ import annotations
 
 import json
-import os
 import re
 import shlex
 import subprocess
+import tempfile
 import time
 import urllib.error
 import urllib.request
 from pathlib import Path
 
-REPO = Path(__file__).resolve().parents[2]
-DEPLOY = REPO / "deploy"
+import yaml
+
+import manifests
+from cluster import CHART, IMAGES, REPO, Cluster, image_engine, image_tag, scratch_dir
+
 TESTS = REPO / "tests"
-# podman-compose prints the ID of every container it creates or starts
-CONTAINER_ID_LINE = re.compile(r"^[0-9a-f]{64}$")
-PODMAN_STRICT_READ_ONLY = "--podman-run-args=--read-only-tmpfs=false"
+K3S = TESTS / "k3s"
+VALUES = K3S / "values.yaml"
+# A name the suites use for a workload of the chart: (the object kubectl execs into, the container).
+# Any other name is a Deployment with a container of that name, such as a test service
+WORKLOADS = {
+    "web": ("deploy/web", "php-fpm"),
+    "caddy": ("deploy/web", "caddy"),
+    "worker": ("deploy/worker", "worker"),
+    "metrics": ("deploy/metrics", "metrics"),
+    "modules": ("deploy/modules", "modules"),
+    "postgres": ("statefulset/postgres", "postgres"),
+    "redis": ("deploy/redis", "redis"),
+    "toolbox": ("pod/toolbox", "toolbox"),
+}
+LABELS = {"caddy": "web"}
 
 
-def scratch_dir() -> Path:
-    """The physical TMPDIR: a podman machine on macOS shares /private, not the /tmp symlink."""
-    return Path(os.environ.get("TMPDIR", "/tmp")).resolve()
+def values_file(path: Path) -> dict:
+    return yaml.safe_load(path.read_text()) or {}
 
 
-def env_file(path: Path) -> dict[str, str]:
-    """KEY=VALUE lines of an env file; the last value of a key wins."""
-    values = {}
-    for line in path.read_text().splitlines():
-        if "=" in line and not line.lstrip().startswith("#"):
-            key, _, value = line.partition("=")
-            values[key.strip()] = value.strip()
-    return values
+def merge(base: dict, extra: dict) -> dict:
+    """extra over base, map by map, as helm merges values files."""
+    merged = dict(base)
+    for key, value in extra.items():
+        merged[key] = merge(merged[key], value) if isinstance(value, dict) and isinstance(merged.get(key), dict) \
+            else value
+    return merged
+
+
+def gnupg_key(email: str, passphrase: str) -> dict:
+    """The Secret misp-gnupg with a new instance key, made by gpg in the image under test."""
+    script = ('export GNUPGHOME="$(mktemp -d)" && '
+              'gpg --batch --pinentry-mode loopback --passphrase "$P" '
+              '--quick-generate-key "MISP Admin <$E>" rsa3072 sign never && '
+              'gpg --batch --pinentry-mode loopback --passphrase "$P" --armor --export-secret-keys "$E"')
+    result = subprocess.run([*image_engine(), "run", "--rm", "-e", f"P={passphrase}", "-e", f"E={email}",
+                             "--entrypoint", "sh", f"{IMAGES[0]}:{image_tag()}", "-c", script],
+                            capture_output=True, text=True, timeout=300)
+    if result.returncode != 0 or "PRIVATE KEY BLOCK" not in result.stdout:
+        raise RuntimeError(f"gpg made no key: {result.stderr}")
+    return {"apiVersion": "v1", "kind": "Secret", "metadata": {"name": "misp-gnupg"},
+            "stringData": {"private.asc": result.stdout}}
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -51,121 +75,12 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
-class Stack:
-    def __init__(self, files: list[Path], profiles: tuple[str, ...] = (), port: int = 28080):
-        self.files = [Path(f) for f in files]
-        self.profiles = profiles
-        # Compose names the project after the directory of the first compose file
-        self.project = self.files[0].resolve().parent.name if self.files else ""
-        self.base_url = f"http://localhost:{port}"
-        self.runner = shlex.split(os.environ.get("COMPOSE_CMD", "podman compose"))
-        if "podman" in Path(self.runner[0]).name:
-            self.runner.append(PODMAN_STRICT_READ_ONLY)
-        self.engine = os.environ.get("CONTAINER_CMD", "podman")
-        self._ids: dict[str, str] = {}
+class Misp:
+    """A MISP by its URL: requests to its web tier."""
 
-    # -- compose ---------------------------------------------------------------
-
-    def compose_args(self, extra_files=(), profiles=None) -> list[str]:
-        args = []
-        for f in [*self.files, *extra_files]:
-            args += ["-f", str(f)]
-        for p in self.profiles if profiles is None else profiles:
-            args += ["--profile", p]
-        return args
-
-    def compose(self, *args, extra_files=(), profiles=None, check=False, timeout=900) -> subprocess.CompletedProcess:
-        cmd = [*self.runner, *self.compose_args(extra_files, profiles), *args]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
-        result.stdout = "\n".join(l for l in result.stdout.splitlines() if not CONTAINER_ID_LINE.match(l))
-        if check and result.returncode != 0:
-            raise RuntimeError(f"{' '.join(cmd)} exited {result.returncode}:\n{result.stdout}\n{result.stderr}")
-        if args and args[0] in ("up", "run", "down", "stop", "start", "restart", "rm"):
-            self._ids.clear()
-        return result
-
-    def run(self, service: str, *command: str, env: dict | None = None, volumes=(), entrypoint: str = "",
-            timeout=900) -> tuple[int, str]:
-        """compose run --rm --no-deps: the exit code and the combined output."""
-        args = ["run", "--rm", "-T", "--no-deps"]
-        if entrypoint:
-            args += ["--entrypoint", entrypoint]
-        for key, value in (env or {}).items():
-            args += ["-e", f"{key}={value}"]
-        for volume in volumes:
-            args += ["-v", volume]
-        result = self.compose(*args, service, *command, timeout=timeout)
-        # compose() drops the last newline of stdout; stderr starts on a line of its own
-        return result.returncode, result.stdout + "\n" + result.stderr
-
-    # -- containers ------------------------------------------------------------
-
-    def container_ids(self, service: str, stopped: bool = False) -> list[str]:
-        """Every container of a service, the exited ones too when stopped is set."""
-        cmd = [self.engine, "ps", "-q", "--filter", f"label=com.docker.compose.project={self.project}",
-               "--filter", f"label=com.docker.compose.service={service}"]
-        if stopped:
-            cmd.insert(2, "-a")
-        return subprocess.run(cmd, capture_output=True, text=True).stdout.split()
-
-    def container_id(self, service: str) -> str:
-        if service not in self._ids:
-            ids = self.container_ids(service)
-            if not ids:
-                raise RuntimeError(f"no running container for service {service}")
-            self._ids[service] = ids[0]
-        return self._ids[service]
-
-    def exec_rc(self, service: str, script: str, env: dict | None = None, timeout: int = 300) -> tuple[int, str]:
-        """Run a shell script in a service's container: the exit code and stdout plus stderr.
-
-        A script that outlives the timeout raises TimeoutExpired: a hang fails the test.
-        """
-        cmd = [self.engine, "exec"]
-        for key, value in (env or {}).items():
-            cmd += ["-e", f"{key}={value}"]
-        cmd += [self.container_id(service), "sh", "-c", script]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
-        return result.returncode, (result.stdout + result.stderr).strip()
-
-    def exec(self, service: str, script: str, env: dict | None = None, timeout: int = 300) -> str:
-        """Run a shell script in a service's container; returns stdout, stripped."""
-        cmd = [self.engine, "exec"]
-        for key, value in (env or {}).items():
-            cmd += ["-e", f"{key}={value}"]
-        cmd += [self.container_id(service), "sh", "-c", script]
-        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout).stdout.strip()
-
-    def python(self, code: str, service: str = "web", env: dict | None = None) -> tuple[int, str]:
-        """Python in a service's container with the image's library importable.
-
-        The code travels in an environment variable, so it needs no shell quoting.
-        """
-        prelude = "import sys; sys.path.insert(0, '/opt')\n"
-        return self.exec_rc(service, 'python3 -c "$CODE"', env={**(env or {}), "CODE": prelude + code})
-
-    def sql(self, query: str, service: str = "web") -> str:
-        """A query through the image's db layer, against the database the service uses.
-
-        Raises when the query or the library fails: an error would otherwise
-        come back as a traceback string that a negative assertion accepts.
-        """
-        rc, out = self.python("import os\nfrom misp_container.env import apply_defaults\n"
-                              "from misp_container import db\napply_defaults()\n"
-                              "print(db.query(os.environ['SQL'], check=True))", service, env={"SQL": query})
-        if rc != 0:
-            raise RuntimeError(f"query failed in {service}: {query}\n{out}")
-        return "".join(out.split())
-
-    def logs(self, service: str, stopped: bool = False) -> str:
-        """The logs of every container of a service."""
-        out = ""
-        for cid in self.container_ids(service, stopped):
-            result = subprocess.run([self.engine, "logs", cid], capture_output=True, text=True)
-            out += result.stdout + result.stderr
-        return out
-
-    # -- HTTP ------------------------------------------------------------------
+    def __init__(self, base_url: str, key: str = ""):
+        self.base_url = base_url
+        self.key = key
 
     def http(self, method: str, path: str, key: str = "", data=None, timeout: int = 60,
              json_api: bool = True, base_url: str = "", headers: dict | None = None,
@@ -200,7 +115,184 @@ class Stack:
         except ValueError:
             return None
 
-    # -- waits -----------------------------------------------------------------
+
+class Release(Misp):
+    def __init__(self, cluster: Cluster, namespace: str = "misp", port: int = 28080, values: dict | None = None):
+        """values go on top of tests/k3s/values.yaml; port is the host port of the web NodePort."""
+        super().__init__(f"http://localhost:{port}")
+        self.cluster = cluster
+        self.namespace = namespace
+        self.values = merge(values_file(VALUES), values or {})
+        self.revision = 0
+        self.dumped = False
+        self._toolbox = ""
+
+    # -- helm ------------------------------------------------------------------------
+
+    def install(self, values: dict | None = None, chart: str = str(CHART), version: str = "",
+                tag: str | None = None, wait: bool = True) -> None:
+        """helm upgrade --install with the values so far plus these, then wait for the revision.
+
+        values stay for later upgrades. The images run under tag, by default the
+        tag under test; an empty tag is the chart's appVersion. Without wait, call
+        wait_for_revision() before the release is used.
+        """
+        self.values = merge(self.values, values or {})
+        with tempfile.NamedTemporaryFile("w", suffix=".yaml", dir=scratch_dir(), delete=False) as f:
+            yaml.safe_dump(merge(self.values, {"image": {"tag": image_tag() if tag is None else tag}}), f)
+        try:
+            self.cluster.helm("upgrade", "--install", "misp", chart, "-n", self.namespace, "--create-namespace",
+                              "-f", f.name, *(["--version", version] if version else []))
+        finally:
+            Path(f.name).unlink()
+        self.revision = json.loads(self.cluster.helm("status", "misp", "-n", self.namespace, "-o", "json")
+                                   .stdout)["version"]
+        if wait:
+            self.wait_for_revision()
+
+    def rollback(self, revision: int) -> None:
+        """helm rollback, then wait: helm applies the manifest of that revision again, so its Jobs too."""
+        self.cluster.helm("rollback", "misp", str(revision), "-n", self.namespace)
+        self.revision = revision
+        self.wait_for_revision()
+
+    def wait_for_revision(self, timeout: int = 900) -> None:
+        """The configure Job of the revision, the Deployments, then its org-sync Job.
+
+        helm waits for none of them: the Jobs carry Argo CD annotations, not Helm hooks.
+        """
+        self._toolbox = ""
+        self.wait_for_job(f"configure-{self.revision}", timeout)
+        for deploy in ("web", "worker", "modules", "metrics"):
+            self.rollout(deploy)
+        self.wait_for_job(f"org-sync-{self.revision}", 300)
+
+    def wait_for_job(self, job: str, timeout: int) -> None:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            state = self.kubectl("get", "job", job, "-o",
+                                 "jsonpath={.status.conditions[?(@.status==\"True\")].type}").stdout
+            if "Complete" in state:
+                return
+            if "Failed" in state:
+                break
+            time.sleep(3)
+        logs = self.kubectl("logs", f"job/{job}", "--all-containers", "--tail=60").stdout
+        raise RuntimeError(f"job {job} did not complete in {timeout}s; logs: {self.dump_logs(job)}\n{logs}")
+
+    def rollout(self, deploy: str, timeout: int = 600) -> None:
+        result = self.kubectl("rollout", "status", f"deploy/{deploy}", f"--timeout={timeout}s", timeout=timeout + 30)
+        if result.returncode != 0:
+            raise RuntimeError(f"deploy/{deploy} did not roll out: {result.stderr}; logs: {self.dump_logs(deploy)}")
+
+    def scale(self, deploy: str, replicas: int) -> None:
+        """Scale a Deployment and wait: for its pods to go, or for the rollout."""
+        self.kubectl("scale", f"deploy/{deploy}", f"--replicas={replicas}")
+        if replicas:
+            self.rollout(deploy)
+        else:
+            self.kubectl("wait", "--for=delete", "pod", "-l", f"app.kubernetes.io/name={deploy}", "--timeout=180s",
+                         timeout=200)
+
+    def apply(self, *documents: dict) -> None:
+        """Objects in the release's namespace, which may not exist yet."""
+        self.cluster.kubectl("create", "namespace", self.namespace)
+        self.cluster.apply(*documents, namespace=self.namespace)
+
+    # -- pods ------------------------------------------------------------------------
+
+    def kubectl(self, *args: str, input: str | None = None, timeout: int = 600):
+        return self.cluster.kubectl("-n", self.namespace, *args, input=input, timeout=timeout)
+
+    def pods(self, name: str) -> list[str]:
+        """The running pods of a workload, by name."""
+        out = self.kubectl("get", "pods", "-l", f"app.kubernetes.io/name={LABELS.get(name, name)}",
+                           "--field-selector=status.phase=Running", "-o", "name").stdout
+        return out.split()
+
+    def _target(self, workload: str) -> list[str]:
+        if workload == "toolbox":
+            self.toolbox()
+        target, container = WORKLOADS.get(workload, (f"deploy/{workload}", workload))
+        return [target, "-c", container]
+
+    def exec_rc(self, workload: str, script: str, env: dict | None = None, input: str | None = None,
+                timeout: int = 300) -> tuple[int, str]:
+        """A shell script in a workload's container: the exit code and stdout plus stderr.
+
+        A script that outlives the timeout raises TimeoutExpired: a hang fails the test.
+        """
+        assignments = [f"{key}={value}" for key, value in (env or {}).items()]
+        result = self.kubectl("exec", *(["-i"] if input is not None else []), *self._target(workload), "--",
+                              "env", *assignments, "sh", "-c", script, input=input, timeout=timeout)
+        return result.returncode, (result.stdout + result.stderr).strip()
+
+    def exec(self, workload: str, script: str, env: dict | None = None, timeout: int = 300) -> str:
+        """A shell script in a workload's container; returns stdout, stripped."""
+        assignments = [f"{key}={value}" for key, value in (env or {}).items()]
+        return self.kubectl("exec", *self._target(workload), "--", "env", *assignments, "sh", "-c", script,
+                            timeout=timeout).stdout.strip()
+
+    def python(self, code: str, workload: str = "web", env: dict | None = None) -> tuple[int, str]:
+        """Python in a workload's container with the image's library importable.
+
+        The code travels in an environment variable, so it needs no shell quoting.
+        """
+        prelude = "import sys; sys.path.insert(0, '/opt')\n"
+        return self.exec_rc(workload, 'python3 -c "$CODE"', env={**(env or {}), "CODE": prelude + code})
+
+    def sql(self, query: str, workload: str = "web") -> str:
+        """A query through the image's db layer, against the database the workload uses.
+
+        Raises when the query or the library fails: an error would otherwise
+        come back as a traceback string that a negative assertion accepts.
+        """
+        rc, out = self.python("import os\nfrom misp_container.env import apply_defaults\n"
+                              "from misp_container import db\napply_defaults()\n"
+                              "print(db.query(os.environ['SQL'], check=True))", workload, env={"SQL": query})
+        if rc != 0:
+            raise RuntimeError(f"query failed in {workload}: {query}\n{out}")
+        return "".join(out.split())
+
+    def logs(self, workload: str) -> str:
+        """The logs of every pod of a workload; configure is the Job of the current revision."""
+        if workload == "configure":
+            return self.kubectl("logs", f"job/configure-{self.revision}", "-c", "configure").stdout
+        _, container = WORKLOADS[workload]
+        return self.kubectl("logs", "-l", f"app.kubernetes.io/name={LABELS.get(workload, workload)}",
+                            "-c", container, "--tail=-1", "--max-log-requests=10").stdout
+
+    def toolbox(self, container: str = "") -> None:
+        """Start the toolbox from a container of the configure Job's pod template, once per revision.
+
+        Without a container, the toolbox of this revision stays as it is, else it
+        starts from the configure container.
+        """
+        current = self._toolbox.partition("/")
+        if current[0] == str(self.revision) and container in ("", current[2]):
+            return
+        container = container or "configure"
+        self.kubectl("delete", "pod", "toolbox", "--ignore-not-found", "--grace-period=1", timeout=120)
+        job = json.loads(self.kubectl("get", "job", f"configure-{self.revision}", "-o", "json").stdout)
+        self.apply(manifests.toolbox(job, container))
+        result = self.kubectl("wait", "--for=condition=Ready", "pod/toolbox", "--timeout=180s", timeout=200)
+        if result.returncode != 0:
+            raise RuntimeError(f"the toolbox did not start: {result.stderr}")
+        self._toolbox = f"{self.revision}/{container}"
+
+    def run(self, *command: str, env: dict | None = None, files: dict[str, str] | None = None,
+            container: str = "", timeout: int = 900) -> tuple[int, str]:
+        """A command in the toolbox, after files {path: content} are written there: exit code and output."""
+        self.toolbox(container)
+        for path, content in (files or {}).items():
+            rc, out = self.exec_rc("toolbox", f"mkdir -p {shlex.quote(str(Path(path).parent))} && "
+                                              f"cat > {shlex.quote(path)}", input=content)
+            if rc != 0:
+                raise RuntimeError(f"cannot write {path} in the toolbox: {out}")
+        script = " ".join(shlex.quote(arg) for arg in command)
+        return self.exec_rc("toolbox", script, env=env, timeout=timeout)
+
+    # -- waits -----------------------------------------------------------------------
 
     def wait_for_misp(self, timeout: int = 300, base_url: str = "") -> None:
         deadline = time.monotonic() + timeout
@@ -209,23 +301,18 @@ class Stack:
             if status == 200:
                 return
             time.sleep(3)
-        # A stack fixture that fails here yields no stack, so no test would dump the logs
+        # A fixture that fails here yields no release, so no test would dump the logs
         path = self.dump_logs("misp-wait-timeout")
-        raise RuntimeError(f"MISP did not answer on {base_url or self.base_url} in {timeout}s; compose logs: {path}")
+        raise RuntimeError(f"MISP did not answer on {base_url or self.base_url} in {timeout}s; logs: {path}")
 
-    def wait_for(self, service: str, script: str, timeout: int = 90) -> None:
-        """Until a shell check in the service's container succeeds."""
+    def wait_for(self, workload: str, script: str, timeout: int = 90) -> None:
+        """Until a shell check in the workload's container succeeds."""
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            try:
-                cid = self.container_id(service)
-                if subprocess.run([self.engine, "exec", cid, "sh", "-c", script],
-                                  capture_output=True).returncode == 0:
-                    return
-            except RuntimeError:
-                self._ids.pop(service, None)
+            if self.exec_rc(workload, script)[0] == 0:
+                return
             time.sleep(3)
-        raise RuntimeError(f"{service} did not pass '{script}' in {timeout}s")
+        raise RuntimeError(f"{workload} did not pass '{script}' in {timeout}s")
 
     def admin_key(self, email: str) -> str:
         """A fresh authkey for the admin, set through MISP's console."""
@@ -236,17 +323,4 @@ class Stack:
         return match.group(0)
 
     def dump_logs(self, name: str) -> Path:
-        """Every service's log into one file under the scratch directory."""
-        path = scratch_dir() / f"{name}-compose-logs.txt"
-        result = self.compose("logs", timeout=300)
-        path.write_text(result.stdout + result.stderr)
-        return path
-
-    def finish(self, name: str, keep: bool, failed: bool) -> None:
-        """Dump the logs after a failure, then tear the stack down unless keep."""
-        if failed:
-            print(f"\ncompose logs: {self.dump_logs(name)}")
-        if keep:
-            print(f"\nstack kept: {' '.join(self.runner)} {' '.join(self.compose_args())} ps")
-        else:
-            self.compose("down", "-v", timeout=600)
+        return self.cluster.dump_logs(name)

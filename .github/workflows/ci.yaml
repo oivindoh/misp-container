@@ -1,6 +1,6 @@
 # Tests, scans and releases the images and the Helm chart: unit tests, the chart
-# renders, the stack suites in Compose, the chart on kind and Trivy; on a tag,
-# pushes the images and the chart and creates the release (tests/README.md, CI).
+# renders, the stack suites on k3s and Trivy; on a tag, pushes the images and
+# the chart and creates the release (tests/README.md, CI).
 name: CI
 
 on:
@@ -20,8 +20,7 @@ on:
 permissions: {}
 
 env:
-  # Images are built with buildx, so the test scripts must use docker compose here
-  COMPOSE_CMD: docker compose
+  # The images are in docker, which also runs the suites' k3s
   CONTAINER_CMD: docker
   REGISTRY: ghcr.io
   IMAGE_MISP: ghcr.io/${{ github.repository }}
@@ -82,7 +81,8 @@ jobs:
             {"name": "integration", "id": "integration", "timeout": 15,
              "tests": "tests/e2e/test_upstream.py tests/e2e/test_integration.py"},
             {"name": "hub-spoke", "id": "sync", "timeout": 15, "tests": "tests/e2e/test_sync.py"},
-            {"name": "migration", "id": "migration", "timeout": 20, "tests": "tests/e2e/test_migration.py"}]'
+            {"name": "migration", "id": "migration", "timeout": 20, "tests": "tests/e2e/test_migration.py"},
+            {"name": "lifecycle", "id": "lifecycle", "timeout": 25, "tests": "tests/e2e/test_lifecycle.py"}]'
           {
             echo "build=$build"
             echo "unit=$unit"
@@ -154,9 +154,9 @@ jobs:
           uv sync
           PYTHONPATH=files .venv/bin/python -m pytest tests/ -v --ignore=tests/e2e
 
-  # The stack suites in Compose, one job each, in parallel, against the images
-  # from build. The gate lists them; the upload keeps the JUnit report and,
-  # after a failure, the compose logs.
+  # The stack suites, one job each, in parallel, each on a k3s cluster in
+  # docker, against the images from build. The gate lists them; the upload
+  # keeps the JUnit report and, after a failure, the cluster's logs.
   suite:
     name: ${{ matrix.name }}
     needs: [gate, build]
@@ -179,6 +179,11 @@ jobs:
           caddy: ${{ env.IMAGE_CADDY }}
           modules: ${{ env.IMAGE_MODULES }}
 
+      - name: Install helm and kubectl
+        uses: ./.github/actions/install-helm
+        with:
+          kubectl: "true"
+
       - name: Run the suite
         timeout-minutes: ${{ matrix.timeout }}
         env:
@@ -189,48 +194,15 @@ jobs:
           .venv/bin/python -m pytest ${{ matrix.tests }} --skip-build -v --durations=5 \
             --junitxml="$RUNNER_TEMP/${{ matrix.id }}-junit.xml"
 
-      - name: Upload the test report and the compose logs
+      - name: Upload the test report and the cluster logs
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ${{ matrix.id }}-report
           path: |
             ${{ runner.temp }}/${{ matrix.id }}-junit.xml
-            ${{ runner.temp }}/*-compose-logs.txt
+            ${{ runner.temp }}/*-cluster-logs.txt
           if-no-files-found: ignore
-
-  # Installs the Helm chart with the postgres and redis components on a kind
-  # cluster, runs the smoke test, upgrades the release and runs it again
-  kind:
-    needs: [gate, build]
-    if: needs.gate.outputs.stack == 'true'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    env:
-      MISP_IMAGE_TAG: ci
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Load the images
-        uses: ./.github/actions/load-images
-        with:
-          misp: ${{ env.IMAGE_MISP }}
-          caddy: ${{ env.IMAGE_CADDY }}
-          modules: ${{ env.IMAGE_MODULES }}
-
-      - name: Install kind and helm
-        uses: ./.github/actions/install-helm
-        with:
-          kind: "true"
-
-      - name: Python for the smoke test
-        run: |
-          pip install --quiet uv
-          uv sync
-
-      - name: Kubernetes test on kind
-        timeout-minutes: 25
-        run: tests/run-kind-test.sh
 
   scan:
     needs: [gate, build]
@@ -303,7 +275,7 @@ jobs:
   # The one required check: it fails on any failed or cancelled job, and on a
   # draft, whose run skips the stack suites. Every other skip is the gate's.
   ci-ok:
-    needs: [gate, build, unit, suite, kind, scan]
+    needs: [gate, build, unit, suite, scan]
     if: always()
     runs-on: ubuntu-latest
     permissions: {}
@@ -327,13 +299,13 @@ jobs:
   # the MISP commit. The unit tests and the suites may be skipped only where the
   # gate skipped them.
   publish:
-    needs: [gate, build, unit, suite, kind, scan]
+    needs: [gate, build, unit, suite, scan]
     if: >-
       always() && needs.gate.outputs.publish != '' &&
       needs.build.result == 'success' && needs.scan.result == 'success' &&
       !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') &&
       (needs.gate.outputs.unit != 'true' || needs.unit.result == 'success') &&
-      (needs.gate.outputs.stack != 'true' || (needs.suite.result == 'success' && needs.kind.result == 'success'))
+      (needs.gate.outputs.stack != 'true' || needs.suite.result == 'success')
     runs-on: ubuntu-latest
     permissions:
       contents: write

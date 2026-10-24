@@ -70,7 +70,7 @@ A MISP on MySQL or MariaDB is copied by the `migrate` component instead
 | `MISP_UUID` | None. Sync partners know the instance by it |
 | `ADMIN_PASSWORD`, `ADMIN_KEY` | Change the value in `misp-admin` and upgrade: the configure Job sets both on user 1 |
 | `MISP_REDIS_PASSWORD`, `DB_PASSWORD` | Change the value in the Secret and on the service it names, then upgrade: the checksum rolls every pod that reads it |
-| The GPG key (`misp-gnupg`) | Replace `private.asc` in the Secret and upgrade: each pod imports the key of the Secret at start. Compose: replace `private.asc` in the `misp-gnupg-key` volume and recreate the containers. Sync partners need the new public key |
+| The GPG key (`misp-gnupg`) | Replace `private.asc` in the Secret and upgrade: each pod imports the key of the Secret at start. Sync partners need the new public key |
 | The sync server certificates (`misp-certs`) | Replace the file in the Secret and upgrade |
 
 ## Break-glass accounts
@@ -79,9 +79,8 @@ A break-glass account is a `users` entry in `orgs.yaml` with a `password`
 ([org-sync.md](org-sync.md#users)). It keeps MISP open to an administrator while Keycloak is
 down. With `OIDC_MIXEDAUTH=false` the password form is closed, so open it this way:
 
-1. Set `OIDC_ENABLE=false` in `env` and upgrade the release. Compose: set it in `compose.env`
-   and recreate the `web` containers. The web pods start without OidcAuth and show the
-   password form.
+1. Set `OIDC_ENABLE=false` in `env` and upgrade the release. The web pods start without
+   OidcAuth and show the password form.
 2. Log in with the break-glass account.
 3. Once Keycloak answers again, set `OIDC_ENABLE=true` and upgrade the release.
 
@@ -96,8 +95,8 @@ from chart 1.x.
 
 ### A new PostgreSQL major version
 
-A PostgreSQL major version cannot read the data of the one before. The `postgres` pod and
-the Compose `postgres` service refuse to start on it. Move the data with a dump:
+A PostgreSQL major version cannot read the data of the one before. The `postgres` pod
+refuses to start on it. Move the data with a dump:
 
 1. Dump the database with the old release, as in [What to back up](#what-to-back-up).
 2. Delete the StatefulSet and its claim:
@@ -111,15 +110,3 @@ the Compose `postgres` service refuse to start on it. Move the data with a dump:
    [Restore](#restore) from step 2. The StatefulSet gets an empty claim, and the new major
    version creates its cluster there.
 
-In Compose, load the dump before the configure service runs. Run the first two commands
-with the old compose file and the rest with the new one. The volume is
-`<project>_postgres-data`, and the project of a stack started in `deploy/` is `deploy`:
-
-```bash
-podman compose --profile postgres exec -T postgres sh -c 'pg_dump --clean --if-exists -U "$POSTGRES_USER" misp' > misp.sql
-podman compose --profile postgres down
-podman volume rm deploy_postgres-data
-podman compose --profile postgres up -d postgres
-podman compose --profile postgres exec -T postgres sh -c 'psql -U "$POSTGRES_USER" misp' < misp.sql
-podman compose --profile postgres up -d
-```

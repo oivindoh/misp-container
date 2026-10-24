@@ -11,7 +11,6 @@ sys.path.insert(0, str(REPO / "files"))
 sys.path.insert(0, str(REPO / "scripts"))
 
 import chart  # noqa: E402
-import release  # noqa: E402
 from misp_container import task  # noqa: E402
 
 # Pods that run MISP and read misp-env
@@ -50,13 +49,6 @@ def test_every_task_cronjob_renders_app_config_and_mounts_the_attachments():
 def test_a_workflow_cronjob_passes_its_id():
     cronjob = chart.find("CronJob", "workflow-7", "cronjobs.enabled=true", "cronjobs.workflows.7=0 4 * * *")
     assert chart.pod_spec(cronjob)["containers"][0]["args"][-2:] == ["workflow", "7"]
-
-
-def test_the_app_version_is_the_image_tag_the_compose_files_default_to():
-    meta = yaml.safe_load((chart.CHART / "Chart.yaml").read_text())
-    for path in release.COMPOSE_FILES:
-        tags = set(re.findall(r"misp-container[a-z-]*:\$\{MISP_IMAGE_TAG:-([^}]+)\}", path.read_text()))
-        assert tags <= {meta["appVersion"]}, f"{path.relative_to(REPO)} defaults to {sorted(tags)}, the chart's appVersion is {meta['appVersion']}"
 
 
 def test_the_chart_version_is_a_release_or_a_wip_pre_release():
@@ -197,15 +189,6 @@ def test_every_component_renders_and_the_default_renders_none():
             f"{component}.enabled=true changes nothing in the render")
     assert not any(d["kind"] in ("StatefulSet", "CronJob", "Ingress", "HTTPRoute", "NetworkPolicy")
                    for d in chart.objects())
-
-
-def test_the_chart_pins_the_images_the_compose_stack_pins():
-    """dependabot bumps the Compose files; values.yaml follows by hand, and this fails until it does."""
-    values = yaml.safe_load((chart.CHART / "values.yaml").read_text())
-    compose = (REPO / "deploy/docker-compose.yml").read_text()
-    for component, service in (("postgres", "postgres"), ("redis", "redis")):
-        image = values[component]["image"]
-        assert f"image: {image}\n" in compose, f"{component}.image is {image}, deploy/docker-compose.yml has another for {service}"
 
 
 def test_a_misspelt_value_is_refused():

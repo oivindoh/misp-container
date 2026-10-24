@@ -1,7 +1,7 @@
 """Logging setup for MISP container entrypoints.
 
 LOG_FORMAT selects the line format: json (one JSON object per line, the
-Kubernetes default) or text (the Compose default, coloured on a terminal).
+default) or text (coloured on a terminal).
 """
 
 import json

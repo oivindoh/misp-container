@@ -1,6 +1,7 @@
 """Options and shared fixtures for the stack suites (tests/e2e).
 
-The suites start real Compose stacks; run them one module at a time:
+The suites start a k3s cluster each and publish its ports on localhost; run them
+one module at a time:
     pytest tests/e2e/test_migration.py [--skip-build] [--keep]
 """
 
@@ -15,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "files"))
 
 def pytest_addoption(parser):
     parser.addoption("--skip-build", action="store_true", help="use the images that exist; do not build")
-    parser.addoption("--keep", action="store_true", help="leave the stack running after the tests")
+    parser.addoption("--keep", action="store_true", help="leave the cluster running after the tests")
     parser.addoption("--url", default="", help="the MISP the smoke test checks, e.g. https://misp.example.com")
     parser.addoption("--key", default="", help="an API key for the smoke test's authenticated checks")
 
@@ -30,18 +31,18 @@ def options(request):
 
 @pytest.hookimpl(hookwrapper=True)
 def pytest_runtest_makereport(item, call):
-    """At a module's first failure, dump every service's log.
+    """At a module's first failure, dump the log of every pod.
 
-    The dump at the end of a module misses a container that a later step
-    removed, such as a web replica after a scale-down.
+    The dump at the end of a module misses a pod that a later step removed,
+    such as a web replica after a scale-down.
     """
     outcome = yield
     report = outcome.get_result()
     stack = getattr(item, "funcargs", {}).get("stack")
-    if report.failed and stack is not None and stack.files and not getattr(stack, "dumped", False):
+    if report.failed and hasattr(stack, "dump_logs") and not getattr(stack, "dumped", False):
         stack.dumped = True
         suite = item.module.__name__.removeprefix("test_")
-        report.sections.append(("compose logs", str(stack.dump_logs(f"{suite}-first-failure"))))
+        report.sections.append(("cluster logs", str(stack.dump_logs(f"{suite}-first-failure"))))
 
 
 @pytest.fixture(scope="module")

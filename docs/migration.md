@@ -8,20 +8,18 @@ then configures the copy as on any release upgrade.
 ## TL;DR
 
 1. Read `Security.salt`, `Security.encryption_key` and `MISP.uuid` from the old instance
-   (`config.php` or `system_settings`) into `misp-app` and `misp-env` (Compose:
-   `compose-secrets.env` and `compose.env`). The migration refuses to run when a value it
-   can read on the source differs.
-2. Give the migration the source connection (`migrate.secret`, Compose:
-   `secrets-migrate.env`) and, to copy attachments, a mounted copy of the old
-   `MISP.attachments_dir` (`app/files` by default) or the old S3 bucket
-   (`MIGRATE_SOURCE_S3_*`). A source on an older MISP release than this image's needs
+   (`config.php` or `system_settings`) into `misp-app` and `misp-env`. The migration refuses
+   to run when a value it can read on the source differs.
+2. Give the migration the source connection (`migrate.secret`) and, to copy attachments, a
+   mounted copy of the old `MISP.attachments_dir` (`app/files` by default) or the old S3
+   bucket (`MIGRATE_SOURCE_S3_*`). A source on an older MISP release than this image's needs
    `MIGRATE_SOURCE_UPGRADE=true` and a restored copy of its database (see
    [An older source](#an-older-source)).
 3. Set the old instance read-only (`MISP.live=false`), then run the copy before the first
    configure run: with the `migrate` component on, the chart runs it as an init container of
-   the configure Job; with Compose, run it by hand first. The copy refuses a target that
-   holds anything else (see [The target](#the-target)).
-4. Switch the component (or profile) off once the copy has succeeded. Users log in again;
+   the configure Job. The copy refuses a target that holds anything else (see
+   [The target](#the-target)).
+4. Switch the component off once the copy has succeeded. Users log in again;
    terms and the GPG keyring are copied by hand.
 5. With Keycloak, name each migrated organisation's team after its Keycloak organisation's
    alias, and turn on email linking and unblocking (see [Keycloak](#keycloak)).
@@ -162,28 +160,12 @@ With the `networkPolicy` component the configure pod may reach the
 source on port 3306 and S3 on 443, in the cluster or outside it, while `migrate` is on;
 another port needs a change to the template.
 
-## Compose
-
-```bash
-cd deploy
-# source connection in chart/files/secrets-migrate.env; salt, key and UUID in
-# compose-secrets.env and compose.env
-podman compose up -d postgres redis
-podman compose --profile migrate run --rm \
-    -v /srv/old-misp/app/files:/mnt/source:ro -e MIGRATE_SOURCE_FILES=/mnt/source migrate
-podman compose up -d
-```
-
-With the attachments in the old bucket, set `MIGRATE_SOURCE_S3_*` in `secrets-migrate.env`
-and run the migration without the mount. With `PLUGIN_S3_BUCKET_NAME` set in `compose.env`,
-the attachments go to that bucket.
-
 ## Files copied by hand
 
 | Data | Where it goes |
 |------|---------------|
-| Terms, server certificates | The `misp-certs` Secret (Kubernetes, see [kubernetes.md](kubernetes.md#secrets)); the `misp-files-terms` and `misp-files-certs` volumes (Compose) |
-| GPG keyring | The `misp-gnupg` Secret from the old `private.asc` export (Compose: `private.asc` in the `misp-gnupg-key` volume); or a new key, re-exported to sync partners |
+| Terms, server certificates | The `misp-certs` Secret (see [kubernetes.md](kubernetes.md#secrets)) |
+| GPG keyring | The `misp-gnupg` Secret from the old `private.asc` export; or a new key, re-exported to sync partners |
 | Attachments already on S3 | Nothing: point `PLUGIN_S3_*` at the same bucket, or copy them to a new one with `MIGRATE_SOURCE_S3_*` |
 
 Sessions, the Redis cache, the CakePHP cache and log files are not copied.

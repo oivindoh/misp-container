@@ -68,27 +68,24 @@ class TestCheckWritable:
 
 
 class TestPopulateGnupg:
-    """Import of the instance key, and its generation where the key's directory is writable."""
+    """Import of the instance key from the misp-gnupg Secret."""
 
     def _env(self, tmp_path):
         return {
             "GNUPG_HOMEDIR": str(tmp_path / "gnupg"),
             "GNUPG_BINARY": "gpg",
-            "ADMIN_EMAIL": "admin@example.com",
-            "GNUPG_PASSWORD": "pass phrase",
         }
 
-    def test_no_key_in_a_read_only_directory_is_noop(self, tmp_path):
+    def test_no_key_is_noop(self, tmp_path):
         from misp_container.init import populate_gnupg
         with patch.dict(os.environ, self._env(tmp_path)), patch("misp_container.init.GNUPG_KEY_FILE", str(tmp_path / "absent.asc")), \
-                patch("misp_container.init.os.access", return_value=False), \
                 patch("misp_container.init.subprocess.run") as run:
             populate_gnupg()
         run.assert_not_called()
 
     @staticmethod
     def _gpg(listings):
-        """A fake gpg: --show-keys answers from listings, by fingerprint; an export prints a key."""
+        """A fake gpg: --show-keys answers from listings, by fingerprint."""
         calls = []
 
         def fake_run(cmd, **kwargs):
@@ -96,24 +93,8 @@ class TestPopulateGnupg:
             result = type("R", (), {})()
             fprs = listings["file"] if "--show-keys" in cmd else []
             result.stdout = "".join(f"sec:u:3072:1:AAAA::::::::::\nfpr:::::::::{fpr}:\n" for fpr in fprs)
-            if "--export-secret-keys" in cmd:
-                result.stdout = "-----BEGIN PGP PRIVATE KEY BLOCK-----"
             return result
         return calls, fake_run
-
-    def test_a_missing_key_in_a_writable_directory_is_generated_then_imported(self, tmp_path):
-        from misp_container.init import populate_gnupg
-        key = tmp_path / "private.asc"
-        calls, fake_run = self._gpg({"file": ["ABCDEF0123456789"]})
-        with patch.dict(os.environ, self._env(tmp_path)), patch("misp_container.init.GNUPG_KEY_FILE", str(key)), \
-                patch("misp_container.init.subprocess.run", side_effect=fake_run):
-            populate_gnupg()
-
-        assert key.read_text() == "-----BEGIN PGP PRIVATE KEY BLOCK-----"
-        assert "--gen-key" in calls[0][0] and "Name-Email: admin@example.com" in calls[0][1]["input"]
-        assert "Passphrase: pass phrase" in calls[0][1]["input"]
-        assert "--export-secret-keys" in calls[1][0] and calls[1][1]["input"] == "pass phrase"
-        assert "--import" in calls[2][0] and str(key) in calls[2][0]
 
     def test_imports_and_trusts_key(self, tmp_path):
         from misp_container.init import populate_gnupg

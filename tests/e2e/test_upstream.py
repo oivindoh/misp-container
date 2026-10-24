@@ -4,16 +4,18 @@
 
 Each check reads MISP's files in the image and fails when MISP changed
 something this repository patches or depends on. The failure names the
-change, the MISP file and the file of ours to revisit. No stack starts: one
-container of the main image runs the checks, with the repository mounted.
+change, the MISP file and the file of ours to revisit. No cluster starts: one
+container of the main image runs the checks under CONTAINER_CMD, with the
+repository mounted.
 """
 
 import json
+import subprocess
 import sys
 
 import pytest
 
-from stack import DEPLOY, REPO, TESTS, Stack
+from cluster import IMAGES, REPO, build_images, image_engine, image_tag
 
 sys.path.insert(0, str(REPO / "scripts"))
 
@@ -24,12 +26,11 @@ NAMES = [check.name for check in check_upstream.CHECKS] + [check_upstream.PHP_CH
 
 @pytest.fixture(scope="module")
 def results(options):
-    stack = Stack([DEPLOY / "docker-compose.yml", TESTS / "docker-compose.test.yml"])
-    if not options["skip_build"]:
-        stack.compose("build", "web", check=True, timeout=3600)
-    # The sync service mounts no scratch over the MISP tree, as web does over app/Config
-    rc, out = stack.run("sync", "/repo/scripts/check_upstream.py", "/var/www/MISP", "--php", "--json",
-                        entrypoint="python3", volumes=[f"{REPO}:/repo:ro"])
+    build_images(options)
+    result = subprocess.run([*image_engine(), "run", "--rm", "-v", f"{REPO}:/repo:ro", "--entrypoint", "python3",
+                             f"{IMAGES[0]}:{image_tag()}", "/repo/scripts/check_upstream.py", "/var/www/MISP",
+                             "--php", "--json"], capture_output=True, text=True, timeout=600)
+    rc, out = result.returncode, result.stdout + "\n" + result.stderr
     for line in reversed(out.splitlines()):
         if line.startswith("{"):
             try:

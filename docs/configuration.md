@@ -37,7 +37,7 @@ the database (Redis, salt, encryption key, paths). Those come from the
 `minimum_config` group and the same env vars.
 
 Container-level defaults (database and Redis hosts, PHP limits, worker counts) are in
-`deploy/chart/files/base.env`, which the chart and Compose both read.
+`deploy/chart/files/base.env`, which the chart reads.
 
 ## Database
 
@@ -45,7 +45,7 @@ MISP runs on PostgreSQL.
 
 | Variable | Description |
 |----------|-------------|
-| `DB_HOST`, `DB_PORT` | The server: `postgres` and 5432, the postgres component or Compose service |
+| `DB_HOST`, `DB_PORT` | The server: `postgres` and 5432, the Service of the postgres component |
 | `DB_NAME`, `DB_USER`, `DB_PASSWORD` | The database and its owner (`misp-db` holds the credentials, or the Secret that the chart's `database` value names) |
 | `DB_TLS` | `true` for a TLS connection |
 
@@ -156,8 +156,8 @@ are required; `LDAPAUTH_LDAPSEARCHFILTER`, `LDAPAUTH_LDAPDEFAULTORGID`, `LDAPAUT
 ## Logging
 
 Every pod writes its log to stdout and stderr and keeps no log file. `LOG_FORMAT` selects the
-line format: `json` (the `base.env` default, for the chart: one JSON object per line, for a
-log collector) or `text` (the Compose default, coloured on a terminal).
+line format: `json` (the `base.env` default: one JSON object per line, for a log collector)
+or `text` (coloured on a terminal).
 
 | Source | Reaches the output as | Format |
 |--------|-----------------------|--------|

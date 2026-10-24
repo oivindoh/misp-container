@@ -1,0 +1,31 @@
+# The values every stack suite starts from (tests/e2e/stack.py), on k3s: the
+# postgres and redis components, test secrets, a ReadWriteOnce attachments
+# claim, because k3s's local-path storage offers no ReadWriteMany, and the
+# images under the tag under test, which the suite sets. A suite adds its own
+# values on top.
+postgres:
+  enabled: true
+redis:
+  enabled: true
+attachments:
+  accessMode: ReadWriteOnce
+  size: 1Gi
+env:
+  # The in-cluster name: the OIDC callback (baseurl + /users/login) must reach MISP
+  # from the toolbox, where the suites run a browser's side of the login
+  MISP_BASEURL: http://web:8080
+  ADMIN_EMAIL: test-admin@example.com
+  ADMIN_ORG: Test Org
+  ADMIN_ORG_UUID: 2399b00e-b7f4-4fdb-aeb9-03d28e83a210
+  MISP_UUID: 2399b00e-b7f4-4fdb-aeb9-03d28e83a210
+  # No proxy is trusted: the NodePort's source address is the client
+  TRUSTED_PROXY_CIDR: 127.0.0.1/32
+secrets:
+  db:
+    DB_PASSWORD: misp-test-pw
+  app:
+    MISP_REDIS_PASSWORD: redis-test-pw
+    GNUPG_PASSWORD: test-gpg-passphrase
+    SECURITY_SALT: a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192
+  admin:
+    ADMIN_PASSWORD: Test-Str0ng!Pass#2026

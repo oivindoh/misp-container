@@ -9,11 +9,12 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$SCRIPT_DIR/.." && pwd)"
-COMPOSE="${COMPOSE_CMD:-podman compose} -f ${REPO}/deploy/docker-compose.yml --profile tools"
+ENGINE="${CONTAINER_CMD:-podman}"
+IMAGE=localhost/misp-container-composer-lock
 
-${COMPOSE} build composer-lock
-# podman-compose prints the container id on stdout before the command output
-${COMPOSE} run --rm --no-deps -T composer-lock | grep -v '^[0-9a-f]\{64\}$' > "${REPO}/files/composer.lock.new"
+# The Dockerfile's composer-lock stage resolves the lock
+${ENGINE} build --target composer-lock --tag "${IMAGE}" "${REPO}"
+${ENGINE} run --rm "${IMAGE}" cat /tmp/composer.lock > "${REPO}/files/composer.lock.new"
 python3 -c "import json,sys; json.load(open(sys.argv[1]))" "${REPO}/files/composer.lock.new"
 mv "${REPO}/files/composer.lock.new" "${REPO}/files/composer.lock"
 echo "wrote files/composer.lock ($(python3 -c "import json,sys; print(len(json.load(open(sys.argv[1]))['packages']))" "${REPO}/files/composer.lock") packages)"

@@ -1,25 +1,24 @@
 """Migration suite: loads a MISP 2.5 database into MariaDB, MISP's own
 INSTALL/MYSQL.sql of 2.5 with the rows of tests/migrate-source.sql, migrates
-it with the migrate Job of this tree's image into PostgreSQL, which converts it
-to MISP 3.0 on the way, and checks the copy through the API and the database.
-The first copy takes the attachments onto the volume; on it, an org sync
-renames the migrated organisation to its Keycloak organisation's alias, and a
-migrated account logs in through Keycloak. A forced second copy takes the
-attachments into an S3 bucket in garage; a last run copies that bucket into
-another.
+it into PostgreSQL with the chart's migrate component, which converts it to
+MISP 3.0 on the way, and checks the copy through the API and the database.
+The first copy, in the configure Job, takes the attachments from a claim onto
+the attachments claim; on it, an org sync renames the migrated organisation to
+its Keycloak organisation's alias, and a migrated account logs in through
+Keycloak. A forced second copy takes the attachments into an S3 bucket in
+garage; a last run copies that bucket into another. Every run after the first
+runs migrate in the toolbox, with the env of the run.
 
     pytest tests/e2e/test_migration.py [--skip-build] [--keep]
 
-This tree's images run under MISP_IMAGE_TAG: CI loads them as ci, and a local
-run builds them as migration-test. The tests run in file order and share one
-stack; module fixtures carry each step's state to the next.
+The tests run in file order on one release; module fixtures carry each step's
+state to the next.
 """
 
 import base64
 import http.client
-import os
-import shutil
-import subprocess
+import json
+import shlex
 import urllib.request
 from functools import partial
 
@@ -27,27 +26,31 @@ import pytest
 
 import garage
 import keycloak
+import manifests
+from cluster import IMAGES, Cluster, build_images, image_tag
 from misp_container.s3 import Bucket
-from stack import DEPLOY, TESTS, Stack, env_file, scratch_dir
+from stack import K3S, VALUES, Release, scratch_dir, values_file
 
-SECRETS = env_file(TESTS / "test-compose-secrets.env")
-TEST_ENV = env_file(TESTS / "test-compose.env")
+TEST_ENV = values_file(VALUES)["env"]
 ADMIN_EMAIL = TEST_ENV["ADMIN_EMAIL"]
 MISP_UUID = TEST_ENV["MISP_UUID"]
+# Host port: node port. web, then garage's S3 and admin API
+PORTS = {28080: 30080, 3900: 30900, 3903: 30903}
 # The source: MISP's schema at its newest 2.5 release, v2.5.50, then the suite's rows
 SOURCE_SCHEMA = ("https://raw.githubusercontent.com/MISP/MISP/"
                  "fc99c9e3fc85beddc6ef18835359f3c8b7f44608/INSTALL/MYSQL.sql")
-SOURCE_ROWS = TESTS / "migrate-source.sql"
-TARGET_TAG = os.environ.get("MISP_IMAGE_TAG") or "migration-test"
-MISP_SERVICES = ("configure", "web", "worker", "caddy", "metrics")
+SOURCE_ROWS = __import__("pathlib").Path(__file__).resolve().parents[1] / "migrate-source.sql"
+SOURCE = {"MIGRATE_SOURCE_HOST": "mariadb", "MIGRATE_SOURCE_USER": "misp", "MIGRATE_SOURCE_PASSWORD": "source-test-pw"}
+# The workloads that use the database, which a forced copy stops
+MISP_WORKLOADS = ("web", "worker", "metrics")
 # The authkeys of the admin and of the sync user that tests/migrate-source.sql seeds
 ADMIN_KEY = "migrateadmin0000000000000000000000000000"
 INBOUND_KEY = "migrateinbound00000000000000000000000000"
 ORG_UUID = "7c2f4a9e-3d5b-4e8a-9f10-6b7c8d9e0f11"
 EVENT_ID = 1
 TABLES = ("events", "attributes", "users", "organisations", "servers", "tags")
-# The source's attachments directory, which the migrate service mounts
-FIXTURE_DIR = scratch_dir() / "migrate-source-files"
+# The source's attachments directory: a claim the migrate component mounts at /mnt/source
+SOURCE_FILES = "/mnt/source"
 # Attachments by the key they get: the seeded event's attachment, and one in each
 # of the three places MISP keeps them on disk
 FIXTURE_FILES = {"1/1": ("1/1", "migration attachment content"),
@@ -55,8 +58,16 @@ FIXTURE_FILES = {"1/1": ("1/1", "migration attachment content"),
                  "998/1": ("bucket_0/998/1", "bucketed attachment"),
                  "shadow/999/2": ("shadow/999/2", "proposal attachment")}
 ATTACHMENTS = "/var/www/MISP/app/attachments"
-# Email linking and unblocking for the migrated accounts' first Keycloak login
-KEYCLOAK_ENV = TESTS / "migrate-keycloak.env"
+# The first copy: the migrate component, with the source's attachments on the claim migrate-source
+MIGRATE_VALUES = {"migrate": {
+    "enabled": True,
+    "secret": {**SOURCE, "MIGRATE_SOURCE_FILES": SOURCE_FILES, "MIGRATE_SOURCE_UPGRADE": "true"},
+    "volumes": [{"name": "source", "persistentVolumeClaim": {"claimName": "migrate-source", "readOnly": True}}],
+    "volumeMounts": [{"name": "source", "mountPath": SOURCE_FILES, "readOnly": True}]}}
+# After the copy the migrate component goes off. Email linking and unblocking for the
+# migrated accounts' first Keycloak login
+KEYCLOAK_VALUES = {"migrate": {"enabled": False},
+                   "env": {"OIDCAUTH_ALLOW_EMAIL_LINKING": "true", "OIDCAUTH_UNBLOCK": "true"}}
 # The team of the migrated organisation: its UUID, and the alias of its Keycloak organisation
 # (tests/keycloak-realm.json) as the name. The sync user stays named, so the run keeps it
 KEYCLOAK_ORGS = f"""teams:
@@ -71,9 +82,10 @@ KEYCLOAK_ORGS = f"""teams:
 """
 # The migrated person's account in tests/migrate-source.sql
 MIGRATED_USER_ID = "2"
-# The second copy keeps its attachments in this bucket
-S3_ENV = TESTS / "migrate-target-s3.env"
-S3_TARGET = env_file(S3_ENV)
+# The second copy keeps its attachments in this bucket of garage, under a key the suite imports
+S3_TARGET = {"PLUGIN_S3_BUCKET_NAME": "misp-migrated", "PLUGIN_S3_AWS_ENDPOINT": "http://garage:3900",
+             "PLUGIN_S3_REGION": "garage", "PLUGIN_S3_AWS_ACCESS_KEY": "GK0123456789abcdef01234567",
+             "PLUGIN_S3_AWS_SECRET_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}
 COPY_BUCKET = "misp-copy"
 
 
@@ -84,12 +96,11 @@ def email_of(stack, key):
 
 def mariadb(stack, sql):
     """SQL on the source's MariaDB, fed on stdin: the output, tab-separated."""
-    result = subprocess.run([stack.engine, "exec", "-i", "-e", f"MYSQL_PWD={SECRETS['MARIADB_PASSWORD']}",
-                             stack.container_id("mysql"), "mariadb", "-N", "-u", SECRETS["MARIADB_USER"], "misp"],
-                            input=sql, capture_output=True, text=True, timeout=300)
-    if result.returncode != 0:
-        raise RuntimeError(f"mariadb exited {result.returncode}: {result.stderr}")
-    return result.stdout.strip()
+    rc, out = stack.exec_rc("mariadb", 'mariadb -N -u "$MARIADB_USER" misp', input=sql, timeout=300,
+                            env={"MYSQL_PWD": SOURCE["MIGRATE_SOURCE_PASSWORD"]})
+    if rc != 0:
+        raise RuntimeError(f"mariadb exited {rc}: {out}")
+    return out
 
 
 def fetch(url, attempts=3):
@@ -103,15 +114,40 @@ def fetch(url, attempts=3):
                 raise
 
 
+def source_files(stack):
+    """The claim migrate-source with the fixture attachments, written by a pod that mounts it."""
+    stack.apply({"apiVersion": "v1", "kind": "PersistentVolumeClaim", "metadata": {"name": "migrate-source"},
+                 "spec": {"accessModes": ["ReadWriteOnce"], "resources": {"requests": {"storage": "100Mi"}}}},
+                {"apiVersion": "v1", "kind": "Pod", "metadata": {"name": "source-files"},
+                 "spec": {"securityContext": {"runAsUser": 1000, "runAsGroup": 1000, "fsGroup": 1000},
+                          "terminationGracePeriodSeconds": 1,
+                          "containers": [{"name": "files", "image": f"{IMAGES[0]}:{image_tag()}",
+                                          "args": ["sleep", "infinity"],
+                                          "volumeMounts": [{"name": "source", "mountPath": SOURCE_FILES}]}],
+                          "volumes": [{"name": "source", "persistentVolumeClaim": {"claimName": "migrate-source"}}]}})
+    stack.kubectl("wait", "--for=condition=Ready", "pod/source-files", "--timeout=180s", timeout=200)
+    for where, content in [*FIXTURE_FILES.values(), ("taxonomies/x", "ships in the image")]:
+        path = shlex.quote(f"{SOURCE_FILES}/{where}")
+        result = stack.kubectl("exec", "-i", "pod/source-files", "--", "sh", "-c",
+                               f"mkdir -p $(dirname {path}) && cat > {path}", input=content)
+        assert result.returncode == 0, result.stderr
+    stack.kubectl("delete", "pod", "source-files", "--wait=true", timeout=120)
+
+
 def migrate(stack, **env):
-    """One run of the migrate Job of this tree's image, from the source's MariaDB."""
-    source = {"MIGRATE_SOURCE_HOST": "mysql", "MIGRATE_SOURCE_USER": SECRETS["DB_USER"],
-              "MIGRATE_SOURCE_PASSWORD": SECRETS["DB_PASSWORD"], "MIGRATE_SOURCE_FILES": "/mnt/source"}
-    return stack.run("migrate", env={**source, **env})
+    """One run of migrate in the toolbox, from the source's MariaDB.
+
+    The toolbox comes from the migrate container while the component is on, with
+    its Secret and the source's claim, and from the configure container after.
+    """
+    container = "migrate" if stack.revision == 1 else "configure"
+    return stack.run("python3", "-m", "misp_container.migrate", container=container,
+                     env={**SOURCE, "MIGRATE_SOURCE_FILES": SOURCE_FILES, "MIGRATE_SOURCE_UPGRADE": "false",
+                          "MIGRATE_FORCE": "false", "MIGRATE_REPLACE_COPY": "false", **env})
 
 
 def bucket(name):
-    """A bucket of the test stack's garage, reached from this host."""
+    """A bucket of the suite's garage, reached from this host."""
     return Bucket(name, S3_TARGET["PLUGIN_S3_AWS_ACCESS_KEY"], S3_TARGET["PLUGIN_S3_AWS_SECRET_KEY"],
                   region=garage.REGION, endpoint=garage.S3_HOST_ENDPOINT)
 
@@ -127,13 +163,21 @@ def objects(name):
     return found
 
 
-def switch(stack, env=None):
-    """Run this tree's MISP on the copy, with an extra env file, and wait for it."""
-    if env:
-        os.environ["MISP_TEST_ENV"] = str(env)
-    else:
-        os.environ.pop("MISP_TEST_ENV", None)
-    stack.compose("up", "-d", "--force-recreate", *MISP_SERVICES, profiles=())
+def stop(stack):
+    """Scale the workloads that use the database to none, before a copy replaces it."""
+    for workload in MISP_WORKLOADS:
+        stack.scale(workload, 0)
+
+
+def switch(stack, values):
+    """Upgrade the release with values, start the stopped workloads, and wait for MISP.
+
+    A helm upgrade keeps the replicas a scale set, unless the chart's value changed.
+    """
+    stack.install(values, wait=False)
+    for workload in MISP_WORKLOADS:
+        stack.kubectl("scale", f"deploy/{workload}", "--replicas=1")
+    stack.wait_for_revision()
     stack.wait_for_misp(timeout=600)
 
 
@@ -141,34 +185,25 @@ def switch(stack, env=None):
 
 @pytest.fixture(scope="module")
 def stack(options, failed_in_module):
-    previous = {k: os.environ.get(k) for k in ("MISP_IMAGE_TAG", "MISP_TEST_ENV", "MIGRATE_FIXTURE_DIR")}
-    os.environ["MISP_IMAGE_TAG"] = TARGET_TAG
-    os.environ.pop("MISP_TEST_ENV", None)
-    os.environ["MIGRATE_FIXTURE_DIR"] = str(FIXTURE_DIR)
-    s = Stack([DEPLOY / "docker-compose.yml", TESTS / "docker-compose.test.yml",
-               TESTS / "docker-compose.migrate.yml"], profiles=("migrate",))
-    s.compose("down", "-v")
-    shutil.rmtree(FIXTURE_DIR, ignore_errors=True)
-    for where, content in [*FIXTURE_FILES.values(), ("taxonomies/x", "ships in the image")]:
-        (FIXTURE_DIR / where).parent.mkdir(parents=True, exist_ok=True)
-        (FIXTURE_DIR / where).write_text(content)
-    if not options["skip_build"]:
-        s.compose("build", check=True, timeout=3600)
-    s.compose("up", "-d", "mysql", "postgres", "redis", "garage", "keycloak", profiles=(), check=True)
-    s.wait_for("mysql", "healthcheck.sh --connect --innodb_initialized", timeout=180)
+    build_images(options)
+    cluster = Cluster("misp-migration", PORTS)
+    cluster.start()
+    cluster.load_images_under_test()
+    s = Release(cluster, values=values_file(K3S / "oidc.yaml"))
+    s.apply(*manifests.mariadb(SOURCE["MIGRATE_SOURCE_USER"], SOURCE["MIGRATE_SOURCE_PASSWORD"]),
+            *manifests.garage(), *manifests.keycloak(),
+            manifests.nodeport("web", "web", {8080: 30080}),
+            manifests.nodeport("garage", "garage", {3900: 30900, 3903: 30903}))
+    source_files(s)
+    for service in ("mariadb", "garage", "keycloak"):
+        s.rollout(service)
     mariadb(s, fetch(SOURCE_SCHEMA) + SOURCE_ROWS.read_text())
     garage.layout()
     access, _ = garage.key("migrate", S3_TARGET["PLUGIN_S3_AWS_ACCESS_KEY"], S3_TARGET["PLUGIN_S3_AWS_SECRET_KEY"])
     for name in (S3_TARGET["PLUGIN_S3_BUCKET_NAME"], COPY_BUCKET):
         garage.bucket(name, access)
     yield s
-    for key, value in previous.items():
-        if value is None:
-            os.environ.pop(key, None)
-        else:
-            os.environ[key] = value
-    s.finish("migration", options["keep"], failed_in_module())
-    shutil.rmtree(FIXTURE_DIR, ignore_errors=True)
+    cluster.finish("migration", options["keep"], failed_in_module())
 
 
 @pytest.fixture(scope="module")
@@ -179,7 +214,16 @@ def counts(stack):
 
 @pytest.fixture(scope="module")
 def first_copy(stack, counts):
-    return migrate(stack, MIGRATE_SOURCE_UPGRADE="true")
+    """The install with the migrate component: the copy runs in the init container of the configure Job."""
+    stack.install(MIGRATE_VALUES, wait=False)
+    try:
+        stack.wait_for_revision()
+    except RuntimeError as e:
+        print(e)
+    pods = json.loads(stack.kubectl("get", "pods", "-l", "job-name=configure-1", "-o", "json").stdout)["items"]
+    state = pods[0]["status"].get("initContainerStatuses", [{}])[0].get("state", {}) if pods else {}
+    out = stack.kubectl("logs", "job/configure-1", "-c", "migrate").stdout
+    return state.get("terminated", {}).get("exitCode", -1), out
 
 
 @pytest.fixture(scope="module")
@@ -195,12 +239,13 @@ def force_alone(stack, identity_mismatch):
 
 @pytest.fixture(scope="module")
 def forced_copy(stack, force_alone):
+    stop(stack)
     return migrate(stack, MIGRATE_FORCE="true", MIGRATE_REPLACE_COPY="true")
 
 
 @pytest.fixture(scope="module")
 def volume_copy(stack, forced_copy):
-    switch(stack, KEYCLOAK_ENV)
+    switch(stack, KEYCLOAK_VALUES)
     return "volume"
 
 
@@ -208,11 +253,8 @@ def volume_copy(stack, forced_copy):
 def keycloak_team(stack, volume_copy):
     """An org sync that renames the migrated organisation to its Keycloak organisation's alias."""
     before = (stack.api("GET", f"/organisations/view/{ORG_UUID}", ADMIN_KEY) or {}).get("Organisation", {})
-    path = scratch_dir() / "migrate-keycloak-orgs.yaml"
-    path.write_text(KEYCLOAK_ORGS)
-    rc, out = stack.run("sync", env={"ADMIN_KEY": ADMIN_KEY, "SYNC_BASE_URL": "http://caddy:8080"},
-                        volumes=[f"{path}:/etc/misp-docker/orgs.yaml:ro"])
-    path.unlink()
+    rc, out = stack.run("python3", "-m", "misp_container.sync", "/tmp/orgs.yaml", files={"/tmp/orgs.yaml": KEYCLOAK_ORGS},
+                        env={"ADMIN_KEY": ADMIN_KEY, "SYNC_BASE_URL": "http://web:8080"})
     after = (stack.api("GET", f"/organisations/view/{ORG_UUID}", ADMIN_KEY) or {}).get("Organisation", {})
     user = (stack.api("GET", f"/admin/users/view/{MIGRATED_USER_ID}", ADMIN_KEY) or {}).get("User", {})
     return {"rc": rc, "out": out, "before": before, "after": after, "user": user}
@@ -225,15 +267,15 @@ def keycloak_login(stack, keycloak_team):
 
 @pytest.fixture(scope="module")
 def s3_run(stack, volume_copy):
-    # The attachments volume holds the files of the first copy: the source of the upload into S3
-    stack.compose("stop", "web", "worker", "metrics", profiles=())
+    # The attachments claim holds the files of the first copy: the source of the upload into S3
+    stop(stack)
     return migrate(stack, MIGRATE_FORCE="true", MIGRATE_REPLACE_COPY="true", MIGRATE_SOURCE_FILES=ATTACHMENTS,
                    **S3_TARGET)
 
 
 @pytest.fixture(scope="module")
 def s3_copy(stack, s3_run):
-    switch(stack, S3_ENV)
+    switch(stack, {"env": S3_TARGET})
     return "s3"
 
 
@@ -337,7 +379,7 @@ def test_rows_copied(first_copy):
 
 def test_attachments_copied(first_copy):
     # The seeded attachment and the three fixture attachments; taxonomies/x is no attachment
-    assert f"attachments copied from /mnt/source to {ATTACHMENTS}: 4 files" in first_copy[1]
+    assert f"attachments copied from {SOURCE_FILES} to {ATTACHMENTS}: 4 files" in first_copy[1]
 
 
 def test_rerun_keeps_the_jobs_copy(stack, first_copy):

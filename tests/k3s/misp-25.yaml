@@ -1,0 +1,108 @@
+# MISP 2.5.50 from the MISP project's images (github.com/MISP/misp-docker): the
+# hub-spoke suite's partner C, on the MariaDB of tests/k3s/mariadb.yaml and a Redis
+# of its own. The suite puts the settings, in the names of those images, in the
+# ConfigMap misp-25-env. A rebuild moves a tag, so the digests pin the images. No pod
+# gets service links: misp-docker reads REDIS_PORT, which a link sets to tcp://<address>
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: redis
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: redis
+    spec:
+      enableServiceLinks: false
+      containers:
+        - name: redis
+          image: docker.io/library/redis:8.10.1-trixie@sha256:8a1efc5f479551822b47424ccae982026b633f28818eab0387348120a61e10e2
+          args: ["redis-server", "--requirepass", "$(REDIS_PASSWORD)", "--save", ""]
+          envFrom:
+            - configMapRef:
+                name: misp-25-env
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+spec:
+  selector:
+    app.kubernetes.io/name: redis
+  ports:
+    - name: redis
+      port: 6379
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: core
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: core
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: core
+    spec:
+      enableServiceLinks: false
+      containers:
+        - name: core
+          image: ghcr.io/misp/misp-docker/misp-core:v2.5.50@sha256:ae32e751870fc7dab8bea3a6d16c41a9045f20d724e243c3125c1910e109c848
+          envFrom:
+            - configMapRef:
+                name: misp-25-env
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: core
+spec:
+  selector:
+    app.kubernetes.io/name: core
+  ports:
+    - name: fpm
+      port: 9002
+    - name: status
+      port: 9003
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: nginx
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: nginx
+    spec:
+      enableServiceLinks: false
+      containers:
+        - name: nginx
+          image: ghcr.io/misp/misp-docker/misp-nginx:v2.5.50@sha256:10d8a3af27f49ade99e8f4a8f75802f5d5c565eb38635ac110da9dfb84534c7e
+          env:
+            - name: FASTCGI_LISTEN
+              value: core:9002
+            - name: FASTCGI_LISTEN_STATUS
+              value: core:9003
+          envFrom:
+            - configMapRef:
+                name: misp-25-env
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nginx
+spec:
+  selector:
+    app.kubernetes.io/name: nginx
+  ports:
+    - name: http
+      port: 8080

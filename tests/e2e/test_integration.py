@@ -1,11 +1,12 @@
-"""Integration suite: one MISP stack in Compose, checked feature by feature.
+"""Integration suite: one release of the chart on k3s, checked feature by feature.
 
     pytest tests/e2e/test_integration.py [--skip-build] [--keep]
 
-The tests run in file order on one stack. Later sections depend on the state
-earlier ones leave: custom auth creates a user that the org sync warm run
-disables, the metrics section stops and starts the worker, and the
-multi-replica section scales web to two replicas and back.
+Beside the release run Keycloak for the OIDC login and garage for the
+attachments in S3. The tests run in file order on one release. Later sections
+depend on the state earlier ones leave: custom auth creates a user that the org
+sync warm run disables, the metrics section scales the workers to none and back,
+and the multi-replica section scales web to two replicas and back.
 """
 
 import base64
@@ -22,15 +23,19 @@ import pytest
 
 import garage
 import keycloak
+import manifests
+from cluster import IMAGES, Cluster, build_images, image_engine, image_tag
 from misp_container import WORKER_QUEUES
 from misp_container.logrelay import FILES as RELAYED
-from stack import DEPLOY, REPO, TESTS, Stack, env_file, scratch_dir
+from stack import K3S, REPO, VALUES, Release, gnupg_key, scratch_dir, values_file
 
 sys.path.insert(0, str(REPO / "scripts"))
 from check_upstream import NOT_RELAYED  # noqa: E402
 
-TEST_ENV = env_file(TESTS / "test-compose.env")
+TEST_ENV = values_file(VALUES)["env"]
 ADMIN_EMAIL = TEST_ENV["ADMIN_EMAIL"]
+# Host port: node port. web, metrics, modules, then garage's S3 and admin API
+PORTS = {28080: 30080, 19191: 30191, 16666: 30666, 3900: 30900, 3903: 30903}
 METRICS = "http://localhost:19191"
 MODULES = "http://localhost:16666"
 SYNC_ORG_UUID = "4f1ed2b2-1821-49da-bf2c-b7ab639d9b19"
@@ -45,16 +50,24 @@ def bootstrap_garage():
 
 @pytest.fixture(scope="module")
 def stack(options, failed_in_module):
-    s = Stack([DEPLOY / "docker-compose.yml", TESTS / "docker-compose.test.yml"])
-    s.compose("down", "-v")
-    if not options["skip_build"]:
-        s.compose("build", check=True, timeout=3600)
-    s.compose("up", "-d")
+    build_images(options)
+    cluster = Cluster("misp-integration", PORTS)
+    cluster.start()
+    cluster.load_images_under_test()
+    s = Release(cluster, values=values_file(K3S / "oidc.yaml"))
+    s.apply(gnupg_key(ADMIN_EMAIL, s.values["secrets"]["app"]["GNUPG_PASSWORD"]), *manifests.garage(),
+            *manifests.keycloak(),
+            manifests.nodeport("web", "web", {8080: 30080}), manifests.nodeport("metrics", "metrics", {9191: 30191}),
+            manifests.nodeport("modules", "modules", {6666: 30666}),
+            manifests.nodeport("garage", "garage", {3900: 30900, 3903: 30903}))
+    s.install()
+    for service in ("garage", "keycloak"):
+        s.rollout(service)
     s.wait_for_misp()
     s.s3 = bootstrap_garage()
     s.key = s.admin_key(ADMIN_EMAIL)
     yield s
-    s.finish("integration", options["keep"], failed_in_module())
+    cluster.finish("integration", options["keep"], failed_in_module())
 
 
 def me(stack, key=None):
@@ -68,10 +81,10 @@ def test_runs_as_uid_1000(stack, service):
     assert stack.exec(service, "id -u") == "1000"
 
 
-def test_caddy_runs_as_uid_1000(stack):
+def test_the_caddy_image_runs_as_uid_1000():
     # Caddy runs on scratch, with no shell: read its image user
-    user = subprocess.run([stack.engine, "inspect", stack.container_id("caddy"), "--format", "{{.Config.User}}"],
-                          capture_output=True, text=True).stdout.strip()
+    user = subprocess.run([*image_engine(), "image", "inspect", f"{IMAGES[1]}:{image_tag()}",
+                           "--format", "{{.Config.User}}"], capture_output=True, text=True).stdout.strip()
     assert user.split(":")[0] == "1000"
 
 
@@ -139,7 +152,7 @@ def test_more_than_30_settings_in_the_database(stack):
 
 
 def test_baseurl_stored_in_the_database(stack):
-    assert stack.sql("SELECT value FROM system_settings WHERE setting='MISP.baseurl';") == '"http://caddy:8080"'
+    assert stack.sql("SELECT value FROM system_settings WHERE setting='MISP.baseurl';") == '"http://web:8080"'
 
 
 # -- workers -------------------------------------------------------------------------
@@ -294,7 +307,7 @@ def test_worker_config_php(stack, needle):
 
 # -- GPG -----------------------------------------------------------------------------
 
-def test_gpg_key_generated(stack):
+def test_gpg_key_imported(stack):
     assert "trustdb.gpg" in stack.exec("web", "ls /var/www/MISP/.gnupg/")
 
 
@@ -461,7 +474,7 @@ def test_oidc_keycloak_offers_its_login_form(oidc):
 
 
 def test_oidc_callback_lands_on_misp(oidc):
-    assert "final=http://caddy:8080/ 200" in oidc["out"]
+    assert "final=http://web:8080/ 200" in oidc["out"]
 
 
 def test_oidc_user_has_the_idp_email(oidc):
@@ -487,9 +500,8 @@ def test_oidc_mixed_auth_keeps_the_password_form(stack, oidc):
 # -- task runner ---------------------------------------------------------------------
 
 def task(stack, *args):
-    """A task through MISP's console, as its CronJob runs it; in Compose the worker has the volumes."""
-    return stack.exec_rc("worker", "python3 -m misp_container.task " + " ".join(args), env={"ADMIN_KEY": ""},
-                         timeout=900)
+    """A task through MISP's console, in the toolbox, as its CronJob runs it."""
+    return stack.run("python3", "-m", "misp_container.task", *args)
 
 
 @pytest.fixture(scope="module")
@@ -617,7 +629,7 @@ teams:
 LOGIN_FLOW = """
 import http.cookiejar, json, re, sys, urllib.parse, urllib.request
 opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
-page = opener.open("http://caddy:8080/users/login", timeout=30).read().decode()
+page = opener.open("http://web:8080/users/login", timeout=30).read().decode()
 form = next(f for f in re.findall(r"<form.*?</form>", page, re.S) if "data[User][password]" in f)
 fields = {}
 for tag in re.findall(r"<input[^>]*>", form):
@@ -625,8 +637,8 @@ for tag in re.findall(r"<input[^>]*>", form):
     if attrs.get("type") == "hidden" and "name" in attrs:
         fields[attrs["name"]] = attrs.get("value", "")
 fields.update({"data[User][email]": sys.argv[1], "data[User][password]": sys.argv[2]})
-opener.open("http://caddy:8080/users/login", urllib.parse.urlencode(fields).encode(), timeout=30)
-me = opener.open(urllib.request.Request("http://caddy:8080/users/view/me.json",
+opener.open("http://web:8080/users/login", urllib.parse.urlencode(fields).encode(), timeout=30)
+me = opener.open(urllib.request.Request("http://web:8080/users/view/me.json",
                                         headers={"Accept": "application/json"}), timeout=30).read()
 try:
     print(json.dumps(json.loads(me)))
@@ -636,13 +648,8 @@ except ValueError:
 
 
 def org_sync(stack, config):
-    path = scratch_dir() / "test-orgs.yaml"
-    path.write_text(config)
-    try:
-        return stack.run("sync", env={"ADMIN_KEY": stack.key, "SYNC_BASE_URL": "http://caddy:8080"},
-                         volumes=[f"{path}:/etc/misp-docker/orgs.yaml:ro"])
-    finally:
-        path.unlink()
+    return stack.run("python3", "-m", "misp_container.sync", "/tmp/orgs.yaml", files={"/tmp/orgs.yaml": config},
+                     env={"ADMIN_KEY": stack.key, "SYNC_BASE_URL": "http://web:8080"})
 
 
 @pytest.fixture(scope="module")
@@ -739,7 +746,7 @@ def test_sync_leaves_the_unnamed_oidc_user_enabled(stack, synced):
 
 
 def test_sync_break_glass_password_logs_in(stack, synced):
-    _, out = stack.run("sync", "python3", "-c", LOGIN_FLOW, "break-glass@example.com", "Br3ak-Glass!Pass#2026")
+    _, out = stack.run("python3", "-c", LOGIN_FLOW, "break-glass@example.com", "Br3ak-Glass!Pass#2026")
     me = next((json.loads(line) for line in reversed(out.splitlines()) if line.startswith("{")), {})
     assert me.get("User", {}).get("email") == "break-glass@example.com", out[-2000:]
 
@@ -855,10 +862,10 @@ def test_metrics_scheduled_tasks_present(metrics_text):
 @pytest.fixture(scope="module")
 def waiting_job(stack, metrics_text):
     # The depth comes from Redis: a job waits there while no worker runs
-    stack.compose("stop", "worker")
+    stack.scale("worker", 0)
     stack.http("POST", "/servers/cache/all", stack.key, {})
     depth = default_depth()
-    stack.compose("start", "worker")
+    stack.scale("worker", 1)
     return depth
 
 
@@ -931,25 +938,21 @@ with urllib.request.urlopen(request, timeout=10) as response:
 # -- multi-replica web ---------------------------------------------------------------
 
 def test_configure_ran_configuration(stack):
-    assert "configuration complete" in stack.logs("configure", stopped=True)
+    assert "configuration complete" in stack.logs("configure")
 
 
 def test_configure_set_live(stack):
-    assert "setting MISP.live = true" in stack.logs("configure", stopped=True)
+    assert "setting MISP.live = true" in stack.logs("configure")
 
 
 @pytest.fixture(scope="module")
 def two_web(stack):
-    stack.compose("up", "-d", "--no-deps", "--no-recreate", "--scale", "web=2", "web")
+    stack.scale("web", 2)
     deadline = time.monotonic() + 60
     while stack.logs("web").count("starting PHP-FPM") < 2 and time.monotonic() < deadline:
         time.sleep(2)
     yield stack
-    # Back to one replica, so the teardown sees only containers compose created
-    extra = stack.container_ids("web")[1:]
-    if extra:
-        subprocess.run([stack.engine, "rm", "-f", *extra], capture_output=True)
-    stack._ids.clear()
+    stack.scale("web", 1)
 
 
 def test_two_web_replicas_started_fpm(two_web):
@@ -960,8 +963,8 @@ def test_web_replicas_do_not_configure(two_web):
     assert "configuration complete" not in two_web.logs("web")
 
 
-def test_two_web_containers_running(two_web):
-    assert len(two_web.container_ids("web")) == 2
+def test_two_web_pods_running(two_web):
+    assert len(two_web.pods("web")) == 2
 
 
 def test_login_served_with_two_replicas(two_web):
@@ -971,15 +974,15 @@ def test_login_served_with_two_replicas(two_web):
 # -- logging -------------------------------------------------------------------------
 
 def test_configure_writes_json_lines(stack):
-    # The test stack takes LOG_FORMAT=json from base.env, as Kubernetes does
-    lines = [l for l in stack.logs("configure", stopped=True).splitlines() if l.startswith("{")]
+    # LOG_FORMAT=json is the chart's default (base.env)
+    lines = [l for l in stack.logs("configure").splitlines() if l.startswith("{")]
     assert len(lines) >= 10
     for line in lines:
         json.loads(line)
 
 
 def test_configure_writes_no_text_lines(stack):
-    text = [l for l in stack.logs("configure", stopped=True).splitlines()
+    text = [l for l in stack.logs("configure").splitlines()
             if re.match(r"^[0-9-]{10} [0-9:]{8} (INFO|WARNING|ERROR) ", l)]
     assert text == []
 
@@ -1053,6 +1056,6 @@ def test_every_misp_setting_curated_or_catalogued(stack):
 
 def test_no_rejected_cake_settings(stack):
     # Every default this image applies must be accepted by this MISP version
-    rejected = [l for l in stack.logs("configure", stopped=True).splitlines()
+    rejected = [l for l in stack.logs("configure").splitlines()
                 if "WARNING [cake]" in l or '"level":"warning","context":"cake"' in l]
     assert rejected == []

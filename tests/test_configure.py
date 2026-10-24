@@ -56,7 +56,7 @@ class TestCheckIdentity:
                 configure.check_identity()
 
     def test_case_matters_for_markers(self):
-        """ChangeMe-... is the documented Compose demo password, not a placeholder."""
+        """ChangeMe-... is no placeholder: the placeholder markers are lower case."""
         with patch.dict(os.environ, {**GOOD, "ADMIN_PASSWORD": "ChangeMe-Str0ng!Pass#2026"}):
             configure.check_identity()
 

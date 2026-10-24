@@ -308,14 +308,12 @@ def test_the_logging_doc_names_every_relayed_file():
     assert named == set(FILES) - {"debug.log", "error.log"}, f"the row names {sorted(named)}; logrelay.FILES has {FILES}"
 
 
-def test_the_log_format_defaults():
+def test_the_log_format_default():
     base = (chart.CHART / "files/base.env").read_text()
-    compose = (REPO / "deploy/compose.env").read_text()
     base_default = re.search(r"^LOG_FORMAT=(\w+)", base, re.M).group(1)
-    compose_default = re.search(r"^LOG_FORMAT=(\w+)", compose, re.M).group(1)
     text = " ".join((REPO / "docs/configuration.md").read_text().split())
-    for expected in (f"`{base_default}` (the `base.env` default", f"`{compose_default}` (the Compose default"):
-        assert expected in text, f"docs/configuration.md should say: {expected}"
+    expected = f"`{base_default}` (the `base.env` default"
+    assert expected in text, f"docs/configuration.md should say: {expected}"
 
 
 def test_the_metrics_port():
@@ -323,3 +321,9 @@ def test_the_metrics_port():
     assert f"on port {port}" in " ".join((REPO / "docs/metrics.md").read_text().split()), \
         f"docs/metrics.md should say: on port {port}"
 
+
+
+def test_the_quick_start_runs_the_k3s_of_the_suites():
+    pinned = re.search(r'K3S_IMAGE = \("(docker\.io/rancher/k3s:[^"@]+)', (REPO / "tests/e2e/cluster.py").read_text()).group(1)
+    named = set(re.findall(r"docker\.io/rancher/k3s:\S+", (REPO / "README.md").read_text()))
+    assert named == {pinned}, f"README.md runs {sorted(named)}; the suites run {pinned} (tests/e2e/cluster.py)"

@@ -1,28 +1,32 @@
-"""Hub-spoke sync suite: two MISP instances of this tree's images and a MISP 2.5 partner.
+"""Hub-spoke sync suite: two releases of the chart and a MISP 2.5 partner on one k3s cluster.
 
     pytest tests/e2e/test_sync.py [--skip-build] [--keep]
 
-The stack is the deploy stack's services once per instance of this tree's
-images, prefixed a- and b-, and MISP 2.5 from the MISP project's own images as
-c-, written to one Compose file by the stack fixture. B is the hub, A and C
-spokes. The org sync container configures A and B, and the suite configures C
-through its API. Layout 1: B pulls every event from A and C; A and C pull from
-B only the events tagged for them; B pushes a tagged event to A; C pushes an
-event to B. Layout 2: A is passive; B pulls from it, tags, and pushes A and C
-only the events tagged for them.
+A and B are releases of this tree's chart in the namespaces a and b; C is MISP
+2.5 from the MISP project's own images (tests/k3s/misp-25.yaml) in the
+namespace c. B is the hub, A and C spokes. The org sync configures A and B, and
+the suite configures C through its API. Layout 1: B pulls every event from A
+and C; A and C pull from B only the events tagged for them; B pushes a tagged
+event to A; C pushes an event to B. Layout 2: A is passive; B pulls from it,
+tags, and pushes A and C only the events tagged for them.
 """
 
 import json
 import time
 
 import pytest
-import yaml
 
-from stack import DEPLOY, TESTS, Stack, env_file, scratch_dir
+import manifests
+from cluster import Cluster, build_images
+from stack import VALUES, Release, values_file
 
+# The host port of each instance and its node port
 PORTS = {"a": 18091, "b": 18092, "c": 18093}
+NODE_PORTS = {"a": 30091, "b": 30092, "c": 30093}
 # The instances on this tree's images; C runs MISP 2.5
 OURS = ("a", "b")
+# Each instance as the others reach it in the cluster
+INTERNAL = {"a": "http://web.a:8080", "b": "http://web.b:8080", "c": "http://nginx.c:8080"}
 # The configure step refuses a key with ten zeros in a row as a placeholder
 ADMIN_KEYS = {i: f"adminKeyFor{i.upper()}" + "k7" * 14 for i in PORTS}
 MISP_UUIDS = {"a": "1a4e2c6d-0b3f-4a58-9c1d-7e2f3b4c5d6a", "b": "2b5f3d7e-1c40-4b69-8d2e-8f3a4c5d6e7b"}
@@ -33,86 +37,35 @@ SYNC_KEY = {  # the key the first instance's sync user holds, for the second ins
     ("b", "a"): "syncKeyBforA" + "s5" * 14,
     ("b", "c"): "syncKeyBforC" + "s5" * 14,
 }
-SECRETS = TESTS / "test-compose-secrets.env"
-REDIS_PASSWORD = env_file(SECRETS)["MISP_REDIS_PASSWORD"]
-# The services of the deploy stack each instance runs; the MISP ones run read-only
-SERVICES = ("postgres", "redis", "configure", "web", "worker", "caddy")
-READ_ONLY = ("configure", "web", "worker", "caddy")
-# C: MISP 2.5.50 from the MISP project's images (github.com/MISP/misp-docker), on the
-# MariaDB of the migration suite. A rebuild moves the tag, so the digest pins it
-MISP_25_CORE = ("ghcr.io/misp/misp-docker/misp-core:v2.5.50"
-                "@sha256:ae32e751870fc7dab8bea3a6d16c41a9045f20d724e243c3125c1910e109c848")
-MISP_25_NGINX = ("ghcr.io/misp/misp-docker/misp-nginx:v2.5.50"
-                 "@sha256:10d8a3af27f49ade99e8f4a8f75802f5d5c565eb38635ac110da9dfb84534c7e")
-PARTNER = ("c-db", "c-redis", "c-core", "c-nginx")
+SECRETS = values_file(VALUES)["secrets"]
+REDIS_PASSWORD = SECRETS["app"]["MISP_REDIS_PASSWORD"]
+PARTNER_DB_PASSWORD = "misp-25-db-pw"
 
 
-def instance_env(inst):
-    return {"DB_HOST": f"{inst}-postgres", "MISP_REDIS_HOST": f"{inst}-redis",
-            "MISP_BASEURL": f"http://localhost:{PORTS[inst]}", "MISP_UUID": MISP_UUIDS[inst],
-            "ADMIN_EMAIL": "admin@admin.test", "ADMIN_ORG": f"Org-{inst.upper()}",
-            "ADMIN_ORG_UUID": ORG_UUIDS[inst], "ADMIN_KEY": ADMIN_KEYS[inst]}
+class Instances(dict):
+    """The releases of A and B and the partner C, by name; dump_logs serves the failure hook."""
+
+    def __init__(self, cluster, releases):
+        super().__init__(releases)
+        self.cluster = cluster
+
+    def dump_logs(self, name):
+        return self.cluster.dump_logs(name)
 
 
-def partner_env():
+def instance_values(inst):
+    return {"env": {"MISP_BASEURL": url(inst), "MISP_UUID": MISP_UUIDS[inst], "ADMIN_EMAIL": "admin@admin.test",
+                    "ADMIN_ORG": f"Org-{inst.upper()}", "ADMIN_ORG_UUID": ORG_UUIDS[inst]},
+            "secrets": {"admin": {"ADMIN_KEY": ADMIN_KEYS[inst]}}}
+
+
+def partner_settings():
     """The settings of C, in the names of MISP's own images."""
-    secrets = env_file(SECRETS)
-    return {"BASE_URL": url("c"), "ADMIN_EMAIL": "admin@admin.test", "ADMIN_PASSWORD": secrets["ADMIN_PASSWORD"],
+    return {"BASE_URL": url("c"), "ADMIN_EMAIL": "admin@admin.test", "ADMIN_PASSWORD": SECRETS["admin"]["ADMIN_PASSWORD"],
             "ADMIN_KEY": ADMIN_KEYS["c"], "ADMIN_ORG": "Org-C", "ADMIN_ORG_UUID": ORG_UUIDS["c"],
-            "MYSQL_HOST": "c-db", "MYSQL_USER": secrets["MARIADB_USER"],
-            "MYSQL_PASSWORD": secrets["MARIADB_PASSWORD"], "MYSQL_DATABASE": "misp",
-            "REDIS_HOST": "c-redis", "REDIS_PASSWORD": REDIS_PASSWORD, "DISABLE_IPV6": "true",
-            "DISABLE_CA_REFRESH": "true", "ENABLE_BACKGROUND_UPDATES": "true"}
-
-
-def write_stack(directory):
-    """One Compose file with SERVICES of deploy/docker-compose.yml for A and B, and C; its path."""
-    deploy = yaml.safe_load((DEPLOY / "docker-compose.yml").read_text())["services"]
-    directory.mkdir(parents=True, exist_ok=True)
-    services, volumes = {}, {}
-
-    def prefixed(inst, volume):
-        source, _, target = volume.partition(":")
-        if "/" in source or source.startswith((".", "$")):
-            return volume
-        volumes[f"{inst}-{source}"] = None
-        return f"{inst}-{source}:{target}"
-
-    for inst in OURS:
-        env = directory / f"{inst}.env"
-        env.write_text("".join(f"{key}={value}\n" for key, value in instance_env(inst).items()))
-        for name in SERVICES:
-            spec = {k: v for k, v in deploy[name].items() if k not in ("build", "ports", "profiles")}
-            spec["env_file"] = [str(DEPLOY / f) for f in spec.get("env_file", [])] + [str(SECRETS), str(env)]
-            spec["volumes"] = [prefixed(inst, v) for v in spec.get("volumes", [])]
-            deps = spec.pop("depends_on", {})
-            deps = deps if isinstance(deps, dict) else {d: {"condition": "service_started"} for d in deps}
-            spec["depends_on"] = {f"{inst}-{d}": c for d, c in deps.items() if d in SERVICES}
-            if name == "caddy":
-                spec["environment"] = {**spec.get("environment", {}), "PHP_FPM_HOST": f"{inst}-web"}
-                spec["ports"] = [f"{PORTS[inst]}:8080"]
-            if name in READ_ONLY:
-                spec["read_only"] = True
-            services[f"{inst}-{name}"] = {k: v for k, v in spec.items() if v not in ([], {})}
-    mariadb = yaml.safe_load((TESTS / "docker-compose.migrate.yml").read_text())["services"]["mysql"]
-    services["c-db"] = {**mariadb, "env_file": [str(SECRETS)], "volumes": ["c-db:/var/lib/mysql"]}
-    volumes["c-db"] = None
-    services["c-redis"] = {**deploy["redis"], "env_file": [str(SECRETS)]}
-    partner = directory / "c.env"
-    partner.write_text("".join(f"{key}={value}\n" for key, value in partner_env().items()))
-    services["c-core"] = {"image": MISP_25_CORE, "env_file": [str(partner)], "depends_on": {
-        "c-db": {"condition": "service_healthy"}, "c-redis": {"condition": "service_healthy"}}}
-    services["c-nginx"] = {"image": MISP_25_NGINX, "ports": [f"{PORTS['c']}:8080"],
-                           "environment": {"BASE_URL": url("c"), "FASTCGI_LISTEN": "c-core:9002",
-                                           "FASTCGI_LISTEN_STATUS": "c-core:9003", "DISABLE_IPV6": "true"},
-                           "depends_on": {"c-core": {"condition": "service_started"}}}
-    # One org sync service; run_sync points it at an instance
-    sync = {k: v for k, v in deploy["sync"].items() if k not in ("build", "depends_on")}
-    sync["env_file"] = [str(DEPLOY / f) for f in sync["env_file"]] + [str(SECRETS)]
-    services["sync"] = sync
-    path = directory / "docker-compose.yml"
-    path.write_text(yaml.safe_dump({"services": services, "volumes": volumes}, sort_keys=False))
-    return path
+            "MYSQL_HOST": "mariadb", "MYSQL_USER": "misp", "MYSQL_PASSWORD": PARTNER_DB_PASSWORD,
+            "MYSQL_DATABASE": "misp", "REDIS_HOST": "redis", "REDIS_PASSWORD": REDIS_PASSWORD,
+            "DISABLE_IPV6": "true", "DISABLE_CA_REFRESH": "true", "ENABLE_BACKGROUND_UPDATES": "true"}
 
 
 def url(inst):
@@ -120,20 +73,20 @@ def url(inst):
 
 
 def api(stack, inst, method, path, data=None):
-    return stack.api(method, path, ADMIN_KEYS[inst], data, base_url=url(inst))
+    return stack[inst].api(method, path, ADMIN_KEYS[inst], data)
 
 
 def post_ok(stack, inst, path, data=None):
     """A POST that must succeed: pulls and pushes accept POST only."""
-    status, body = stack.http("POST", path, ADMIN_KEYS[inst], data or {}, base_url=url(inst))
+    status, body = stack[inst].http("POST", path, ADMIN_KEYS[inst], data or {})
     assert status == 200, f"POST {path} on {inst}: {status} {body[:300]}"
 
 
 def unfinished_jobs(stack, inst):
     query = "SELECT COUNT(*) FROM jobs WHERE status NOT IN (3,4)"
     if inst in OURS:
-        return stack.sql(query + ";", service=f"{inst}-web")
-    return stack.exec("c-db", f'MYSQL_PWD="$MARIADB_PASSWORD" mariadb -N -u "$MARIADB_USER" misp -e "{query}"')
+        return stack[inst].sql(query + ";")
+    return stack[inst].exec("mariadb", f'MYSQL_PWD="$MARIADB_PASSWORD" mariadb -N -u "$MARIADB_USER" misp -e "{query}"')
 
 
 def wait_for_jobs(stack, inst, timeout=90):
@@ -174,14 +127,9 @@ def tag_and_publish(stack, inst, eid, tag):
 
 
 def run_sync(stack, inst, config: str) -> int:
-    """Apply an orgs.yaml to one instance through the sync container; its exit code."""
-    path = scratch_dir() / f"sync-test-{inst}.yaml"
-    path.write_text(config)
-    rc, _ = stack.run("sync", env={
-        "ADMIN_KEY": ADMIN_KEYS[inst], "SYNC_BASE_URL": f"http://{inst}-caddy:8080",
-        "DB_HOST": f"{inst}-postgres", "MISP_REDIS_HOST": f"{inst}-redis",
-    }, volumes=[f"{path}:/etc/misp-docker/orgs.yaml:ro"])
-    path.unlink()
+    """Apply an orgs.yaml to one instance through the org sync in its toolbox; the exit code."""
+    rc, _ = stack[inst].run("python3", "-m", "misp_container.sync", "/tmp/orgs.yaml", files={"/tmp/orgs.yaml": config},
+                            env={"ADMIN_KEY": ADMIN_KEYS[inst], "SYNC_BASE_URL": "http://web:8080"})
     return rc
 
 
@@ -200,7 +148,7 @@ def spoke(hub_server=True):
     if hub_server:
         config += f'''    servers:
       - name: "Hub B"
-        url: "http://b-caddy:8080"
+        url: "{INTERNAL['b']}"
         authkey: "{SYNC_KEY[('b', 'a')]}"
         pull: true
         push: false
@@ -213,8 +161,8 @@ def spoke(hub_server=True):
 def hub(push, c_key):
     """orgs.yaml of B: the sync users for A and C, and A and C as pull (and in layout 2 push) servers."""
     server = ""
-    for spoke_name, spoke_url, key in (("A", "http://a-caddy:8080", SYNC_KEY[("a", "b")]),
-                                       ("C", "http://c-nginx:8080", c_key)):
+    for spoke_name, spoke_url, key in (("A", INTERNAL["a"], SYNC_KEY[("a", "b")]),
+                                       ("C", INTERNAL["c"], c_key)):
         server += f'''      - name: "Spoke {spoke_name}"
         url: "{spoke_url}"
         authkey: "{key}"
@@ -251,16 +199,24 @@ teams:
 
 @pytest.fixture(scope="module")
 def stack(options, failed_in_module):
-    if not options["skip_build"]:
-        Stack([DEPLOY / "docker-compose.yml"]).compose("build", check=True, timeout=3600)
-    s = Stack([write_stack(scratch_dir() / "hub-spoke")])
-    s.compose("down", "-v")
-    s.compose("up", "-d", *[f"{inst}-{name}" for inst in OURS for name in SERVICES], *PARTNER)
+    build_images(options)
+    cluster = Cluster("misp-sync", {PORTS[i]: NODE_PORTS[i] for i in PORTS})
+    cluster.start()
+    cluster.load_images_under_test()
+    instances = Instances(cluster, {i: Release(cluster, i, PORTS[i], instance_values(i) if i in OURS else None)
+                                    for i in PORTS})
+    instances["c"].apply(*manifests.mariadb("misp", PARTNER_DB_PASSWORD), *manifests.misp25(partner_settings()),
+                         manifests.nodeport("web", "nginx", {8080: NODE_PORTS["c"]}))
+    for inst in OURS:
+        instances[inst].apply(manifests.nodeport("web", "web", {8080: NODE_PORTS[inst]}))
+        instances[inst].install(wait=False)
+    for inst in OURS:
+        instances[inst].wait_for_revision()
     for inst in PORTS:
         # MISP's own image loads its schema and data on its first start
-        s.wait_for_misp(timeout=600 if inst == "c" else 360, base_url=url(inst))
-    yield s
-    s.finish("sync", options["keep"], failed_in_module())
+        instances[inst].wait_for_misp(timeout=600 if inst == "c" else 360)
+    yield instances
+    cluster.finish("sync", options["keep"], failed_in_module())
 
 
 @pytest.fixture(scope="module")
@@ -276,7 +232,7 @@ def partner(stack):
     key = (api(stack, "c", "POST", f"/auth_keys/add/{user['User']['id']}", {}) or {})["AuthKey"]["authkey_raw"]
     rules = {"tags": {"OR": ["release-to:C"], "NOT": []}, "orgs": {"OR": [], "NOT": []}, "url_params": ""}
     server = api(stack, "c", "POST", "/servers/add", {"Server": {
-        "name": "Hub B", "url": "http://b-caddy:8080", "authkey": SYNC_KEY[("b", "c")], "remote_org_id": org_id,
+        "name": "Hub B", "url": INTERNAL["b"], "authkey": SYNC_KEY[("b", "c")], "remote_org_id": org_id,
         "pull": True, "push": False, "self_signed": False, "pull_rules": json.dumps(rules),
         "push_rules": json.dumps({"tags": {"OR": [], "NOT": []}, "orgs": {"OR": [], "NOT": []}})}}) or {}
     assert server.get("Server", {}).get("id"), server
@@ -310,7 +266,7 @@ def hub_tagged(stack, hub_pulled):
 @pytest.fixture(scope="module")
 def spoke_pulled(stack, hub_tagged):
     # Stale event indexes in Redis would hide the pulled events
-    stack.exec("a-redis", f"redis-cli -a {REDIS_PASSWORD} FLUSHALL")
+    stack["a"].exec("redis", f"redis-cli -a {REDIS_PASSWORD} FLUSHALL")
     for inst in ("a", "c"):
         post_ok(stack, inst, f"/servers/pull/{server_id(stack, inst, 'Hub B')}/full")
     for inst in ("a", "c"):

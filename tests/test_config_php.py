@@ -120,7 +120,7 @@ class TestConfigPhpSpecs:
 
 
 class TestAttachmentsDir:
-    """attachments_dir as a pod renders it, with base.env loaded as the chart and Compose load it."""
+    """attachments_dir as a pod renders it, with base.env loaded as the chart loads it."""
 
     def _render(self, extra: dict) -> str:
         with open(os.path.join(REPO, "deploy/chart/files/base.env")) as f:

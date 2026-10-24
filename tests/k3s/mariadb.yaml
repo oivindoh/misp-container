@@ -1,0 +1,52 @@
+# A MariaDB with one database, ephemeral: the migration suite's source, and the
+# database of the hub-spoke suite's MISP 2.5. The suite puts MARIADB_DATABASE,
+# MARIADB_USER and MARIADB_PASSWORD in the ConfigMap mariadb-env. MariaDB stays on
+# its LTS line, 11.8 (.github/dependabot.yml)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mariadb
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: mariadb
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: mariadb
+    spec:
+      enableServiceLinks: false
+      containers:
+        - name: mariadb
+          image: docker.io/library/mariadb:11.8.9@sha256:79d59758afc91b89b120b0a8904d637f5a3b3e1c4900f29b740d6d46c72fef68
+          args:
+            - --character-set-server=utf8mb4
+            - --collation-server=utf8mb4_unicode_ci
+            - --max-allowed-packet=1G
+          envFrom:
+            - configMapRef:
+                name: mariadb-env
+          env:
+            - name: MARIADB_RANDOM_ROOT_PASSWORD
+              value: "1"
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/mysql
+          readinessProbe:
+            exec:
+              command: ["healthcheck.sh", "--connect", "--innodb_initialized"]
+            periodSeconds: 5
+      volumes:
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mariadb
+spec:
+  selector:
+    app.kubernetes.io/name: mariadb
+  ports:
+    - name: mysql
+      port: 3306

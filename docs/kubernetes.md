@@ -20,9 +20,9 @@ helm install misp oci://ghcr.io/oivindoh/charts/misp \
     --namespace misp --create-namespace -f values.yaml
 ```
 
-The chart has its own SemVer version, and its `appVersion` is the image tag of the release:
-the MISP version, with `-rN` for a hotfix ([DEVELOPING.md](../DEVELOPING.md#releases)). From a
-checkout, install `deploy/chart` instead.
+The chart's version and its `appVersion`, the image tag of the release, follow the release
+scheme in [DEVELOPING.md](../DEVELOPING.md#releases). A pre-release such as `3.0.0-wip.1` needs
+`--version` or `--devel`. From a checkout, install `deploy/chart` instead.
 
 Check a release from inside the cluster once the configure Job has run:
 
@@ -105,14 +105,13 @@ into the header never reaches the audit log, whether the proxy in front replaces
 |-------|----------------------|-----------|
 | Kubernetes, unset | every private range | a client with a public address; for a client with a private address, the ingress or Gateway pod |
 | Kubernetes, set in `env` to the ingress or Gateway proxy pods | those pods | every client |
-| Compose | `127.0.0.1/32` on the caddy service: clients reach caddy directly | every client |
 
 With `networkPolicy`, only the ingress namespace reaches the web pods. For a Gateway,
 set `networkPolicy.ingressNamespace` to the namespace of the Gateway's proxies.
 
 ## Secrets
 
-The chart makes its Secrets from `.env` files that Compose reads too, with the `secrets`
+The chart makes its Secrets from the `.env` files in `deploy/chart/files`, with the `secrets`
 value on top; the `migrate` component adds `misp-migrate`, with `migrate.secret` on top. A
 workload gets a whole Secret, or only the keys the table names:
 
@@ -251,5 +250,4 @@ On demand:
 
 ```bash
 kubectl -n misp create job --from=cronjob/pull-servers pull-now
-podman compose exec worker python3 -m misp_container.task pull-servers   # Compose
 ```
