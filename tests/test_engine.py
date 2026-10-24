@@ -134,3 +134,21 @@ class TestCursorHandling:
         assert db.execute("UPDATE t SET a = 1") == 1
         assert db.query_ok("SELECT 1") is True
         assert all(c.closed for c in cursors)
+
+
+class TestSetSystemSetting:
+    @patch("misp_container.db.execute")
+    @patch("misp_container.db.dict_query", return_value=[{"setting": "x"}])
+    def test_a_present_row_is_updated_even_to_its_own_value(self, query, execute):
+        # MySQL reports 0 changed rows for an UPDATE to the same value
+        execute.return_value = 0
+        db.set_system_setting("misp_docker.defaults_version", "v2.5.50")
+        assert len(execute.call_args_list) == 1
+        assert execute.call_args[0][0].startswith("UPDATE system_settings")
+
+    @patch("misp_container.db.execute")
+    @patch("misp_container.db.dict_query", return_value=[])
+    def test_a_missing_row_is_inserted(self, query, execute):
+        db.set_system_setting("misp_docker.defaults_version", "v2.5.50")
+        assert execute.call_args[0][0].startswith("INSERT INTO system_settings")
+        assert execute.call_args[0][1] == ("misp_docker.defaults_version", '"v2.5.50"')

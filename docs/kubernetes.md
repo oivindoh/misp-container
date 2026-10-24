@@ -13,24 +13,15 @@
 
 ## Install
 
-Each release publishes the chart to GHCR:
+Each release publishes the chart to GHCR; Helm takes the newest one:
 
 ```bash
-helm install misp oci://ghcr.io/oivindoh/charts/misp --version 2.0.0 \
+helm install misp oci://ghcr.io/oivindoh/charts/misp \
     --namespace misp --create-namespace -f values.yaml
 ```
 
-The chart has its own SemVer version. Its `appVersion` is the image tag of the release: the
-MISP version, with `-rN` for a hotfix. `helm list` shows it as the app version.
-
-| Release | Chart version | `appVersion` |
-|---------|---------------|--------------|
-| A normal release, such as a new MISP version | the minor goes up: `1.1.0` | `2.5.49` |
-| A hotfix | the patch goes up: `1.1.1` | `2.5.49-r1` |
-| A change that breaks existing values or the upgrade path | the major goes up: `2.0.0` | the release's image tag |
-
-So a version range such as `1.*` in an Argo CD `targetRevision` or a Flux HelmRelease
-follows every MISP release and hotfix, and stops before a change to the values. From a
+The chart has its own SemVer version, and its `appVersion` is the image tag of the release:
+the MISP version, with `-rN` for a hotfix ([DEVELOPING.md](../DEVELOPING.md#releases)). From a
 checkout, install `deploy/chart` instead.
 
 Check a release from inside the cluster once the configure Job has run:
@@ -83,21 +74,6 @@ below come from them.
 | `orgSync` | The org-sync Job applies orgs, the content of orgs.yaml (deploy/orgs.yaml.example), through the API after each install and upgrade. It exits at once when ADMIN_KEY is empty. |
 | `attachments` | Attachments, org logos and custom images on the claim attachments. Web and worker pods on different nodes write there, so the storage class must offer ReadWriteMany. For attachments in S3, set PLUGIN_S3_BUCKET_NAME in env and claim: false; org logos and custom images then stay in each pod. |
 <!-- end generated -->
-
-### Upgrading from chart 1.x
-
-Chart 2.0 selects every pod on `app.kubernetes.io/name` alone. A selector is immutable, so
-`helm upgrade` from a 1.x release refuses the Deployments and StatefulSets. Delete them
-first; the claims, the Secrets and the ConfigMap stay, and the upgrade recreates the rest:
-
-```bash
-kubectl -n misp delete deployment,statefulset -l app.kubernetes.io/part-of=misp
-helm upgrade misp oci://ghcr.io/oivindoh/charts/misp --version 2.0.0 --namespace misp -f values.yaml
-```
-
-The `postgres` component of chart 2.0 runs PostgreSQL 18, which cannot read the claim of a 1.x
-release. Its pod refuses to start on that claim. Dump the database before the upgrade, and
-restore it into a new claim ([operations.md](operations.md#a-new-postgresql-major-version)).
 
 ## Components
 

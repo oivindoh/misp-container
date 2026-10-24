@@ -74,6 +74,8 @@ class Check:
     upstream: str
     ours: str
     run: Callable[[Path], list[str]]
+    # What MISP changed when the check fails; DEVELOPING.md lists it
+    fails_when: str = ""
 
 
 def read(root: Path, rel: str) -> str:
@@ -446,23 +448,36 @@ def python_requirements(root: Path) -> list[str]:
 
 
 CHECKS = [
-    Check("worker-queues", BACKGROUND_JOBS, "files/misp_container/__init__.py WORKER_QUEUES", worker_queues),
-    Check("worker-group", BACKGROUND_JOBS, "files/misp_container/__init__.py WORKER_GROUP", worker_group),
-    Check("job-keys", BACKGROUND_JOBS, "files/misp_container/metrics.py _collect_queue_metrics()", job_keys),
-    Check("scheduler-tasks", SCHEDULER_SHELL, "files/misp_container/task.py SCHEDULER_COVERAGE", scheduler_tasks),
-    Check("api-routes", CONTROLLERS, "the file and line named in each problem", api_routes),
+    Check("worker-queues", BACKGROUND_JOBS, "files/misp_container/__init__.py WORKER_QUEUES", worker_queues,
+          fails_when="adds or drops a job queue"),
+    Check("worker-group", BACKGROUND_JOBS, "files/misp_container/__init__.py WORKER_GROUP", worker_group,
+          fails_when="finds its workers in another supervisord group"),
+    Check("job-keys", BACKGROUND_JOBS, "files/misp_container/metrics.py _collect_queue_metrics()", job_keys,
+          fails_when="keeps waiting or running jobs under other Redis keys"),
+    Check("scheduler-tasks", SCHEDULER_SHELL, "files/misp_container/task.py SCHEDULER_COVERAGE", scheduler_tasks,
+          fails_when="offers periodic work that no task covers"),
+    Check("api-routes", CONTROLLERS, "the file and line named in each problem", api_routes,
+          fails_when="drops a controller or an action the image calls"),
     Check("attachment-keys", f"{ATTACHMENT_TOOL}, {AWS_S3_CLIENT}",
-          "files/misp_container/migrate.py attachment_key(), files/misp_container/s3.py", attachment_keys),
-    Check("cakeresque", BOOTSTRAP, "Dockerfile stage composer-prep", cakeresque),
-    Check("cakelog-streams", BOOTSTRAP, "files/misp_container/init.py LOG_BLOCK", cakelog_streams),
-    Check("shell-streams", CONSOLE_SHELL, "files/misp_container/init.py LOG_BLOCK", shell_streams),
+          "files/misp_container/migrate.py attachment_key(), files/misp_container/s3.py", attachment_keys,
+          fails_when="keys attachments another way, or stops sending path-style S3 requests"),
+    Check("cakeresque", BOOTSTRAP, "Dockerfile stage composer-prep", cakeresque,
+          fails_when="loads CakeResque while SimpleBackgroundJobs is on"),
+    Check("cakelog-streams", BOOTSTRAP, "files/misp_container/init.py LOG_BLOCK", cakelog_streams,
+          fails_when="configures a CakeLog file stream that the logging block does not drop"),
+    Check("shell-streams", CONSOLE_SHELL, "files/misp_container/init.py LOG_BLOCK", shell_streams,
+          fails_when="checks other stream names before it adds its console streams"),
     Check("relayed-files", "app/Model, app/Lib, app/Controller, app/Console, app/Plugin",
-          "files/misp_container/logrelay.py FILES", relayed_files),
+          "files/misp_container/logrelay.py FILES", relayed_files,
+          fails_when="writes a new file under app/tmp/logs, or stops writing one the relay follows"),
     Check("image-paths", f"{SERVER_MODEL}, {ORG_IMG_HELPER}",
-          "deploy/chart/templates/_helpers.tpl misp.appVolumeMounts, deploy/docker-compose.yml", image_paths),
-    Check("python-requirements", MISP_REQUIREMENTS, "files/requirements-misp.txt", python_requirements),
+          "deploy/chart/templates/_helpers.tpl misp.appVolumeMounts, deploy/docker-compose.yml", image_paths,
+          fails_when="uploads org logos or custom images to, or reads them from, a directory the volumes do not mount"),
+    Check("python-requirements", MISP_REQUIREMENTS, "files/requirements-misp.txt", python_requirements,
+          fails_when="needs a Python package, or a version of one, that the pins do not give (mise run misp-requirements)"),
 ]
-PHP_CHECK = Check("log-block-php", "php", "files/misp_container/init.py LOG_BLOCK", log_block_php)
+PHP_CHECK = Check("log-block-php", "php", "files/misp_container/init.py LOG_BLOCK", log_block_php,
+          fails_when="cannot run the logging block, in either format")
 
 
 def run(root: Path, php: bool = False) -> dict[str, list[str]]:

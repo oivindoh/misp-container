@@ -107,7 +107,7 @@ def setup_tmp():
 def prepare_config():
     """Render app/Config from the image defaults, settings.yaml and env vars."""
     log.info("rendering app/Config")
-    defaults = Path(env("MISP_CONFIG_DEFAULTS", CONFIG_DEFAULTS))
+    defaults = Path(CONFIG_DEFAULTS)
     config_dst = Path(MISP_CONFIG)
     config_dst.mkdir(parents=True, exist_ok=True)
 
@@ -147,7 +147,7 @@ def populate_gnupg():
     The key is an armoured secret key export at GNUPG_KEY_FILE. Every pod
     (configure, web, worker) imports the same key, so all replicas sign with it.
     """
-    key_file = Path(env("GNUPG_KEY_FILE", GNUPG_KEY_FILE))
+    key_file = Path(GNUPG_KEY_FILE)
     if not key_file.is_file():
         return
 
@@ -201,10 +201,10 @@ def populate_certs():
     directory is a per-pod volume, so the Secret (misp-certs) carries them to
     every pod. Files uploaded through the UI on one replica stay on that replica.
     """
-    src = Path(env("MISP_CERTS_SOURCE", CERTS_DIR))
+    src = Path(CERTS_DIR)
     if not src.is_dir():
         return
-    dst = Path(env("MISP_CERTS_DIR", MISP_CERTS))
+    dst = Path(MISP_CERTS)
     dst.mkdir(parents=True, exist_ok=True)
     count = 0
     for item in sorted(src.iterdir()):

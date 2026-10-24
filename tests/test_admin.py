@@ -70,15 +70,28 @@ class TestConfigureAdminOrg:
 class TestSetAdminAuthkey:
     KEY = "abcd" + "x" * 32 + "wxyz"
 
+    @staticmethod
+    def stored(key):
+        import bcrypt
+        return bcrypt.hashpw(key.encode(), bcrypt.gensalt(4)).decode().replace("$2b$", "$2y$", 1)
+
     @patch("misp_container.admin.cake.user_change_authkey")
-    @patch("misp_container.admin.db.dict_query", return_value=[{"n": 0}])
+    @patch("misp_container.admin.db.dict_query", return_value=[])
     def test_the_lookup_uses_the_first_and_last_four_characters(self, query, change):
         admin._set_admin_authkey("admin@x", self.KEY)
-        assert query.call_args[0][1] == ("abcd", "wxyz")
+        assert query.call_args[0][1] == (1, "abcd", "wxyz")
         change.assert_called_once_with("admin@x", self.KEY)
 
     @patch("misp_container.admin.cake.user_change_authkey")
-    @patch("misp_container.admin.db.dict_query", return_value=[{"n": 1}])
+    @patch("misp_container.admin.db.dict_query")
     def test_a_key_the_table_holds_is_kept(self, query, change):
+        query.return_value = [{"authkey": self.stored(self.KEY)}]
         admin._set_admin_authkey("admin@x", self.KEY)
         change.assert_not_called()
+
+    @patch("misp_container.admin.cake.user_change_authkey")
+    @patch("misp_container.admin.db.dict_query")
+    def test_another_key_with_the_same_ends_is_replaced(self, query, change):
+        query.return_value = [{"authkey": self.stored("abcd" + "y" * 32 + "wxyz")}]
+        admin._set_admin_authkey("admin@x", self.KEY)
+        change.assert_called_once_with("admin@x", self.KEY)

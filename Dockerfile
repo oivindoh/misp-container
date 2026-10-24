@@ -16,11 +16,11 @@ ARG PHP_VER=20240924
 # The runtime packages of the final image. php-base, which the build stages
 # start from, installs the same set, so composer and the extension builds see
 # the extensions MISP runs with.
-ARG RUNTIME_PACKAGES="ca-certificates tini gettext procps openssl gpg gpg-agent \
+ARG RUNTIME_PACKAGES="ca-certificates tini procps openssl gpg gpg-agent \
     php8.4 php8.4-apcu php8.4-curl php8.4-xml php8.4-intl php8.4-bcmath php8.4-mbstring \
     php8.4-mysql php8.4-pgsql php8.4-redis php8.4-gd php8.4-fpm php8.4-zip php8.4-ldap \
-    libmagic1 libldap-common librdkafka1 libbrotli1 libzstd1 ssdeep libfuzzy2 \
-    unzip zip curl uuid-runtime jq python3-minimal libpython3.13-stdlib"
+    libmagic1 libldap-common librdkafka1 libbrotli1 libzstd1 libfuzzy2 \
+    python3-minimal libpython3.13-stdlib"
 
 # =============================================================================
 # Stage 1: php-base - Common runtime packages
@@ -47,6 +47,13 @@ FROM php-base AS composer-prep
 ARG CORE_TAG
 ARG CORE_COMMIT
 ENV COMPOSER_ALLOW_SUPERUSER=1
+
+# curl fetches composer.json, jq edits it, composer unpacks with unzip; the
+# final image carries none of the three
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
+    rm -f /etc/apt/apt.conf.d/docker-clean && apt-get update && \
+    apt-get install -y --no-install-recommends curl jq unzip
 
 WORKDIR /tmp
 RUN curl -fsSL -o /tmp/composer.json https://raw.githubusercontent.com/MISP/MISP/${CORE_COMMIT:-${CORE_TAG}}/app/composer.json
@@ -107,13 +114,7 @@ RUN cp "/usr/lib/$(gcc -dumpmachine)"/libfuzzy.* /usr/lib && \
     build zstd kjdev/php-ext-zstd c2593a4ce2457b23e7fa7f81ddf0dd9bbdd89b47 && \
     build brotli kjdev/php-ext-brotli ced23f5b6f52ef58a3a96d4731db4bee40a82736 && \
     build simdjson JakubOnderka/simdjson_php ab23d7e5f0edd23b49cf1385f52dc6e300a25fd4 && \
-    build ssdeep JakubOnderka/pecl-text-ssdeep aa7ea7045a294548aedc3ccdfbb3936e1716bebd && \
-    tar -czf /php-extensions.tar.gz \
-        /usr/lib/php/${PHP_VER}/ssdeep.so \
-        /usr/lib/php/${PHP_VER}/rdkafka.so \
-        /usr/lib/php/${PHP_VER}/brotli.so \
-        /usr/lib/php/${PHP_VER}/simdjson.so \
-        /usr/lib/php/${PHP_VER}/zstd.so
+    build ssdeep JakubOnderka/pecl-text-ssdeep aa7ea7045a294548aedc3ccdfbb3936e1716bebd
 
 # =============================================================================
 # Stage 4: misp-source - Clone MISP, set permissions
@@ -171,8 +172,7 @@ RUN find /var/www/MISP/INSTALL/* ! -name 'MYSQL.sql' ! -name 'MARIADB.sql' ! -na
            /var/www/MISP/app/files/scripts/python-cybox \
            /var/www/MISP/app/files/scripts/python-maec \
            /var/www/MISP/app/files/scripts/python-stix && \
-    # The configure step records this marker and the pods wait for it; the since
-    # gates of settings.yaml compare its leading numbers
+    # The configure step records this marker and the pods wait for it
     echo "${CORE_TAG}${CORE_COMMIT:++${CORE_COMMIT}}" > /tmp/misp-dist-version && \
     # app/Config is a per-pod volume rendered at start from these defaults
     mkdir -p /srv/misp-config && \
@@ -228,6 +228,7 @@ FROM debian:trixie-slim@sha256:62bd423aeee912639ca8ee681c2b762cb3e25137e0a92b20b
 ENV DEBIAN_FRONTEND=noninteractive
 
 ARG RUNTIME_PACKAGES
+ARG PHP_VER
 ARG MISP_UID=1000
 ARG MISP_GID=1000
 
@@ -261,9 +262,12 @@ RUN groupadd -g ${MISP_GID} misp && \
     update-alternatives --set php /usr/bin/php8.4
 
 # Install the native PHP extensions
-COPY --from=php-build /php-extensions.tar.gz /
-RUN tar -xzf /php-extensions.tar.gz && rm /php-extensions.tar.gz && \
-    for mod in ssdeep rdkafka brotli simdjson zstd; do \
+# By name: final takes the security pocket's PHP packages, so the build stage's
+# other modules may be older than its own
+COPY --from=php-build /usr/lib/php/${PHP_VER}/ssdeep.so /usr/lib/php/${PHP_VER}/rdkafka.so \
+     /usr/lib/php/${PHP_VER}/brotli.so /usr/lib/php/${PHP_VER}/simdjson.so \
+     /usr/lib/php/${PHP_VER}/zstd.so /usr/lib/php/${PHP_VER}/
+RUN for mod in ssdeep rdkafka brotli simdjson zstd; do \
         for dir in /etc/php/*/; do \
             echo "extension=${mod}.so" > "${dir}mods-available/${mod}.ini"; \
         done; \
@@ -271,7 +275,7 @@ RUN tar -xzf /php-extensions.tar.gz && rm /php-extensions.tar.gz && \
     done && phpenmod redis && \
     # The console (workers, the configure Job, console tasks) starts a session in
     # some commands; the root is read-only, /tmp is a volume in every such pod.
-    # PHP-FPM keeps its sessions in Redis (php.ini.template).
+    # PHP-FPM keeps its sessions in Redis (files/php.ini).
     for dir in /etc/php/*/cli/conf.d; do \
         printf 'session.save_path = "/tmp"\n' > "${dir}/99-misp-cli-sessions.ini"; \
     done
@@ -303,8 +307,8 @@ COPY --chown=${MISP_UID}:${MISP_GID} --chmod=0550 files/entrypoint-sync.py /entr
 COPY --chown=${MISP_UID}:${MISP_GID} --chmod=0550 files/entrypoint-metrics.py /entrypoint-metrics.py
 
 # Config templates and settings
-COPY --chown=${MISP_UID}:${MISP_GID} files/php-fpm-pool.conf.template /etc/misp-docker/php-fpm-pool.conf.template
-COPY --chown=${MISP_UID}:${MISP_GID} files/php.ini.template /etc/misp-docker/php.ini.template
+COPY --chown=${MISP_UID}:${MISP_GID} files/php-fpm-pool.conf /etc/misp-docker/php-fpm-pool.conf
+COPY --chown=${MISP_UID}:${MISP_GID} files/php.ini /etc/misp-docker/php.ini
 COPY --chown=${MISP_UID}:${MISP_GID} files/misp-config/ /etc/misp-docker/
 RUN find /etc/misp-docker -type f -exec chmod 0440 {} + && \
     find /etc/misp-docker -type d -exec chmod 0550 {} +

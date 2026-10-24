@@ -23,9 +23,14 @@ Plugin.S3_bucket_name  ->  PLUGIN_S3_BUCKET_NAME
 | set and non-empty | The value is enforced on every configure run |
 | unset | The default from `settings.yaml` is written once; the setting then belongs to the MISP UI |
 
-`files/misp-config/settings-upstream.yaml` is generated from a live MISP and lists every
-setting `settings.yaml` does not name, with MISP's default and description. The image never
-applies those values; the env var convention overrides any of them.
+`files/misp-config/settings-upstream.yaml` lists every other MISP setting, with MISP's default
+and description; the image never applies those values, and their env vars work all the same
+([DEVELOPING.md](../DEVELOPING.md#the-upstream-catalogue)).
+
+Some env vars fill others unless those are set explicitly: `MISP_REDIS_*` fills the
+background-job and ZeroMQ Redis settings, `MISP_BASEURL` the external and REST client base
+URLs, and `ADMIN_ORG` `MISP.org`, the hosting organisation in e-mail subjects and STIX 1
+exports.
 
 A few settings are rendered into `config.php` in every pod, because MISP reads them before
 the database (Redis, supervisor, salt, encryption key, paths). Those come from the
@@ -52,11 +57,6 @@ PostgreSQL ([migration.md](migration.md)). The On Demand correlation engine is
 MySQL-only, and the integration suite runs on both engines. On PostgreSQL, MISP does not
 create its high-performance indexes on the object, correlation, tag and warninglist tables
 ([MISP#11178](https://github.com/MISP/MISP/issues/11178)).
-The image patches one line of CakePHP's PostgreSQL datasource (the `Dockerfile` names it) so
-that settings inserts work. `MISP_REDIS_*` also fills the background-job and ZeroMQ Redis
-settings, `MISP_BASEURL` fills the external and REST client base URLs, and `ADMIN_ORG` fills
-`MISP.org`, the hosting organisation in e-mail subjects and STIX 1 exports, unless those are
-set explicitly.
 
 ## HTTPS
 
