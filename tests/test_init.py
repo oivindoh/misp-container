@@ -9,47 +9,30 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "files"))
 
-from misp_container.init import _generate_database_config, _generate_email_config
+from misp_container.init import _generate_email_config, database_fields, write_database_php
 
 
 class TestGenerateDatabaseConfig:
-    """Generate database.php from environment variables."""
+    """database.php from environment variables."""
+
+    def render(self, tmp_path, env_vars):
+        with patch.dict(os.environ, env_vars, clear=False), patch("misp_container.init.MISP_CONFIG", str(tmp_path)):
+            write_database_php(database_fields())
+        return (tmp_path / "database.php").read_text()
 
     def test_generates_valid_php(self, tmp_path):
-        """All MySQL connection parameters appear in the generated PHP."""
-        env_vars = {
-            "DB_HOST": "db-host",
-            "DB_USER": "dbuser",
-            "DB_PORT": "3307",
-            "DB_PASSWORD": "secret",
-            "DB_NAME": "testdb",
-            "DB_TLS": "false",
-        }
-        with patch.dict(os.environ, env_vars, clear=False):
-            _generate_database_config(tmp_path)
-        content = (tmp_path / "database.php").read_text()
+        """Every connection parameter appears in the generated PHP."""
+        content = self.render(tmp_path, {"DB_HOST": "db-host", "DB_USER": "dbuser", "DB_PORT": "5433",
+                                         "DB_PASSWORD": "secret", "DB_NAME": "testdb"})
+        assert "'datasource' => 'Database/PostgresObserverExtended'" in content
         assert "'host' => 'db-host'" in content
         assert "'login' => 'dbuser'" in content
-        assert "'port' => 3307" in content
+        assert "'port' => 5433" in content
         assert "'password' => 'secret'" in content
         assert "'database' => 'testdb'" in content
 
-    def test_tls_settings(self, tmp_path):
-        """TLS CA path is included when MYSQL_TLS=true and file exists."""
-        ca_file = tmp_path / "ca.pem"
-        ca_file.write_text("cert")
-        env_vars = {
-            "DB_HOST": "h", "DB_USER": "u", "DB_PORT": "3306",
-            "DB_PASSWORD": "p", "DB_NAME": "d",
-            "DB_TLS": "true",
-            "MYSQL_TLS_CA": str(ca_file),
-            "MYSQL_TLS_CERT": "",
-            "MYSQL_TLS_KEY": "",
-        }
-        with patch.dict(os.environ, env_vars, clear=False):
-            _generate_database_config(tmp_path)
-        content = (tmp_path / "database.php").read_text()
-        assert "'ssl_ca'" in content
+    def test_an_empty_port_takes_postgres_default(self, tmp_path):
+        assert "'port' => 5432," in self.render(tmp_path, {"DB_PORT": ""})
 
 
 class TestGenerateEmailConfig:
@@ -70,29 +53,6 @@ class TestGenerateEmailConfig:
         assert "misp@example.com" in content
 
 
-class TestReplace:
-    """A file of app/Config is written whole."""
-
-    def test_two_containers_writing_one_file_both_succeed(self, tmp_path, monkeypatch):
-        """Compose shares app/Config between web and worker, and their process IDs can be equal."""
-        from misp_container import init
-        target = tmp_path / "config.php"
-        rename = os.replace
-        interleaved = []
-
-        def rename_after_the_other_container(src, dst):
-            if not interleaved:
-                interleaved.append(src)
-                init._replace(target, "worker")
-            rename(src, dst)
-
-        monkeypatch.setattr(init.os, "replace", rename_after_the_other_container)
-        monkeypatch.setattr(init.os, "getpid", lambda: 7)
-        init._replace(target, "web")
-        assert target.read_text() == "web"
-        assert [f.name for f in tmp_path.iterdir()] == ["config.php"]
-
-
 class TestCheckWritable:
     """The entrypoints refuse to start when the attachments directory is read-only."""
 
@@ -108,93 +68,67 @@ class TestCheckWritable:
 
 
 class TestPopulateGnupg:
-    """Import of the instance key from the mounted Secret."""
+    """Import of the instance key, and its generation where the key's directory is writable."""
 
     def _env(self, tmp_path):
         return {
             "GNUPG_HOMEDIR": str(tmp_path / "gnupg"),
             "GNUPG_BINARY": "gpg",
+            "ADMIN_EMAIL": "admin@example.com",
+            "GNUPG_PASSWORD": "pass phrase",
         }
 
-    def test_no_key_file_is_noop(self, tmp_path):
+    def test_no_key_in_a_read_only_directory_is_noop(self, tmp_path):
         from misp_container.init import populate_gnupg
         with patch.dict(os.environ, self._env(tmp_path)), patch("misp_container.init.GNUPG_KEY_FILE", str(tmp_path / "absent.asc")), \
+                patch("misp_container.init.os.access", return_value=False), \
                 patch("misp_container.init.subprocess.run") as run:
             populate_gnupg()
         run.assert_not_called()
 
     @staticmethod
     def _gpg(listings):
-        """A fake gpg: --show-keys and --list-secret-keys answer from listings, by fingerprint."""
+        """A fake gpg: --show-keys answers from listings, by fingerprint; an export prints a key."""
         calls = []
 
         def fake_run(cmd, **kwargs):
             calls.append((cmd, kwargs))
             result = type("R", (), {})()
-            fprs = listings["file"] if "--show-keys" in cmd else listings["home"] if "--list-secret-keys" in cmd else []
+            fprs = listings["file"] if "--show-keys" in cmd else []
             result.stdout = "".join(f"sec:u:3072:1:AAAA::::::::::\nfpr:::::::::{fpr}:\n" for fpr in fprs)
+            if "--export-secret-keys" in cmd:
+                result.stdout = "-----BEGIN PGP PRIVATE KEY BLOCK-----"
             return result
         return calls, fake_run
 
-    def test_a_homedir_with_the_secrets_key_is_kept(self, tmp_path):
+    def test_a_missing_key_in_a_writable_directory_is_generated_then_imported(self, tmp_path):
         from misp_container.init import populate_gnupg
         key = tmp_path / "private.asc"
-        key.write_text("key")
-        homedir = tmp_path / "gnupg"
-        homedir.mkdir()
-        (homedir / "trustdb.gpg").write_text("")
-        calls, fake_run = self._gpg({"file": ["ABCDEF0123456789"], "home": ["ABCDEF0123456789"]})
+        calls, fake_run = self._gpg({"file": ["ABCDEF0123456789"]})
         with patch.dict(os.environ, self._env(tmp_path)), patch("misp_container.init.GNUPG_KEY_FILE", str(key)), \
                 patch("misp_container.init.subprocess.run", side_effect=fake_run):
             populate_gnupg()
-        assert not any("--import" in cmd for cmd, _ in calls)
 
-    def test_a_rotated_key_is_imported_next_to_the_old_one(self, tmp_path):
-        from misp_container.init import populate_gnupg
-        key = tmp_path / "private.asc"
-        key.write_text("key")
-        homedir = tmp_path / "gnupg"
-        homedir.mkdir()
-        (homedir / "trustdb.gpg").write_text("")
-        listings = {"file": ["NEW0000000000001"], "home": ["OLD0000000000001"]}
-        calls, fake_run = self._gpg(listings)
-
-        def run_then_hold_both(cmd, **kwargs):
-            result = fake_run(cmd, **kwargs)
-            if "--import" in cmd and "--import-ownertrust" not in cmd:
-                listings["home"] = ["OLD0000000000001", "NEW0000000000001"]
-            return result
-
-        with patch.dict(os.environ, self._env(tmp_path)), patch("misp_container.init.GNUPG_KEY_FILE", str(key)), \
-                patch("misp_container.init.subprocess.run", side_effect=run_then_hold_both):
-            populate_gnupg()
-        assert any("--import" in cmd and str(key) in cmd for cmd, _ in calls)
-        trust = next(kwargs["input"] for cmd, kwargs in calls if "--import-ownertrust" in cmd)
-        assert trust == "NEW0000000000001:6:\nOLD0000000000001:6:\n"
+        assert key.read_text() == "-----BEGIN PGP PRIVATE KEY BLOCK-----"
+        assert "--gen-key" in calls[0][0] and "Name-Email: admin@example.com" in calls[0][1]["input"]
+        assert "Passphrase: pass phrase" in calls[0][1]["input"]
+        assert "--export-secret-keys" in calls[1][0] and calls[1][1]["input"] == "pass phrase"
+        assert "--import" in calls[2][0] and str(key) in calls[2][0]
 
     def test_imports_and_trusts_key(self, tmp_path):
         from misp_container.init import populate_gnupg
         key = tmp_path / "private.asc"
         key.write_text("key")
-        listings = {"file": ["ABCDEF0123456789"], "home": []}
-        calls, fake_run = self._gpg(listings)
-
-        def run_then_hold(cmd, **kwargs):
-            result = fake_run(cmd, **kwargs)
-            if "--import" in cmd and "--import-ownertrust" not in cmd:
-                listings["home"] = ["ABCDEF0123456789"]
-            return result
-
+        calls, fake_run = self._gpg({"file": ["ABCDEF0123456789"]})
         with patch.dict(os.environ, self._env(tmp_path)), patch("misp_container.init.GNUPG_KEY_FILE", str(key)), \
-                patch("misp_container.init.subprocess.run", side_effect=run_then_hold):
+                patch("misp_container.init.subprocess.run", side_effect=fake_run):
             populate_gnupg()
 
         assert (tmp_path / "gnupg").is_dir()
-        assert "--show-keys" in calls[0][0] and str(key) in calls[0][0]
-        assert "--import" in calls[1][0] and str(key) in calls[1][0]
-        assert "--list-secret-keys" in calls[2][0]
-        assert "--import-ownertrust" in calls[3][0]
-        assert calls[3][1]["input"] == "ABCDEF0123456789:6:\n"
+        assert "--import" in calls[0][0] and str(key) in calls[0][0]
+        assert "--show-keys" in calls[1][0] and str(key) in calls[1][0]
+        assert "--import-ownertrust" in calls[2][0]
+        assert calls[2][1]["input"] == "ABCDEF0123456789:6:\n"
         for cmd, _ in calls:
             assert cmd[:4] == ["gpg", "--batch", "--homedir", str(tmp_path / "gnupg")]
 
@@ -316,7 +250,7 @@ class TestPopulateCerts:
         assert not (tmp_path / "certs").exists()
 
 
-class TestSetupTmp:
+class TestPurgeModelCache:
     def test_the_cakephp_schema_caches_go_and_the_rest_stays(self, tmp_path, monkeypatch):
         from misp_container import init
         monkeypatch.setattr(init, "MISP_TMP", str(tmp_path))
@@ -324,7 +258,7 @@ class TestSetupTmp:
                      "cache/views/page", "logs/error.log"):
             (tmp_path / name).parent.mkdir(parents=True, exist_ok=True)
             (tmp_path / name).write_text("cached")
-        init.setup_tmp()
+        init.purge_model_cache()
         assert not any((tmp_path / "cache/models").iterdir())
         assert not any((tmp_path / "cache/persistent").iterdir())
         assert (tmp_path / "cache/views/page").exists() and (tmp_path / "logs/error.log").exists()

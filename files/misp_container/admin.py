@@ -1,9 +1,6 @@
-"""Admin user and GPG key setup."""
+"""Admin user, organisation and API key setup."""
 
 from __future__ import annotations
-
-import subprocess
-from pathlib import Path
 
 from . import cake
 from . import db
@@ -49,49 +46,12 @@ def setup_admin() -> None:
             if rc != 0:
                 log.error("failed to set admin password: %s", out)
             else:
-                db.execute(f"UPDATE users SET change_pw = {db.bool_lit(False)}, "
-                           f"last_pw_change = {db.now_epoch()} WHERE id = 1")
+                db.execute(f"UPDATE users SET change_pw = FALSE, last_pw_change = {db.NOW_EPOCH} WHERE id = 1")
 
     # Set admin API key
     api_key = env("ADMIN_KEY")
     if api_key:
         _set_admin_authkey(admin_email, api_key)
-
-
-def configure_gnupg() -> None:
-    """Generate GPG key if not present."""
-    if env("AUTOCONF_GPG") != "true":
-        log.info("GPG auto configuration disabled")
-        return
-
-    gpg_dir = Path(env("GNUPG_HOMEDIR"))
-
-    if not (gpg_dir / "trustdb.gpg").exists():
-        log.info("generating new GPG key in %s", gpg_dir)
-        gpg_dir.mkdir(parents=True, exist_ok=True)
-        try:
-            gpg_dir.chmod(0o700)
-        except PermissionError:
-            pass  # K8s emptyDir: mount point chmod not allowed, permissions are fine
-
-        # The parameters carry the passphrase, so they go over stdin, never a file
-        params = (
-            "%echo Generating a basic OpenPGP key\n"
-            "Key-Type: RSA\nKey-Length: 3072\n"
-            f"Name-Real: MISP Admin\nName-Email: {env('MISP_EMAIL', env('ADMIN_EMAIL'))}\n"
-            f"Expire-Date: 0\nPassphrase: {env('GNUPG_PASSWORD')}\n"
-            "%commit\n%echo Done\n"
-        )
-        subprocess.run(
-            ["gpg", "--homedir", str(gpg_dir), "--gen-key", "--batch"],
-            input=params, text=True, check=True,
-        )
-    else:
-        log.info("found pre-generated GPG key in %s", gpg_dir)
-
-    # GPG public key is served via MISP.download_gpg_from_homedir=true
-    # (reads directly from .gnupg/ volume), so no need to export gpg.asc
-    # to the read-only webroot.
 
 
 # -- Internal helpers --
@@ -126,7 +86,7 @@ def _configure_admin_org(admin_org: str) -> None:
             db.execute(
                 "INSERT INTO organisations (name, uuid, local, date_created, date_modified, "
                 "description, type, nationality, sector, created_by) "
-                f"VALUES (%s, %s, {db.bool_lit(True)}, NOW(), NOW(), '', '', '', '', 0)",
+                "VALUES (%s, %s, TRUE, NOW(), NOW(), '', '', '', '', 0)",
                 (admin_org, org_uuid),
             )
             org_id = _org_id_by_uuid(org_uuid)
@@ -155,7 +115,7 @@ def has_authkey(user_id: int, authkey: str) -> bool:
     # MISP keeps the first and last four characters of a key next to its hash
     rows = db.dict_query(
         "SELECT authkey FROM auth_keys WHERE user_id = %s AND authkey_start = %s AND authkey_end = %s "
-        f"AND (expiration = 0 OR expiration > {db.now_epoch()})",
+        f"AND (expiration = 0 OR expiration > {db.NOW_EPOCH})",
         (user_id, authkey[:4], authkey[-4:]),
     )
     for row in rows:

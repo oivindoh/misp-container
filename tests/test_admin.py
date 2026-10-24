@@ -1,4 +1,4 @@
-"""Unit tests for admin helpers: every value reaches SQL as a parameter, on either engine."""
+"""Unit tests for admin helpers: every value reaches SQL as a parameter."""
 
 import os
 import sys

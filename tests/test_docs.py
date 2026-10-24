@@ -61,7 +61,7 @@ def mentions(pattern: re.Pattern) -> list[tuple[Path, str]]:
 # -- env vars ------------------------------------------------------------------------
 
 def known_env_vars() -> set[str]:
-    names = set(envmod.ALIASES) | set(envmod.DB_ALIASES)
+    names = set(envmod.ALIASES)
     text_files = [p for p in repo_files() if p.suffix in (".py", ".sh", ".env", ".yml", ".yaml", ".toml")
                   or p.name in ("Dockerfile", "Caddyfile") or p.name.endswith(".template")]
     for path in text_files:
@@ -291,11 +291,9 @@ def test_the_storage_sizes():
     size, mode = claim["resources"]["requests"]["storage"], claim["accessModes"][0]
     expected = f"claim `attachments`, {size} {mode}"
     assert expected in text, f"docs/kubernetes.md should say: {expected}"
-    for component, name in (("mariadb", "mysql"), ("postgres", "postgres")):
-        statefulset = chart.find("StatefulSet", name, every_component=True)
-        db = statefulset["spec"]["volumeClaimTemplates"][0]["spec"]
-        expected = f"StatefulSet, {db['resources']['requests']['storage']} {db['accessModes'][0]} claim"
-        assert expected in text, f"docs/kubernetes.md should say, for {component}: {expected}"
+    db = chart.find("StatefulSet", "postgres", every_component=True)["spec"]["volumeClaimTemplates"][0]["spec"]
+    expected = f"StatefulSet, {db['resources']['requests']['storage']} {db['accessModes'][0]} claim"
+    assert expected in text, f"docs/kubernetes.md should say: {expected}"
 
 
 def test_the_task_runner_defaults():

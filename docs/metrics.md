@@ -5,7 +5,7 @@
 The metrics Deployment (`entrypoint-metrics.py` in the main image) exposes Prometheus metrics
 on port 9191 from the database, from MISP's job queues in Redis and from probes of the
 configured sync servers: instance health, content counts, server sync state and certificate
-expiry, job queues, org sync runs.
+expiry, job queues, and the runs of the configure, org sync and migrate Jobs.
 Scrape `/metrics`; `/healthz` and `/ready` answer 200.
 
 ## Endpoints
@@ -27,8 +27,8 @@ Scrape `/metrics`; `/healthz` and `/ready` answer 200.
 **Content counts:**
 | Metric | Type | Description |
 |--------|------|-------------|
-| `misp_events` | gauge | Approximate total events (via information_schema) |
-| `misp_attributes` | gauge | Approximate total attributes (via information_schema) |
+| `misp_events` | gauge | Approximate total events (PostgreSQL's row estimate) |
+| `misp_attributes` | gauge | Approximate total attributes (PostgreSQL's row estimate) |
 | `misp_proposals` | gauge | Approximate pending proposals |
 | `misp_organisations` | gauge | Total organisations |
 | `misp_organisations_local` | gauge | Local organisations |
@@ -58,11 +58,11 @@ Scrape `/metrics`; `/healthz` and `/ready` answer 200.
 The `status` label of the job counters is `completed`, `failed` or `unfinished`. MISP keeps a
 job at `unfinished` while it waits and runs; a job whose worker died stays `unfinished`.
 
-**Org sync container:**
+**Container jobs:**
 | Metric | Type | Description |
 |--------|------|-------------|
-| `misp_sync_runs_24h{operation,status}` | gauge | Container runs in the last 24 hours: `org-sync` and `configure`, by `success` or `error` |
-| `misp_sync_last_success_timestamp_seconds{operation}` | gauge | Last successful run per operation |
+| `misp_container_job_runs_total{operation,status}` | counter | Runs of `configure`, `org-sync` and `migrate`, by `success` or `error` |
+| `misp_container_job_last_success_timestamp_seconds{operation}` | gauge | Unix time of the last successful run per job |
 
 **Self-monitoring:**
 | Metric | Type | Description |
@@ -70,13 +70,13 @@ job at `unfinished` while it waits and runs; a job whose worker died stays `unfi
 | `misp_scrape_duration_seconds` | gauge | Collection time |
 | `misp_scrape_errors` | gauge | Errors during collection |
 
-## Design decisions
+## How the exporter reads
 
-- **No DB cache**: metrics are fresh on every scrape. All queries are cheap (information_schema for large tables, exact counts for small tables).
+- **The database on every scrape**: no cache. `events`, `attributes` and `shadow_attributes` come from PostgreSQL's row estimate (`n_live_tup` of `pg_stat_user_tables`), the small tables from exact counts.
 - **Partner checks beside the scrape**: a thread of the exporter probes every sync server (auth and TLS certificate) every 5 minutes; a scrape serves the last result, so an unreachable partner never delays a scrape or a probe of the exporter.
 - **Queue depth from Redis**: waiting jobs are the queue lists (`LLEN <namespace>:<queue>`) and running jobs the `<namespace>:running:<queue>:<id>` keys, in the database and namespace of `SimpleBackgroundJobs.redis_*`. A failed Redis read counts in `misp_scrape_errors`.
 - **Counters for jobs**: `misp_server_jobs_total` and `misp_jobs_total` are counters. Use `increase(...[1h])` in PromQL for time-windowed views. MISP prunes completed jobs, which Prometheus handles as counter resets.
-- **information_schema for big tables**: `events`, `attributes`, and `shadow_attributes` use InnoDB's `TABLE_ROWS` estimate (~10-20% accuracy) instead of `COUNT(*)` to avoid full index scans on large instances.
+- **Container job runs from `system_settings`**: each run of the configure, org sync and migrate Jobs adds one to its count in the row `misp_docker.runs.<operation>` of `system_settings`, and records the time.
 
 ## Example alerts
 
@@ -105,7 +105,7 @@ job at `unfinished` while it waits and runs; a job whose worker died stays `unfi
 
 # A configure run failed in the last day
 - alert: MISPConfigureFailed
-  expr: misp_sync_runs_24h{operation="configure",status="error"} > 0
+  expr: increase(misp_container_job_runs_total{operation="configure",status="error"}[1d]) > 0
 ```
 
 ## Consuming in Kubernetes

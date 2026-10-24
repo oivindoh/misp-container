@@ -11,7 +11,6 @@ set -euo pipefail
 #
 # Usage:
 #   tests/run-kind-test.sh             # create the cluster, test, delete it
-#   tests/run-kind-test.sh --postgres  # the postgres component in place of mariadb
 #   tests/run-kind-test.sh --keep      # leave the cluster running
 #
 # The images must exist locally as
@@ -33,11 +32,9 @@ PORT=38080
 ADMIN_KEY=kindTESTkey0123456789abcdefghijklmnopqrs
 KEEP=0
 VALUES=(-f "$SCRIPT_DIR/kind/values.yaml")
-DB=mysql
 for arg in "$@"; do
     case "$arg" in
         --keep) KEEP=1 ;;
-        --postgres) VALUES+=(-f "$SCRIPT_DIR/kind/values-postgres.yaml"); DB=postgres ;;
         *) echo "unknown argument: $arg" >&2; exit 2 ;;
     esac
 done
@@ -73,7 +70,7 @@ diagnose() {
     kc get pods -o wide || true
     echo "--- events ---"
     kc get events --sort-by=.lastTimestamp 2>/dev/null | tail -30 || true
-    for target in job/configure-1 job/configure-2 job/org-sync-1 job/org-sync-2 deploy/web deploy/worker "statefulset/$DB"; do
+    for target in job/configure-1 job/configure-2 job/org-sync-1 job/org-sync-2 deploy/web deploy/worker statefulset/postgres; do
         echo "--- logs $target ---"
         kc logs "$target" --all-containers --tail=60 2>/dev/null || true
     done

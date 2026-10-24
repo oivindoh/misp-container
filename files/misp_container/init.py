@@ -2,15 +2,14 @@
 
 Every entrypoint (configure, web, worker) calls prepare() at start. It renders
 every file of app/Config from the image defaults, settings.yaml and env: an
-emptyDir per pod in Kubernetes, a volume the containers share in Compose.
-app/files ships in the image; only app/files/{scripts/tmp,certs,terms,img/orgs}
+emptyDir per pod in Kubernetes, a tmpfs per container in Compose. app/files
+ships in the image; only app/files/{scripts/tmp,certs,terms,img/orgs,img/custom}
 are volumes.
 """
 
 import os
 import shutil
 import subprocess
-import uuid
 from pathlib import Path
 
 from . import MISP_BASE, CONFIG_DEFAULTS
@@ -96,10 +95,12 @@ def setup_tmp():
     log.info("creating tmp directory structure")
     for d in ("cache", "cache/models", "cache/persistent", "cache/views", "logs"):
         Path(MISP_TMP, d).mkdir(parents=True, exist_ok=True)
-    # CakePHP keeps each table's columns here for days, and a Compose volume keeps
-    # app/tmp across containers: a schema change since must not meet the old list
+
+
+def purge_model_cache():
+    """Forget the table columns CakePHP cached, which it keys by connection name, not by database."""
     for d in ("cache/models", "cache/persistent"):
-        for cached in Path(MISP_TMP, d).iterdir():
+        for cached in Path(MISP_TMP, d).glob("*"):
             if cached.is_file():
                 cached.unlink(missing_ok=True)
 
@@ -111,71 +112,76 @@ def prepare_config():
     config_dst = Path(MISP_CONFIG)
     config_dst.mkdir(parents=True, exist_ok=True)
 
-    # From this image's MISP on every start: a Compose config volume outlives an
-    # upgrade. Pods that share the volume start at once, so each file is replaced whole.
+    # From this image's MISP, on every start
     for name, source in (("core.php", "core.default.php"), ("routes.php", "routes.php")):
         src = defaults / source
         if src.exists():
-            _replace(config_dst / name, src.read_text())
+            (config_dst / name).write_text(src.read_text())
     src = defaults / "bootstrap.default.php"
     if src.exists():
         from .log import log_format
-        _replace(config_dst / "bootstrap.php", render_log_block(src.read_text(), log_format()))
+        (config_dst / "bootstrap.php").write_text(render_log_block(src.read_text(), log_format()))
         log.info("  core.php, routes.php and bootstrap.php from this image, logging to stderr (%s)", log_format())
 
     # Rendered on every start: env is the source of truth for these
     log.info("  config.php from settings.yaml")
     _generate_config_php(config_dst)
     log.info("  database.php from env")
-    _generate_database_config(config_dst)
+    write_database_php(database_fields())
     log.info("  email.php from env")
     _generate_email_config(config_dst)
     log.info("app/Config ready")
 
 
-def _replace(path: Path, text: str) -> None:
-    """Write a file whole: a reader sees the old content or the new, never part of it."""
-    # Compose containers share app/Config, and their process IDs can be equal
-    partial = path.with_name(f".{path.name}.{uuid.uuid4().hex}")
-    partial.write_text(text)
-    os.replace(partial, path)
-
-
 def populate_gnupg():
-    """Import the instance GPG key from the mounted Secret, if one is present.
+    """Import the instance GPG key, and generate it first where its directory is writable.
 
-    The key is an armoured secret key export at GNUPG_KEY_FILE. Every pod
-    (configure, web, worker) imports the same key, so all replicas sign with it.
+    The key is an armoured secret key export at GNUPG_KEY_FILE: the read-only
+    misp-gnupg Secret in Kubernetes. In Compose the configure container mounts
+    the misp-gnupg-key volume writable and generates the key there once; web
+    and worker mount it read-only. Every pod imports the key into a homedir of
+    its own, so all replicas sign with the same key.
     """
     key_file = Path(GNUPG_KEY_FILE)
-    if not key_file.is_file():
-        return
-
     gpg_dir = Path(env("GNUPG_HOMEDIR"))
     gpg_dir.mkdir(parents=True, exist_ok=True)
     try:
         gpg_dir.chmod(0o700)
     except PermissionError:
-        pass  # K8s emptyDir: mount point chmod not allowed, permissions are fine
+        pass  # a mount point the pod does not own: gpg warns and works
     gpg = [env("GNUPG_BINARY", "gpg"), "--batch", "--homedir", str(gpg_dir)]
 
-    # A homedir that outlives the pod (a Compose volume) holds the key of an
-    # earlier start; a rotated Secret is imported next to it
-    wanted = _fingerprints(gpg + ["--show-keys", "--with-colons", str(key_file)])
-    present = _fingerprints(gpg + ["--list-secret-keys", "--with-colons"]) if (gpg_dir / "trustdb.gpg").exists() else set()
-    if wanted and wanted <= present:
-        log.info("GPG homedir holds the key of the Secret, skipping key import")
+    if not key_file.is_file() and os.access(key_file.parent, os.W_OK):
+        generate_gnupg_key(gpg, key_file)
+    if not key_file.is_file():
         return
 
     log.info("importing GPG key from %s", key_file)
     subprocess.run(gpg + ["--import", str(key_file)], check=True)
 
     # gpg trusts nothing it imports; MISP needs the instance key at ultimate trust
-    fingerprints = _fingerprints(gpg + ["--list-secret-keys", "--with-colons"])
+    fingerprints = _fingerprints(gpg + ["--show-keys", "--with-colons", str(key_file)])
     if fingerprints:
         trust = "".join(f"{fpr}:6:\n" for fpr in sorted(fingerprints))
         subprocess.run(gpg + ["--import-ownertrust"], input=trust, text=True, check=True)
     log.info("GPG key imported (%d fingerprint(s))", len(fingerprints))
+
+
+def generate_gnupg_key(gpg: list[str], key_file: Path) -> None:
+    """Generate the instance key in the homedir and export it to key_file."""
+    email = env("MISP_EMAIL", env("ADMIN_EMAIL"))
+    passphrase = env("GNUPG_PASSWORD")
+    log.info("generating the instance GPG key for %s into %s", email, key_file)
+    # The parameters carry the passphrase, so they go over stdin, never a file
+    params = (f"Key-Type: RSA\nKey-Length: 3072\nName-Real: MISP Admin\nName-Email: {email}\n"
+              f"Expire-Date: 0\nPassphrase: {passphrase}\n%commit\n")
+    subprocess.run(gpg + ["--gen-key"], input=params, text=True, check=True)
+    exported = subprocess.run(gpg + ["--pinentry-mode", "loopback", "--passphrase-fd", "0", "--armor",
+                                     "--export-secret-keys", email],
+                              input=passphrase, capture_output=True, text=True, check=True).stdout
+    partial = key_file.with_name(key_file.name + ".new")
+    partial.write_text(exported)
+    partial.replace(key_file)
 
 
 def _fingerprints(command: list[str]) -> set[str]:
@@ -235,37 +241,33 @@ def _generate_config_php(config_dst):
     from .config import load_settings_yaml, config_php_specs, render_config_php
 
     specs = config_php_specs(load_settings_yaml())
-    _replace(config_dst / "config.php", render_config_php(specs))
+    (config_dst / "config.php").write_text(render_config_php(specs))
 
 
-def _generate_database_config(config_dst):
-    """Generate database.php from environment variables, for MySQL/MariaDB or PostgreSQL."""
-    from .config import php_literal
-    from . import db
-
-    postgres = db.is_postgres()
-    fields = {
-        "datasource": "Database/PostgresObserverExtended" if postgres else "Database/MysqlObserverExtended",
+def database_fields() -> dict:
+    """MISP's connection to this deployment's PostgreSQL, from env."""
+    return {
+        "datasource": "Database/PostgresObserverExtended",
         "persistent": False,
         "host": env("DB_HOST"),
         "login": env("DB_USER"),
-        "port": _int_env("DB_PORT", 5432 if postgres else 3306),
+        "port": _int_env("DB_PORT", 5432),
         "password": env("DB_PASSWORD"),
         "database": env("DB_NAME"),
+        "schema": env("DB_SCHEMA", "public"),
+        "prefix": "",
+        "encoding": "utf8",
     }
-    if postgres:
-        fields["schema"] = env("DB_SCHEMA", "public")
-    fields["prefix"] = ""
-    fields["encoding"] = "utf8" if postgres else "utf8mb4 COLLATE utf8mb4_unicode_ci"
-    if not postgres and env("DB_TLS") == "true":
-        for key, env_key in (("ssl_ca", "MYSQL_TLS_CA"), ("ssl_cert", "MYSQL_TLS_CERT"), ("ssl_key", "MYSQL_TLS_KEY")):
-            if env(env_key) and os.path.isfile(env(env_key)):
-                fields[key] = env(env_key)
+
+
+def write_database_php(fields: dict) -> None:
+    """Write app/Config/database.php with these fields as MISP's connection."""
+    from .config import php_literal
 
     lines = [f"        '{key}' => {php_literal(value)}," for key, value in fields.items()]
     lines.append("        'flags' => array(PDO::ATTR_STRINGIFY_FETCHES => true),")
     content = "<?php\nclass DATABASE_CONFIG {\n    public $default = array(\n" + "\n".join(lines) + "\n    );\n}\n"
-    _replace(config_dst / "database.php", content)
+    (Path(MISP_CONFIG) / "database.php").write_text(content)
 
 
 def _generate_email_config(config_dst):
@@ -297,7 +299,7 @@ class EmailConfig {{
     );
 }}
 """
-    _replace(config_dst / "email.php", content)
+    (config_dst / "email.php").write_text(content)
 
 
 def _int_env(key, default):

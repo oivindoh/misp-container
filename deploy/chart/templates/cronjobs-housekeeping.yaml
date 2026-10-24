@@ -1,7 +1,6 @@
 # The housekeeping component: nightly batched deletes of old rows in jobs, logs
-# and audit_logs (python3 -m misp_container.housekeeping), on MariaDB or
-# PostgreSQL. No OPTIMIZE TABLE: on InnoDB it rebuilds the table under a
-# metadata lock. Retention is a policy choice: HOUSEKEEPING_<TABLE>_DAYS in env.
+# and audit_logs (python3 -m misp_container.housekeeping). Autovacuum reclaims
+# the space. Retention is a policy choice: HOUSEKEEPING_<TABLE>_DAYS in env.
 {{- if .Values.housekeeping.enabled }}
 {{- range $table, $schedule := .Values.housekeeping.schedules }}
 {{- $name := printf "housekeeping-%s" ($table | replace "_" "-") }}

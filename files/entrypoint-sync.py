@@ -6,7 +6,6 @@ through the REST API. Runs as the org-sync Job in Kubernetes, the sync service
 in Compose, or by hand: python3 /entrypoint-sync.py [/path/to/orgs.yaml]
 """
 
-import json
 import sys
 import time
 import urllib.request
@@ -68,29 +67,20 @@ from misp_container.db import acquire_config_lock, release_config_lock
 
 acquire_config_lock()
 try:
-    start_time = time.monotonic()
     client = MISPClient(base_url, api_key)
     summary = apply(client=client, config=config)
-    duration = time.monotonic() - start_time
 finally:
     release_config_lock()
 
 errors = [v for v in summary.values() if isinstance(v, dict) and "error" in v]
 
-# Log result to DB for the metrics exporter
+# The run's count in its system_settings row, for the metrics exporter
 try:
-    from misp_container.metrics import init_sync_log_table, log_sync_result
+    from misp_container.db import record_run
 
-    init_sync_log_table()
-    log_sync_result(
-        operation="org-sync",
-        status="error" if errors else "success",
-        summary=json.dumps(summary, default=str),
-        duration_seconds=duration,
-        error_message=str(errors) if errors else "",
-    )
+    record_run("org-sync", not errors)
 except Exception as e:
-    log.warning("could not log sync result to DB: %s", e)
+    log.warning("could not record the sync run: %s", e)
 
 if errors:
     log.error("sync completed with errors: %s", summary)

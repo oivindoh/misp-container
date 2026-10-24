@@ -168,8 +168,8 @@ RUN CAKE_PG=/var/www/MISP/app/Lib/cakephp/lib/Cake/Model/Datasource/Database/Pos
     fi
 
 # Clean and set permissions - all in one layer
-RUN find /var/www/MISP/INSTALL/* ! -name 'MYSQL.sql' ! -name 'POSTGRESQL.sql' -type f -exec rm {} + && \
-    find /var/www/MISP/INSTALL/* ! -name 'MYSQL.sql' ! -name 'POSTGRESQL.sql' -type l -exec rm {} + && \
+RUN find /var/www/MISP/INSTALL/* ! -name 'POSTGRESQL.sql' -type f -exec rm {} + && \
+    find /var/www/MISP/INSTALL/* ! -name 'POSTGRESQL.sql' -type l -exec rm {} + && \
     find /var/www/MISP/.git/* ! -name HEAD -exec rm -rf {} + 2>/dev/null || true && \
     rm -rf /var/www/MISP/PyMISP \
            /var/www/MISP/app/files/scripts/cti-python-stix2 \
@@ -294,7 +294,7 @@ COPY --from=composer-build --chown=${MISP_UID}:${MISP_GID} /tmp/Vendor /var/www/
 COPY --from=misp-source --chown=${MISP_UID}:${MISP_GID} /srv/misp-config /srv/misp-config
 COPY --from=misp-source --chown=${MISP_UID}:${MISP_GID} /tmp/misp-dist-version /srv/misp-dist-version
 
-# Prepare writable directories (overlaid by emptyDir volumes in K8s / named volumes in Compose).
+# Prepare writable directories (overlaid by emptyDir volumes in K8s, tmpfs or named volumes in Compose).
 # app/files ships in the image; MISP writes only to these five subdirectories of it.
 RUN for dir in app/files/scripts/tmp app/files/certs app/files/terms app/files/img/orgs \
                app/files/img/custom app/attachments app/tmp app/tmp/cache app/tmp/cache/models \
@@ -315,8 +315,12 @@ COPY --chown=${MISP_UID}:${MISP_GID} --chmod=0550 files/entrypoint-metrics.py /e
 COPY --chown=${MISP_UID}:${MISP_GID} files/php-fpm-pool.conf /etc/misp-docker/php-fpm-pool.conf
 COPY --chown=${MISP_UID}:${MISP_GID} files/php.ini /etc/misp-docker/php.ini
 COPY --chown=${MISP_UID}:${MISP_GID} files/misp-config/ /etc/misp-docker/
+# gnupg/ is the mount point of the instance GPG key (the misp-gnupg Secret, the
+# Compose volume misp-gnupg-key that configure writes); a new volume takes the
+# owner of this directory
 RUN find /etc/misp-docker -type f -exec chmod 0440 {} + && \
-    find /etc/misp-docker -type d -exec chmod 0550 {} +
+    find /etc/misp-docker -type d -exec chmod 0550 {} + && \
+    install -d -o ${MISP_UID} -g ${MISP_GID} -m 0700 /etc/misp-docker/gnupg
 
 ENV PYTHONPATH=/opt PYTHONUNBUFFERED=1
 
