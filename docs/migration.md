@@ -225,7 +225,9 @@ account until its first Keycloak login ([configuration.md](configuration.md#keyc
    again and moves it to the team of the user's Keycloak organisation.
 
 With `OIDCAUTH_UNBLOCK=true` Keycloak decides who logs in: a Keycloak login also enables an
-account that an admin disabled in MISP. An account that used header authentication in the old
+account that an admin disabled in MISP. Leave `OIDCAUTH_REQUIRE_EMAIL_VERIFIED` at `true`:
+where people can change their own email in Keycloak, an unverified email would link one
+person's login to another's account. An account that used header authentication in the old
 instance keeps its external auth, and the org sync leaves it enabled. The migration suite runs
 both steps on its copy.
 

@@ -109,16 +109,18 @@ In Keycloak:
 
 1. Create a confidential OpenID Connect client for MISP with the standard flow on and the
    redirect URI `MISP_BASEURL/users/login`. Keep the default client scopes `roles` and
-   `organization`.
+   `organization`: the organisation mapper of step 4 emits only while that scope is on.
 2. Create a client role on it for each MISP role, such as `read-only`, `user`, `publisher`,
    `org-admin` and `admin`, and grant them to users or groups.
 3. Add a mapper of type User Client Role for the client: claim name `roles`, multivalued, in
    the ID token. The `roles` scope puts client roles in the access token only, which OidcAuth
    does not read.
-4. Make each team a Keycloak organisation with its users as members. The `organization` claim
-   then lists the organisation's alias, and OidcAuth puts the user in the MISP organisation
-   of that name ([org-sync.md](org-sync.md#keycloak)). Keep the claim a plain list of
-   aliases, without ids or attributes.
+4. Make each team a Keycloak organisation with its users as members. Add a mapper of type
+   Organization Membership to the client: claim name `misp_organisation`, multivalued, in the
+   ID token, with the organisation's id, attributes and domain off. The claim then lists the
+   alias of the user's organisation, and OidcAuth puts the user in the MISP organisation of
+   that name ([org-sync.md](org-sync.md#keycloak)). The realm's own `organization` claim can
+   hold a map of ids and attributes, which OidcAuth cannot read; this one stays a plain list.
 
 In MISP:
 
@@ -128,6 +130,7 @@ In MISP:
 | `OIDC_PROVIDER_URL` | `https://<keycloak>/realms/<realm>` |
 | `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET` | The client's ID and secret; the secret belongs in `misp-app` |
 | `OIDC_ROLES_MAPPING` | The client roles, highest first: `{"admin": "admin", "org-admin": "Org Admin", "publisher": "Publisher", "user": "User", "read-only": "Read Only"}`. OidcAuth takes the first match, so a user gets the highest role held |
+| `OIDCAUTH_ORGANISATION_PROPERTY` | `misp_organisation` |
 | `OIDC_DEFAULT_ORG` | Optional: the organisation of a user in no Keycloak organisation. Empty refuses that login |
 | `OIDCAUTH_OFFLINE_ACCESS` | Optional: `true` for the `userValidity` check. Users then need the realm role `offline_access`, which Keycloak's default roles hold |
 
