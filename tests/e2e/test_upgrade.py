@@ -119,7 +119,13 @@ def upgraded(stopped):
 
 @pytest.fixture(scope="module")
 def on_30(stack, upgraded):
-    stack.compose("up", "-d", "--force-recreate", *MISP_SERVICES, profiles=())
+    # New containers, through the engine: podman-compose's --force-recreate also
+    # recreates Redis, which loses the recorrelation job the conversion queued
+    for service in MISP_SERVICES:
+        ids = stack.container_ids(service, stopped=True)
+        if ids:
+            subprocess.run([stack.engine, "rm", "-f", *ids], capture_output=True)
+    stack.compose("up", "-d", *MISP_SERVICES, profiles=())
     stack.wait_for_misp(timeout=600)
     return stack
 
