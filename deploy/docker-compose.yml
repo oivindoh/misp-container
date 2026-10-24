@@ -113,16 +113,9 @@ services:
       # the address of each client, not an X-Forwarded-For the client sent. With a
       # reverse proxy in front, set this to its address.
       TRUSTED_PROXY_CIDR: 127.0.0.1/32
-      # Set CADDY_ADDRESS to a domain (e.g. misp.example.com) for automatic HTTPS.
-      # Leave unset for plain HTTP on :8080 (when behind a load balancer).
-      # CADDY_ADDRESS: misp.example.com
+    read_only: true
     ports:
       - "8080:8080"
-      # - "443:443"   # uncomment for HTTPS
-      # - "80:80"     # uncomment for HTTP->HTTPS redirect
-    volumes:
-      - caddy-data:/data
-      - caddy-config:/config
     depends_on:
       - web
 
@@ -264,5 +257,3 @@ volumes:
   misp-attachments:
   misp-gnupg-key:
   postgres-data:
-  caddy-data:
-  caddy-config:

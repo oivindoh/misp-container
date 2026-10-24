@@ -58,13 +58,8 @@ engine needs MySQL, so it is not available.
 
 ## HTTPS
 
-Caddy serves plain HTTP on 8080, for an ingress or load balancer in front. Set
-`CADDY_ADDRESS` to a domain name for automatic HTTPS with Let's Encrypt instead:
-
-```yaml
-environment:
-  CADDY_ADDRESS: misp.example.com
-```
+Caddy serves plain HTTP on 8080, for an ingress, a Gateway or a load balancer in front, which
+terminates TLS.
 
 ## Authentication plugins
 
@@ -157,15 +152,6 @@ leaves the account enabled.
 `LDAPAUTH_LDAPSERVER`, `LDAPAUTH_LDAPDN`, `LDAPAUTH_LDAPREADERUSER`, `LDAPAUTH_LDAPREADERPASSWORD`
 are required; `LDAPAUTH_LDAPSEARCHFILTER`, `LDAPAUTH_LDAPDEFAULTORGID`, `LDAPAUTH_LDAPDEFAULTROLEID`,
 `LDAPAUTH_LDAPROLEFIELD` and the rest of the `ldap` group follow the plugin's README.
-
-## Custom scripts
-
-Two hook points for custom Python, mounted as files, skipped when absent:
-
-| Script | Where | When |
-|--------|-------|------|
-| `/custom/setup.py` | configure Job | After the database is ready, before configuration |
-| `/custom/pre-start.py` | every web replica | Before PHP-FPM starts |
 
 ## Logging
 

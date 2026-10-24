@@ -342,18 +342,11 @@ COPY --from=misp-source --chown=1000:1000 /var/www/MISP/app/webroot /var/www/MIS
 # Caddyfile
 COPY --chown=1000:1000 files/Caddyfile /etc/caddy/Caddyfile
 
-# Writable dirs for TLS cert storage and config autosave
-COPY --from=caddy-bin --chown=1000:1000 /config /config
-COPY --from=caddy-bin --chown=1000:1000 /data /data
-
-ENV XDG_CONFIG_HOME=/config
-ENV XDG_DATA_HOME=/data
 ENV PHP_FPM_HOST=127.0.0.1
 
 USER 1000
 
 EXPOSE 8080
-EXPOSE 443
 
 CMD ["caddy", "run", "--config", "/etc/caddy/Caddyfile"]
 

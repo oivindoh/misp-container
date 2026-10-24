@@ -13,12 +13,8 @@ import urllib.parse
 
 from misp_container.env import apply_defaults, env
 from misp_container import db
-from misp_container.configure import run_custom_script
 from misp_container.init import prepare, check_writable
 from misp_container.log import setup as setup_logging, get as getlog
-
-CUSTOM_PRE_START_SCRIPT = "/custom/pre-start.py"
-
 
 log = getlog("web")
 
@@ -60,9 +56,6 @@ db.wait_for_db()
 db.wait_for_live()
 
 start_log_relay()
-
-# Late custom hook -- runs on every web replica, just before PHP-FPM starts.
-run_custom_script(CUSTOM_PRE_START_SCRIPT, "pre-start")
 
 log.info("starting PHP-FPM on port 9002")
 os.execvp(

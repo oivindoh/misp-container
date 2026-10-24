@@ -5,9 +5,7 @@ before any web or worker starts. Sets MISP.live=true when done; web and
 worker entrypoints wait for that flag.
 """
 
-import os
 import sys
-from pathlib import Path
 
 from . import admin
 from . import cake
@@ -18,7 +16,6 @@ from .log import get as getlog
 
 log = getlog("configure")
 
-CUSTOM_SETUP_SCRIPT = "/custom/setup.py"
 
 # The settings groups this step applies to the database, in order. The groups
 # init renders into config.php (config.CONFIG_PHP_GROUPS, the S3 group and the
@@ -26,14 +23,6 @@ CUSTOM_SETUP_SCRIPT = "/custom/setup.py"
 # the key setup. A plugin group's defaults do nothing until its enable setting
 # is true.
 DB_GROUPS = ("initialisation", "critical", "optional", "proxy", "kafka", "linotp", "custom_auth", "upstream")
-
-
-def run_custom_script(path: str, label: str) -> None:
-    """Run a custom Python script if it exists."""
-    if os.path.isfile(path):
-        log.info("running custom script: %s (%s)", label, path)
-        exec(compile(Path(path).read_text(), path, "exec"), {"__name__": "__custom__"})
-        log.info("custom script %s complete", label)
 
 
 # Values shipped in the chart's secrets-*.env files and the examples. A
@@ -129,9 +118,6 @@ def run() -> None:
     db.wait_for_db()
     db.init_schema()
     check_layout()
-
-    # Early custom hook: after the DB is ready, before MISP configuration.
-    run_custom_script(CUSTOM_SETUP_SCRIPT, "setup")
 
     try:
         configure_misp()
