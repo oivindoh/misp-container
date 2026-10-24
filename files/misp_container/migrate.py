@@ -1,10 +1,10 @@
-"""Copy an existing MISP database (MySQL or MariaDB) into this deployment.
+"""Copy an existing MISP database (MySQL or MariaDB) into this deployment's PostgreSQL.
 
 Usage: python3 -m misp_container.migrate
 
 Source: MIGRATE_SOURCE_HOST, MIGRATE_SOURCE_PORT (3306), MIGRATE_SOURCE_NAME
 (misp), MIGRATE_SOURCE_USER, MIGRATE_SOURCE_PASSWORD, MIGRATE_SOURCE_TLS.
-Target: the deployment's DB_* connection, on either engine.
+Target: the deployment's DB_* connection.
 
 Attachments come from one of two sources: MIGRATE_SOURCE_FILES, a mounted
 copy of the source's attachments directory (MISP.attachments_dir, app/files
@@ -13,17 +13,17 @@ _REGION, _ACCESS_KEY, _SECRET_KEY, _VALIDATE_CA and _CA. They go to this
 deployment's bucket when PLUGIN_S3_BUCKET_NAME is set, and to its attachments
 volume otherwise. The Job checks both buckets before it copies the database.
 
-Same engine (target mysql): every table is created from the source's own
-CREATE TABLE and copied whole; the configure step then runs MISP's schema
-updates on it, as on any upgrade. Cross engine (target postgres): the target
-gets this image's PostgreSQL baseline and MISP's updates, the source must be at
-the same schema version, and the rows are copied into it column by column.
+The target gets this image's PostgreSQL baseline and MISP's updates, and the
+rows are copied into it column by column. The source must be at the same
+schema version. MIGRATE_SOURCE_UPGRADE=true upgrades the source to it first,
+with cake Admin runUpgrade: that converts a MISP 2.x database to 3.0 and
+writes to the source, so point the Job at a restored copy, never at the live
+database.
 
 Exit codes: 0 done, or the target holds a copy this Job made (it stays unless
 MIGRATE_FORCE=true and MIGRATE_REPLACE_COPY=true); 1 copy failed; 2
 configuration; 3 target not empty (MIGRATE_FORCE=true drops it first); 4
-identity mismatch; 5 source schema differs from this image's (cross engine
-only).
+identity mismatch; 5 source schema differs from this image's.
 """
 
 from __future__ import annotations
@@ -40,7 +40,7 @@ from typing import Iterator
 
 from . import MISP_BASE, cake, db
 from .env import apply_defaults, env
-from .init import prepare_config, setup_tmp
+from .init import database_fields, prepare_config, purge_model_cache, setup_tmp, write_database_php
 from .log import setup as setup_logging, get as getlog
 from .s3 import Bucket, S3Error
 
@@ -66,17 +66,17 @@ IDENTITY = {
     "MISP.uuid": "MISP_UUID",
 }
 
-# MySQL 8 collations that MariaDB does not know.
-COLLATIONS = {
-    "utf8mb4_0900_ai_ci": "utf8mb4_unicode_ci",
-    "utf8mb4_0900_as_cs": "utf8mb4_bin",
-    "utf8mb4_0900_bin": "utf8mb4_bin",
-}
-
 # Tables the PostgreSQL baseline seeds for this image's version; the target's
 # rows are the truth for them, not the source's.
-CROSS_ENGINE_KEEP = {"admin_settings", "schema_migrations"}
-
+KEEP = {"admin_settings", "schema_migrations"}
+# Source rows left out of the copy: a source that this Job made carries its run
+# records, which would make the target look like a copy this Job made
+SKIP_ROWS = {"system_settings": f"setting NOT LIKE '{db.RUNS_PREFIX}%'"}
+# The CA bundle cake trusts for a TLS connection to the source
+SYSTEM_CA = "/etc/ssl/certs/ca-certificates.crt"
+# Org logos and custom images under the old app/files, which every pod reads from the
+# attachments volume (the image-paths check of scripts/check_upstream.py)
+IMAGE_DIRS = ("img/orgs", "img/custom")
 
 
 # -- Configuration -------------------------------------------------------------
@@ -97,8 +97,15 @@ def source_settings() -> dict:
     }
 
 
-def quote(name: str, target_engine: str) -> str:
-    return f'"{name}"' if target_engine == db.POSTGRES else f"`{name}`"
+def connect_source(s: dict):
+    """A connection to the source MySQL or MariaDB."""
+    import pymysql
+    kwargs = {"host": s["host"], "port": s["port"], "user": s["user"], "password": s["password"],
+              "database": s["database"], "autocommit": True, "charset": "utf8mb4"}
+    if s["tls"]:
+        import ssl
+        kwargs["ssl"] = {"ssl": ssl.create_default_context()}
+    return pymysql.connect(**kwargs)
 
 
 # -- Source inspection ---------------------------------------------------------
@@ -113,19 +120,6 @@ def source_columns(conn, table: str) -> list[str]:
     with db._cursor(conn) as cur:
         cur.execute(f"SHOW COLUMNS FROM `{table}`")
         return [row[0] for row in cur.fetchall()]
-
-
-def source_create_table(conn, table: str) -> str:
-    with db._cursor(conn) as cur:
-        cur.execute(f"SHOW CREATE TABLE `{table}`")
-        return cur.fetchone()[1]
-
-
-def rewrite_ddl(ddl: str) -> str:
-    """A MySQL CREATE TABLE that MariaDB accepts."""
-    for old, new in COLLATIONS.items():
-        ddl = ddl.replace(old, new)
-    return ddl
 
 
 def source_system_settings(conn, names) -> dict:
@@ -168,31 +162,23 @@ def source_schema_state(conn) -> tuple[str, set[str]]:
 
 # -- Target inspection ---------------------------------------------------------
 
-def target_tables(conn, target_engine: str) -> list[str]:
+def target_tables(conn) -> list[str]:
     with db._cursor(conn) as cur:
-        if target_engine == db.POSTGRES:
-            cur.execute("SELECT table_name FROM information_schema.tables "
-                        "WHERE table_schema = current_schema() AND table_type = 'BASE TABLE'")
-        else:
-            cur.execute("SHOW TABLES")
+        cur.execute("SELECT table_name FROM information_schema.tables "
+                    "WHERE table_schema = current_schema() AND table_type = 'BASE TABLE'")
         return [row[0] for row in cur.fetchall()]
 
 
-def target_column_types(conn, table: str, target_engine: str) -> dict[str, str]:
+def target_column_types(conn, table: str) -> dict[str, str]:
     """column -> data type, as information_schema reports it."""
     with db._cursor(conn) as cur:
-        if target_engine == db.POSTGRES:
-            cur.execute("SELECT column_name, data_type FROM information_schema.columns "
-                        "WHERE table_schema = current_schema() AND table_name = %s "
-                        "ORDER BY ordinal_position", (table,))
-        else:
-            cur.execute("SELECT column_name, data_type FROM information_schema.columns "
-                        "WHERE table_schema = DATABASE() AND table_name = %s "
-                        "ORDER BY ordinal_position", (table,))
+        cur.execute("SELECT column_name, data_type FROM information_schema.columns "
+                    "WHERE table_schema = current_schema() AND table_name = %s "
+                    "ORDER BY ordinal_position", (table,))
         return {row[0]: row[1].lower() for row in cur.fetchall()}
 
 
-def target_schema_state(conn, target_engine: str) -> tuple[str, set[str]]:
+def target_schema_state(conn) -> tuple[str, set[str]]:
     with db._cursor(conn) as cur:
         cur.execute("SELECT value FROM admin_settings WHERE setting = 'db_version'")
         row = cur.fetchone()
@@ -202,15 +188,12 @@ def target_schema_state(conn, target_engine: str) -> tuple[str, set[str]]:
     return version, applied
 
 
-def last_copy(conn, tables: list[str]) -> str:
-    """When this Job last copied into the target, from the target's sync log; empty when it never did."""
-    if "misp_container_sync_log" not in tables:
+def last_copy(tables: list[str]) -> str:
+    """When this Job last copied into the target, from its run record; empty when it never did."""
+    if "system_settings" not in tables:
         return ""
-    with db._cursor(conn) as cur:
-        cur.execute("SELECT MAX(timestamp) FROM misp_container_sync_log "
-                    "WHERE operation = 'migrate' AND status = 'success'")
-        row = cur.fetchone()
-    return str(row[0]) if row and row[0] else ""
+    when = (db.run_records().get("migrate") or {}).get("last_success")
+    return time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime(when)) if when else ""
 
 
 def target_plan(tables: int, copied: str, force: str, replace: str) -> tuple[str, str]:
@@ -232,13 +215,10 @@ def target_plan(tables: int, copied: str, force: str, replace: str) -> tuple[str
     return "copy", ""
 
 
-def drop_all(conn, tables: list[str], target_engine: str) -> None:
+def drop_all(conn, tables: list[str]) -> None:
     with db._cursor(conn) as cur:
         for table in tables:
-            if target_engine == db.POSTGRES:
-                cur.execute(f'DROP TABLE IF EXISTS "{table}" CASCADE')
-            else:
-                cur.execute(f"DROP TABLE IF EXISTS `{table}`")
+            cur.execute(f'DROP TABLE IF EXISTS "{table}" CASCADE')
     log.info("dropped %d tables from the target", len(tables))
 
 
@@ -282,39 +262,24 @@ def coerce_row(row, coercers) -> tuple:
     return tuple(fn(v) if fn else v for v, fn in zip(row, coercers))
 
 
-def insert_sql(table: str, columns: list[str], target_engine: str) -> str:
-    cols = ", ".join(quote(c, target_engine) for c in columns)
-    marks = ", ".join(["%s"] * len(columns))
-    return f"INSERT INTO {quote(table, target_engine)} ({cols}) VALUES ({marks})"
-
-
-def insert_rows(cur, table: str, columns: list[str], target_engine: str, rows: list[tuple]) -> None:
-    """Insert rows in as few statements as the engine takes.
-
-    PyMySQL's executemany already sends one multi-row INSERT; pg8000's sends
-    one statement per row, so PostgreSQL gets multi-row VALUES lists instead.
-    """
-    if target_engine != db.POSTGRES:
-        cur.executemany(insert_sql(table, columns, target_engine), rows)
-        return
-    head = insert_sql(table, columns, target_engine)
-    row_marks = head[head.index(" VALUES ") + len(" VALUES "):]
-    head = head[:head.index(" VALUES ") + len(" VALUES ")]
+def insert_rows(cur, table: str, columns: list[str], rows: list[tuple]) -> None:
+    """Insert rows as multi-row VALUES lists: pg8000's executemany sends one statement per row."""
+    head = f'INSERT INTO "{table}" (' + ", ".join(f'"{c}"' for c in columns) + ") VALUES "
+    row_marks = "(" + ", ".join(["%s"] * len(columns)) + ")"
     per_statement = max(1, PG_MAX_PARAMS // len(columns))
     for start in range(0, len(rows), per_statement):
         chunk = rows[start:start + per_statement]
         cur.execute(head + ", ".join([row_marks] * len(chunk)), [value for row in chunk for value in row])
 
 
-def copy_table(src, dst, table: str, columns: list[str], target_engine: str,
-               types: dict[str, str] | None = None) -> int:
+def copy_table(src, dst, table: str, columns: list[str], types: dict[str, str]) -> int:
     """Stream every row of a table from the source into the target."""
-    coercers = None
-    if target_engine == db.POSTGRES and types:
-        coercers = [coercer(types.get(c, "")) for c in columns]
-        if not any(coercers):
-            coercers = None
+    coercers = [coercer(types.get(c, "")) for c in columns]
+    if not any(coercers):
+        coercers = None
     select = "SELECT " + ", ".join(f"`{c}`" for c in columns) + f" FROM `{table}`"
+    if table in SKIP_ROWS:
+        select += " WHERE " + SKIP_ROWS[table]
     import pymysql.cursors
     total = 0
     read = src.cursor(pymysql.cursors.SSCursor)
@@ -325,7 +290,7 @@ def copy_table(src, dst, table: str, columns: list[str], target_engine: str,
                 rows = read.fetchmany(BATCH)
                 if not rows:
                     break
-                insert_rows(write, table, columns, target_engine, [coerce_row(r, coercers) for r in rows])
+                insert_rows(write, table, columns, [coerce_row(r, coercers) for r in rows])
                 total += len(rows)
     finally:
         read.close()
@@ -354,7 +319,7 @@ def copy_without_indexes(src, dst, table: str, columns: list[str], types: dict[s
     with db._cursor(dst) as cur:
         for name, _ in indexes:
             cur.execute(f'DROP INDEX "{name}"')
-    n = copy_table(src, dst, table, columns, db.POSTGRES, types)
+    n = copy_table(src, dst, table, columns, types)
     with db._cursor(dst) as cur:
         for name, ddl in indexes:
             started = time.monotonic()
@@ -492,47 +457,72 @@ def copy_attachments(source: Path | Bucket, target: Path | Bucket) -> int:
     return copied
 
 
-# -- Paths ---------------------------------------------------------------------
-
-def migrate_same_engine(src, dst) -> int:
-    tables = source_tables(src)
-    log.info("creating %d tables on the target from the source's definitions", len(tables))
-    with db._cursor(dst) as cur:
-        for table in tables:
-            cur.execute(rewrite_ddl(source_create_table(src, table)))
-    rows = 0
-    for table in tables:
-        n = copy_table(src, dst, table, source_columns(src, table), db.MYSQL)
-        log.info("%s: %d rows", table, n)
-        rows += n
-    return rows
+def copy_images(source: Path, target: Path) -> int:
+    """Copy the org logos and custom images of the old app/files onto the attachments volume; the count."""
+    copied = 0
+    for sub in IMAGE_DIRS:
+        for path in sorted((source / sub).glob("*")):
+            if path.is_file():
+                (target / sub).mkdir(parents=True, exist_ok=True)
+                shutil.copy(path, target / sub / path.name)
+                copied += 1
+    return copied
 
 
-def migrate_cross_engine(src, dst) -> int:
+# -- The copy ------------------------------------------------------------------
+
+def upgrade_source(source: dict) -> None:
+    """Upgrade the source to this image's MISP through cake, then point cake back at the target.
+
+    runUpgrade applies the numbered 2.x updates the source lacks and converts it
+    to MISP 3.0; on a source at this image's schema it does nothing. MISP 3.0's
+    runUpdates refuses a 2.x database.
+    """
+    fields = {"datasource": "Database/MysqlObserverExtended", "persistent": False, "host": source["host"],
+              "login": source["user"], "port": source["port"], "password": source["password"],
+              "database": source["database"], "prefix": "", "encoding": "utf8mb4"}
+    if source["tls"]:
+        fields["ssl_ca"] = SYSTEM_CA
+    log.info("upgrading the source %s/%s to this image's MISP (cake Admin runUpgrade, MIGRATE_SOURCE_UPGRADE=true); "
+             "on a large instance this takes hours", source["host"], source["database"])
+    write_database_php(fields)
+    purge_model_cache()
+    try:
+        # runUpgrade refuses to run unless MISP.osuser names the user it runs as
+        cake.set_setting("MISP.osuser", "misp")
+        cake.run_checked("Admin", "runUpgrade")
+    finally:
+        write_database_php(database_fields())
+        purge_model_cache()
+
+
+def migrate_into_postgres(src, dst, source: dict) -> int:
     db.init_schema()
     # A MISP release can ship ledger migrations that its PostgreSQL baseline does
     # not record; a source of the same release has them applied
     setup_tmp()
     prepare_config()
     cake.run_updates()
+    if env("MIGRATE_SOURCE_UPGRADE") == "true":
+        upgrade_source(source)
     src_version, src_applied = source_schema_state(src)
-    dst_version, dst_applied = target_schema_state(dst, db.POSTGRES)
+    dst_version, dst_applied = target_schema_state(dst)
     if src_version != dst_version or src_applied != dst_applied:
         log.error("the source schema (db_version %s, %d ledger migrations) is not this image's "
-                  "(db_version %s, %d); migrate it onto the mariadb component first, let the "
-                  "configure step upgrade it, then migrate from there",
+                  "(db_version %s, %d); set MIGRATE_SOURCE_UPGRADE=true and point the Job at a "
+                  "restored copy of the source, or upgrade the source's MISP to this image's version",
                   src_version or "unknown", len(src_applied), dst_version, len(dst_applied))
         sys.exit(EXIT_SCHEMA)
-    targets = set(target_tables(dst, db.POSTGRES))
+    targets = set(target_tables(dst))
     rows = 0
     copied = []
     for table in source_tables(src):
-        if table in CROSS_ENGINE_KEEP:
+        if table in KEEP:
             continue
         if table not in targets:
             log.warning("%s: not in this image's schema, skipped", table)
             continue
-        types = target_column_types(dst, table, db.POSTGRES)
+        types = target_column_types(dst, table)
         columns = [c for c in source_columns(src, table) if c in types]
         missing = [c for c in source_columns(src, table) if c not in types]
         if missing:
@@ -547,12 +537,9 @@ def migrate_cross_engine(src, dst) -> int:
     return rows
 
 
-def record(status: str, started: float, error: str = "") -> None:
-    from .metrics import init_sync_log_table, log_sync_result
+def record(ok: bool) -> None:
     try:
-        init_sync_log_table()
-        log_sync_result(operation="migrate", status=status,
-                        duration_seconds=time.monotonic() - started, error_message=error[:1000])
+        db.record_run("migrate", ok)
     except Exception as e:
         log.warning("could not record the migration run: %s", e)
 
@@ -560,9 +547,8 @@ def record(status: str, started: float, error: str = "") -> None:
 def run() -> None:
     started = time.monotonic()
     source = source_settings()
-    target_engine = db.engine()
-    log.info("migrating %s@%s:%s/%s (mysql) into %s at %s", source["user"], source["host"],
-             source["port"], source["database"], target_engine, db.settings()["host"])
+    log.info("migrating %s@%s:%s/%s into PostgreSQL at %s", source["user"], source["host"],
+             source["port"], source["database"], db.settings()["host"])
 
     try:
         files_from, files_to = attachment_source(), attachment_target()
@@ -574,7 +560,7 @@ def run() -> None:
 
     db.wait_for_db()
     try:
-        src = db.connect_to(source, db.MYSQL)
+        src = connect_source(source)
     except Exception as e:
         log.error("cannot connect to the source: %s", e)
         sys.exit(EXIT_CONFIG)
@@ -590,8 +576,8 @@ def run() -> None:
     db.acquire_config_lock()
     dst = db._connect()
     try:
-        existing = target_tables(dst, target_engine)
-        plan, why = target_plan(len(existing), last_copy(dst, existing), env("MIGRATE_FORCE"),
+        existing = target_tables(dst)
+        plan, why = target_plan(len(existing), last_copy(existing), env("MIGRATE_FORCE"),
                                 env("MIGRATE_REPLACE_COPY"))
         if plan == "keep":
             log.info("%s", why)
@@ -600,17 +586,14 @@ def run() -> None:
             log.error("%s", why)
             sys.exit(EXIT_NOT_EMPTY)
         if existing:
-            drop_all(dst, existing, target_engine)
+            drop_all(dst, existing)
         try:
-            if target_engine == db.POSTGRES:
-                rows = migrate_cross_engine(src, dst)
-            else:
-                rows = migrate_same_engine(src, dst)
+            rows = migrate_into_postgres(src, dst, source)
         except SystemExit:
             raise
         except Exception as e:
             log.error("copy failed: %s", e)
-            record("error", started, repr(e))
+            record(False)
             sys.exit(EXIT_COPY)
         log.info("database copied: %d rows", rows)
         # Web and worker pods wait for MISP.live; the configure step sets it
@@ -620,18 +603,22 @@ def run() -> None:
         if files_from is None:
             log.info("neither MIGRATE_SOURCE_FILES nor MIGRATE_SOURCE_S3_BUCKET is set; attachments are not copied")
         else:
+            on_disk = isinstance(files_from, Path) and isinstance(files_to, Path)
             try:
                 n = copy_attachments(files_from, files_to)
+                images = copy_images(files_from, files_to) if on_disk else 0
             except (S3Error, OSError) as e:
                 log.error("attachment copy failed: %s", e)
-                record("error", started, repr(e))
+                record(False)
                 sys.exit(EXIT_COPY)
             log.info("attachments copied from %s to %s: %d files", files_from, files_to, n)
+            if on_disk:
+                log.info("org logos and custom images copied: %d files", images)
     finally:
         dst.close()
         src.close()
         db.release_config_lock()
-    record("success", started)
+    record(True)
     log.info("migration complete in %ds; the configure step upgrades and configures the copy",
              int(time.monotonic() - started))
 

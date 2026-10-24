@@ -16,8 +16,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "files"))
 def pytest_addoption(parser):
     parser.addoption("--skip-build", action="store_true", help="use the images that exist; do not build")
     parser.addoption("--keep", action="store_true", help="leave the stack running after the tests")
-    parser.addoption("--db-engine", choices=("mariadb", "postgres"), default="mariadb",
-                     help="the database the integration suite runs on")
     parser.addoption("--url", default="", help="the MISP the smoke test checks, e.g. https://misp.example.com")
     parser.addoption("--key", default="", help="an API key for the smoke test's authenticated checks")
 
@@ -26,7 +24,6 @@ def pytest_addoption(parser):
 def options(request):
     return {"skip_build": request.config.getoption("--skip-build"),
             "keep": request.config.getoption("--keep"),
-            "db_engine": request.config.getoption("--db-engine"),
             "url": request.config.getoption("--url").rstrip("/"),
             "key": request.config.getoption("--key")}
 

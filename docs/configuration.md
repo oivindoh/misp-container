@@ -5,7 +5,7 @@
 - Every MISP setting has an env var derived from its name; `settings.yaml` holds the image's
   defaults. A set env var is enforced on every configure run, an unset one is written once.
 - The variables every deployment sets are in the [README](../README.md#essential-variables).
-- `DB_*` selects MariaDB, MySQL or PostgreSQL; the auth plugins switch on with one variable
+- MISP runs on PostgreSQL, which `DB_*` names; the auth plugins switch on with one variable
   each; every pod logs to stdout and stderr, as JSON or text.
 
 ## Settings
@@ -41,21 +41,21 @@ Container-level defaults (database and Redis hosts, PHP limits, worker counts) a
 
 ## Database
 
+MISP runs on PostgreSQL.
+
 | Variable | Description |
 |----------|-------------|
-| `DB_ENGINE` | `mysql` (MariaDB or MySQL, the default) or `postgres` |
-| `DB_HOST`, `DB_PORT` | The server; the port defaults to the engine's |
+| `DB_HOST`, `DB_PORT` | The server: `postgres` and 5432, the postgres component or Compose service |
 | `DB_NAME`, `DB_USER`, `DB_PASSWORD` | The database and its owner (`misp-db` holds the credentials, or the Secret that the chart's `database` value names) |
 | `DB_TLS` | `true` for a TLS connection |
 
-The `MYSQL_*` names stay as aliases of `DB_*`. On PostgreSQL the database must exist with
-UTF8 encoding and be owned by the user; the configure Job loads MISP's baseline into it. An
-external PostgreSQL such as StackGres needs only the `DB_*` values. Keep a connection pooler
-in front of it in session mode, as StackGres's is by default: the configure Job holds an
-advisory lock for its whole run. The migrate Job copies a MySQL or MariaDB MISP onto
-PostgreSQL ([migration.md](migration.md)). The On Demand correlation engine is
-MySQL-only, and the integration suite runs on both engines. On PostgreSQL, MISP does not
-create its high-performance indexes on the object, correlation, tag and warninglist tables
+The database must exist with UTF8 encoding and be owned by the user; the configure Job loads
+MISP's baseline into it. An external PostgreSQL such as StackGres needs only the `DB_*`
+values. Keep a connection pooler in front of it in session mode, as StackGres's is by
+default: the configure Job holds an advisory lock for its whole run. The migrate Job copies a
+MySQL or MariaDB MISP into it ([migration.md](migration.md)). The On Demand correlation
+engine needs MySQL, so it is not available. MISP does not create its high-performance indexes
+on the object, correlation, tag and warninglist tables on PostgreSQL
 ([MISP#11178](https://github.com/MISP/MISP/issues/11178)).
 
 ## HTTPS

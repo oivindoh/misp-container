@@ -19,9 +19,9 @@ helm install misp oci://ghcr.io/oivindoh/charts/misp --version 3.0.0-wip.<run>.<
 ## A fresh deployment
 
 Install the chart as above, or set `MISP_IMAGE_TAG=3.0-wip` for Compose. The configure step
-imports MISP 3.0's own baseline: `MARIADB.sql` on MariaDB 10.10 or later, `POSTGRESQL.sql` on
-PostgreSQL 16 or later. The PostgreSQL baseline runs `CREATE EXTENSION pg_trgm`, which works
-when `DB_USER` owns the database, as in the `postgres` component.
+imports MISP 3.0's own baseline, `POSTGRESQL.sql`, on PostgreSQL 16 or later. It runs
+`CREATE EXTENSION pg_trgm`, which works when `DB_USER` owns the database, as in the `postgres`
+component.
 
 ## Upgrading a 2.5 instance
 

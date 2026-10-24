@@ -39,12 +39,9 @@ def needs_conversion() -> bool:
     return db.has_column("attributes", "value1")
 
 
-def record(status: str, started: float, error: str = "") -> None:
-    from .metrics import init_sync_log_table, log_sync_result
+def record(ok: bool) -> None:
     try:
-        init_sync_log_table()
-        log_sync_result(operation="upgrade", status=status,
-                        duration_seconds=time.monotonic() - started, error_message=error[:1000])
+        db.record_run("upgrade", ok)
     except Exception as e:
         log.warning("could not record the upgrade run: %s", e)
 
@@ -64,20 +61,19 @@ def run() -> None:
     prepare_config()
     db.acquire_config_lock()
     try:
-        if db.is_postgres():
-            # MISP 3.0 indexes values with trigrams; a database owner may create this trusted extension
-            db.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm")
+        # MISP 3.0 indexes values with trigrams; a database owner may create this trusted extension
+        db.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm")
         cake.set_setting("MISP.osuser", "misp")
         log.info("converting the database to MISP 3.0 (cake Admin runUpgrade); on a large instance this takes hours")
         result = subprocess.run([CAKE, "Admin", "runUpgrade"])
         if result.returncode != 0 or needs_conversion():
             log.error("runUpgrade did not finish (exit %d); MISP stays offline. Fix what it names above and run "
                       "the upgrade again: it carries on where it stopped", result.returncode)
-            record("error", started, f"runUpgrade exit {result.returncode}")
+            record(False)
             sys.exit(EXIT_FAILED)
     finally:
         db.release_config_lock()
-    record("success", started)
+    record(True)
     log.info("database converted to MISP 3.0 in %ds; the configure step configures it, and the workers "
              "rebuild the correlations once they run", int(time.monotonic() - started))
 

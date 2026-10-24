@@ -17,14 +17,13 @@ def steps(monkeypatch):
     steps = []
     monkeypatch.setenv("UPGRADE_BACKUP_CONFIRMED", "true")
     monkeypatch.setattr(db, "wait_for_db", lambda: None)
-    monkeypatch.setattr(db, "is_postgres", lambda: False)
     monkeypatch.setattr(db, "acquire_config_lock", lambda: steps.append("lock"))
     monkeypatch.setattr(db, "release_config_lock", lambda: steps.append("unlock"))
     monkeypatch.setattr(db, "execute", lambda sql, params=None: steps.append(sql))
     monkeypatch.setattr(upgrade, "setup_tmp", lambda: None)
     monkeypatch.setattr(upgrade, "prepare_config", lambda: steps.append("app/Config"))
     monkeypatch.setattr(upgrade.cake, "set_setting", lambda name, value: steps.append(f"{name}={value}"))
-    monkeypatch.setattr(upgrade, "record", lambda status, started, error="": steps.append(f"record {status}"))
+    monkeypatch.setattr(upgrade, "record", lambda ok: steps.append(f"record {'success' if ok else 'error'}"))
     return steps
 
 
@@ -58,13 +57,8 @@ class TestUpgrade:
     def test_a_25_database_is_converted_under_the_lock(self, monkeypatch, steps):
         converts_in(monkeypatch, steps)
         upgrade.run()
-        assert steps == ["app/Config", "lock", "MISP.osuser=misp", "Admin runUpgrade", "unlock", "record success"]
-
-    def test_postgres_gets_pg_trgm_before_the_upgrade(self, monkeypatch, steps):
-        monkeypatch.setattr(db, "is_postgres", lambda: True)
-        converts_in(monkeypatch, steps)
-        upgrade.run()
-        assert steps.index("CREATE EXTENSION IF NOT EXISTS pg_trgm") < steps.index("Admin runUpgrade")
+        assert steps == ["app/Config", "lock", "CREATE EXTENSION IF NOT EXISTS pg_trgm", "MISP.osuser=misp",
+                         "Admin runUpgrade", "unlock", "record success"]
 
     def test_a_failed_run_exits_1_and_releases_the_lock(self, monkeypatch, steps):
         converts_in(monkeypatch, steps, returncode=1, converted=False)
@@ -109,15 +103,13 @@ class TestLayoutCheck:
 
 
 class TestHasColumn:
-    @pytest.mark.parametrize("postgres,schema", [(False, "DATABASE()"), (True, "current_schema()")])
-    def test_the_lookup_takes_the_engine_schema_and_parameters(self, monkeypatch, postgres, schema):
+    def test_the_lookup_takes_the_current_schema_and_parameters(self, monkeypatch):
         seen = {}
 
         def dict_query(sql, params=None):
             seen.update(sql=sql, params=params)
             return [{"present": 1}]
 
-        monkeypatch.setattr(db, "is_postgres", lambda: postgres)
         monkeypatch.setattr(db, "dict_query", dict_query)
         assert db.has_column("attributes", "value1") is True
-        assert f"table_schema = {schema}" in seen["sql"] and seen["params"] == ("attributes", "value1")
+        assert "table_schema = current_schema()" in seen["sql"] and seen["params"] == ("attributes", "value1")

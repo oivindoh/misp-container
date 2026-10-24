@@ -51,19 +51,19 @@ The entrypoints, the task runner and the Jobs share this package; it is `/opt/mi
 | Module | Does |
 |---|---|
 | `__init__.py` | MISP container entrypoint library. |
-| `admin.py` | Admin user and GPG key setup. |
+| `admin.py` | Admin user, organisation and API key setup. |
 | `api.py` | Thin MISP REST API client using only urllib (stdlib). |
 | `cake.py` | Thin wrapper around the CakePHP cake CLI. |
 | `config.py` | MISP settings diff engine. |
 | `configure.py` | One-shot MISP configuration: schema, settings, admin user, GPG, auth. |
-| `db.py` | Database access for the entrypoints, on MySQL/MariaDB or PostgreSQL. |
+| `db.py` | Database access for the entrypoints, on PostgreSQL. |
 | `env.py` | Environment variable handling. |
 | `housekeeping.py` | Nightly deletes in MISP's jobs, logs and audit_logs tables. |
 | `init.py` | Per-pod preparation: tmp directories, app/Config rendering, GPG key import. |
 | `log.py` | Logging setup for MISP container entrypoints. |
 | `logrelay.py` | Relay the log files MISP writes directly to stdout, and keep them small. |
 | `metrics.py` | MISP Prometheus metrics exporter. |
-| `migrate.py` | Copy an existing MISP database (MySQL or MariaDB) into this deployment. |
+| `migrate.py` | Copy an existing MISP database (MySQL or MariaDB) into this deployment's PostgreSQL. |
 | `s3.py` | A minimal S3 client for the migrate Job: list, get and put objects. |
 | `sync.py` | Declarative org/team sync engine. |
 | `task.py` | Periodic MISP tasks. |
@@ -120,11 +120,11 @@ Values of the misp chart. The comment above each top-level key describes it; doc
 
 | Template | Renders, every component on | Note |
 |---|---|---|
-| `ciliumnetworkpolicy.yaml` | CiliumNetworkPolicy `web`, CiliumNetworkPolicy `configure`, CiliumNetworkPolicy `org-sync`, CiliumNetworkPolicy `worker`, CiliumNetworkPolicy `cronjob`, CiliumNetworkPolicy `console-task`, CiliumNetworkPolicy `housekeeping`, CiliumNetworkPolicy `modules`, CiliumNetworkPolicy `metrics`, CiliumNetworkPolicy `mysql`, CiliumNetworkPolicy `postgres`, CiliumNetworkPolicy `cache` | The ciliumNetworkPolicy component: CiliumNetworkPolicies for every pod. |
-| `configmap-env.yaml` | ConfigMap `misp-env` | misp-env: files/base.env, then what the postgres component implies, then the env value. Every MISP pod reads it; its checksum rolls the Deployments. |
+| `ciliumnetworkpolicy.yaml` | CiliumNetworkPolicy `web`, CiliumNetworkPolicy `configure`, CiliumNetworkPolicy `org-sync`, CiliumNetworkPolicy `worker`, CiliumNetworkPolicy `cronjob`, CiliumNetworkPolicy `console-task`, CiliumNetworkPolicy `housekeeping`, CiliumNetworkPolicy `modules`, CiliumNetworkPolicy `metrics`, CiliumNetworkPolicy `postgres`, CiliumNetworkPolicy `cache` | The ciliumNetworkPolicy component: CiliumNetworkPolicies for every pod. |
+| `configmap-env.yaml` | ConfigMap `misp-env` | misp-env: files/base.env, then the env value. Every MISP pod reads it; its checksum rolls the Deployments. |
 | `configmap-orgs.yaml` | ConfigMap `misp-orgs` | Declarative org config for the org-sync Job (orgSync.orgs; format: deploy/orgs.yaml.example). |
 | `cronjob-user-validity.yaml` | CronJob `user-validity` | The userValidity component: checks every MISP account against the OIDC or LDAP provider through MISP's console. Needs the oidc or ldap group: MISP's check refuses to run without one. check-user-validity reports each user as valid or invalid and changes nothing; block-invalid-users disables the users the provider no longer backs. |
-| `cronjobs-housekeeping.yaml` | CronJob `housekeeping-audit-logs`, CronJob `housekeeping-jobs`, CronJob `housekeeping-logs` | The housekeeping component: nightly batched deletes of old rows in jobs, logs and audit_logs (python3 -m misp_container.housekeeping), on MariaDB or PostgreSQL. No OPTIMIZE TABLE: on InnoDB it rebuilds the table under a metadata lock. Retention is a policy choice: HOUSEKEEPING_<TABLE>_DAYS in env. |
+| `cronjobs-housekeeping.yaml` | CronJob `housekeeping-audit-logs`, CronJob `housekeeping-jobs`, CronJob `housekeeping-logs` | The housekeeping component: nightly batched deletes of old rows in jobs, logs and audit_logs (python3 -m misp_container.housekeeping). Autovacuum reclaims the space. Retention is a policy choice: HOUSEKEEPING_<TABLE>_DAYS in env. |
 | `cronjobs.yaml` | CronJob `cache-feeds`, CronJob `cache-servers`, CronJob `fetch-feeds`, CronJob `periodic-summary`, CronJob `pull-servers`, CronJob `push-servers`, CronJob `push-taxii`, CronJob `sharing-group-blueprints`, CronJob `update-galaxies`, CronJob `update-noticelists`, CronJob `update-object-templates`, CronJob `update-taxonomies`, CronJob `update-warninglists` | The cronjobs component: the periodic tasks, run by the task runner in the main image (python3 -m misp_container.task <task>), one CronJob per entry of cronjobs.tasks and one per workflow ID in cronjobs.workflows. API tasks need ADMIN_KEY in misp-admin; the runner exits 1 with a clear message when it is empty. A run dispatches nothing while the queue holds cronjobs.maxQueued jobs or more (read from the metrics exporter). |
 | `deployment-metrics.yaml` | Deployment `metrics` | Prometheus exporter on port 9191: MISP's database, the job queues in Redis and the sync partners (docs/metrics.md). It reads MISP's data and never changes it. |
 | `deployment-modules.yaml` | Deployment `modules` | misp-modules: the enrichment, import, export and action modules MISP calls over HTTP on port 6666. A distroless image without a shell, as UID 65532. |
@@ -134,10 +134,9 @@ Values of the misp chart. The comment above each top-level key describes it; doc
 | `ingress.yaml` | Ingress `misp` | The ingress component: an Ingress to the web Service. The default annotation makes the haproxy ingress replace X-Forwarded-For with the address it sees, so only that address reaches caddy (docs/kubernetes.md, Client addresses). Behind another load balancer, that is the balancer's address unless it speaks the PROXY protocol to HAProxy. |
 | `job-configure.yaml` | Job `configure-<revision>` | One-shot configuration: schema, settings, admin user, GPG, auth. Web and worker pods wait until this Job has set MISP.live=true and recorded their image version, so the order of the rollout does not depend on the tool that applies the chart. Each release revision has its own Job, because a Job's pod template cannot change; a run on a configured instance takes seconds. With the migrate component, the copy runs first, in an init container. |
 | `job-org-sync.yaml` |  | Declarative org sync: applies the misp-orgs ConfigMap (orgs.yaml) through the MISP API once the web Deployment serves. Exits 0 at once when ADMIN_KEY is empty or orgs.yaml has nothing to apply. Each release revision has its own Job; Argo CD: a Sync hook in wave 3, recreated on every sync. |
-| `mariadb.yaml` | Service `mysql`, StatefulSet `mysql` | The mariadb component: single-node MariaDB on a ReadWriteOnce claim, the database misp owned by DB_USER. The official image runs mysqld as its mysql user (999) when started as that user; fsGroup makes the claim writable for it. |
-| `networkpolicy.yaml` | NetworkPolicy `web`, NetworkPolicy `configure`, NetworkPolicy `org-sync`, NetworkPolicy `worker`, NetworkPolicy `cronjob`, NetworkPolicy `console-task`, NetworkPolicy `housekeeping`, NetworkPolicy `modules`, NetworkPolicy `metrics`, NetworkPolicy `mysql`, NetworkPolicy `postgres`, NetworkPolicy `cache` | The networkPolicy component: NetworkPolicies for every pod, for a cluster whose CNI enforces the Kubernetes NetworkPolicy API but is not Cilium. The flows are those of ciliumnetworkpolicy.yaml, whose header lists them: pod and namespace selectors, ports, and ipBlocks for the outside. A destination in or outside the cluster (the mail relay, an LDAP server) is a port rule without a peer. |
+| `networkpolicy.yaml` | NetworkPolicy `web`, NetworkPolicy `configure`, NetworkPolicy `org-sync`, NetworkPolicy `worker`, NetworkPolicy `cronjob`, NetworkPolicy `console-task`, NetworkPolicy `housekeeping`, NetworkPolicy `modules`, NetworkPolicy `metrics`, NetworkPolicy `postgres`, NetworkPolicy `cache` | The networkPolicy component: NetworkPolicies for every pod, for a cluster whose CNI enforces the Kubernetes NetworkPolicy API but is not Cilium. The flows are those of ciliumnetworkpolicy.yaml, whose header lists them: pod and namespace selectors, ports, and ipBlocks for the outside. A destination in or outside the cluster (the mail relay, an LDAP server) is a port rule without a peer. |
 | `pdb.yaml` | PodDisruptionBudget `web`, PodDisruptionBudget `worker` | The pdb component: one voluntary disruption at a time for web and worker. maxUnavailable, not minAvailable, so a single replica never blocks a node drain. |
-| `postgres.yaml` | Service `postgres`, StatefulSet `postgres` | The postgres component: single-node PostgreSQL on a ReadWriteOnce claim, the database misp owned by DB_USER, UTF8. It sets DB_ENGINE, DB_HOST and DB_PORT in misp-env (configmap-env.yaml). |
+| `postgres.yaml` | Service `postgres`, StatefulSet `postgres` | The postgres component: single-node PostgreSQL on a ReadWriteOnce claim, the database misp owned by DB_USER, UTF8, behind the Service postgres that DB_HOST names by default. |
 | `pvc-attachments.yaml` | PersistentVolumeClaim `attachments` | Attachments and malware samples, org logos and custom images. Web and worker pods on different nodes write here, so the storage class must support ReadWriteMany. With attachments.claim: false (attachments in S3) the chart renders no claim. |
 | `redis.yaml` | Service `redis`, Deployment `redis` | The redis component: a single Redis without persistence, so sessions and queued jobs do not survive a restart. The password is MISP_REDIS_PASSWORD. |
 | `secrets.yaml` | Secret `misp-db`, Secret `misp-app`, Secret `misp-admin`, Secret `misp-migrate` | The Secrets follow their consumers: web and worker pods get misp-db and misp-app, never misp-admin; metrics gets two keys of misp-db and one of misp-app. Each is its file in files/ with the secrets value on top; with secrets.create: false the release supplies them. |
@@ -158,7 +157,7 @@ Values:
 | `affinity` | Affinity for every pod of the release. |
 | `env` | The misp-env ConfigMap: these entries on top of files/base.env. Every MISP pod reads it. |
 | `secrets` | The misp-db, misp-app and misp-admin Secrets: these entries on top of files/secrets-*.env, whose placeholders the configure Job refuses. With create: false the chart renders none of them: supply Secrets with the same names and keys (SOPS, External Secrets, Sealed Secrets). |
-| `database` | DB_USER and DB_PASSWORD from a Secret the release does not make, such as the one a database operator (StackGres, CloudNativePG) keeps: a name and a key for each. They replace the same keys of misp-db in every pod, the mariadb and postgres components included. |
+| `database` | DB_USER and DB_PASSWORD from a Secret the release does not make, such as the one a database operator (StackGres, CloudNativePG) keeps: a name and a key for each. They replace the same keys of misp-db in every pod, the postgres component included. |
 | `configure` | The configure Job: schema, settings, admin user, GPG and auth, on every install and upgrade. |
 | `web` | MISP's web tier: PHP-FPM and the caddy sidecar in each pod. Replicas scale freely. |
 | `worker` | The background workers. Replicas scale freely; the web pods reach supervisord on TCP 9001. |
@@ -171,8 +170,7 @@ Components, each off by default:
 
 | Component | Adds |
 |---|---|
-| `mariadb` | Single-node MariaDB on a ReadWriteOnce claim. Leave it off for an external database (DB_HOST in env). |
-| `postgres` | Single-node PostgreSQL on a ReadWriteOnce claim, as the alternative to mariadb. It sets DB_ENGINE, DB_HOST and DB_PORT in misp-env. Leave it off for an external PostgreSQL (StackGres and the like). |
+| `postgres` | Single-node PostgreSQL on a ReadWriteOnce claim. Leave it off for an external PostgreSQL (DB_HOST in env; StackGres and the like). |
 | `redis` | Single Redis without persistence: sessions and queued jobs do not survive a restart. Leave it off for an external Redis (MISP_REDIS_HOST in env). |
 | `ingress` | An Ingress to the web Service. The default annotation makes the haproxy ingress replace X-Forwarded-For with the address it sees (docs/kubernetes.md, Client addresses). |
 | `httpRoute` | An HTTPRoute for a Gateway API implementation, in place of the ingress. The Gateway must allow routes from this namespace; set TRUSTED_PROXY_CIDR in env to its proxy pods. |
@@ -198,11 +196,10 @@ Compose stack for running MISP with podman.
 | `sync` | Org sync (runs once after MISP is ready, then exits) |
 | `modules` | MISP modules (enrichment, import, export, actions) |
 | `metrics` | Prometheus metrics exporter |
-| `migrate` | Migration of an existing MySQL/MariaDB MISP into this stack (one-off): podman compose --profile migrate run --rm migrate Source connection: chart/files/secrets-migrate.env. To copy the attachments, mount the source's attachments directory at /mnt/source and set MIGRATE_SOURCE_FILES=/mnt/source, or set MIGRATE_SOURCE_S3_* for the source's bucket. See docs/migration.md. |
+| `migrate` | Migration of an existing MySQL/MariaDB MISP into this stack's PostgreSQL (one-off): podman compose --profile migrate run --rm migrate Source connection: chart/files/secrets-migrate.env. To copy the attachments, mount the source's attachments directory at /mnt/source and set MIGRATE_SOURCE_FILES=/mnt/source, or set MIGRATE_SOURCE_S3_* for the source's bucket. See docs/migration.md. |
 | `upgrade` | Conversion of a MISP 2.5 database to MISP 3.0 (one-off, one-way): stop web and worker, back the database up and check the restore, then UPGRADE_BACKUP_CONFIRMED=true podman compose --profile upgrade run --rm upgrade and start the stack again. See docs/misp-3.md. |
 | `composer-lock` | Tools (podman compose --profile tools run --rm composer-lock) |
-| `mysql` | MariaDB |
-| `postgres` | PostgreSQL (podman compose --profile postgres; set DB_ENGINE=postgres, DB_HOST=postgres, DB_PORT=5432 in compose.env) |
+| `postgres` | PostgreSQL |
 | `redis` | Redis |
 
 ## Settings: `files/misp-config/settings.yaml`
@@ -270,17 +267,17 @@ The stack suites and the smoke test, in pytest (`tests/e2e/`):
 | `garage.py` | The garage S3 store of the test stacks: layout, keys and buckets through its admin API. |
 | `stack.py` | A Compose stack under test: compose calls, container exec, SQL, HTTP and waits. |
 | `test_integration.py` | Integration suite: one MISP stack in Compose, checked feature by feature. |
-| `test_migration.py` | Migration suite: seeds a MISP on MariaDB, migrates it with the migrate Job into a second MariaDB (same engine) and into PostgreSQL (cross engine), and checks each copy through the API and the database. The same-engine copy takes the attachments onto the volume, the cross-engine copy into an S3 bucket in garage; a last run copies that bucket into another. |
+| `test_migration.py` | Migration suite: seeds MISP 2.5.50 from the published images on MariaDB, migrates it with the migrate Job of this tree's image into PostgreSQL, which converts it to MISP 3.0 on the way, and checks the copy through the API and the database. The first copy takes the attachments onto the volume, a forced second copy into an S3 bucket in garage; a last run copies that bucket into another. |
 | `test_smoke.py` | Smoke test of a live MISP through its API: reachable, authenticated, configured, working. |
-| `test_sync.py` | Hub-spoke sync suite: three MISP instances configured through the org sync container. |
-| `test_upgrade.py` | Upgrade suite: seeds MISP 2.5 from the published 2.5.50 images, converts its database to MISP 3.0 with the upgrade step of this tree's images, and checks the data through the API and the database, on MariaDB or PostgreSQL. |
+| `test_sync.py` | Hub-spoke sync suite: two MISP instances configured through the org sync container. |
+| `test_upgrade.py` | Upgrade suite: seeds MISP 2.5 from the published 2.5.50 images, converts its database to MISP 3.0 with the upgrade step of this tree's images, and checks the data through the API and the database. |
 | `test_upstream.py` | Upstream guard: scripts/check_upstream.py in the MISP image, one test per check. |
 
 Unit tests (`tests/`, no containers):
 
 | Module | Tests |
 |---|---|
-| `test_admin.py` | Unit tests for admin helpers: every value reaches SQL as a parameter, on either engine. |
+| `test_admin.py` | Unit tests for admin helpers: every value reaches SQL as a parameter. |
 | `test_agents_md.py` | AGENTS.md is what scripts/generate_agents_md.py makes of the tree. |
 | `test_chart.py` | The Helm chart renders what the code and the release expect (helm template, no cluster). |
 | `test_chart_schema.py` | helm lint, and every render of the chart validated against the Kubernetes and CRD schemas. |
@@ -289,9 +286,8 @@ Unit tests (`tests/`, no containers):
 | `test_config.py` | Unit tests for the config diff engine. |
 | `test_config_php.py` | Unit tests for config.php rendering from settings.yaml. |
 | `test_configure.py` | Unit tests for the configure step's identity and secret checks. |
-| `test_db.py` | Unit tests for the advisory lock (no MySQL needed). |
+| `test_db.py` | Unit tests for the database layer and housekeeping (no PostgreSQL needed). |
 | `test_docs.py` | The docs name only what the code has. |
-| `test_engine.py` | Unit tests for the engine-neutral database helpers and housekeeping. |
 | `test_env.py` | Unit tests for environment variable handling. |
 | `test_init.py` | Unit tests for init container logic (file operations, no containers needed). |
 | `test_log.py` | Unit tests for the container log formats (LOG_FORMAT json or text). |
@@ -311,14 +307,9 @@ Stack files and runners:
 | File | Is |
 |---|---|
 | `tests/run-kind-test.sh` | Installs the Helm chart on a kind cluster (values tests/kind/values.yaml), runs the smoke test (tests/e2e/test_smoke.py) and the chart's helm test, and runs an API task, a console task and a housekeeping task from their CronJobs. Then it upgrades the release with a changed value and rolls it back: each runs the configure Job of its revision and rolls the pods, and the smoke test runs after each. |
-| `tests/docker-compose.migrate-mysql.yml` | Points every MISP container at the same-engine migration target (tests/migrate-target-mysql.env), after the copy. |
-| `tests/docker-compose.migrate-s3.yml` | Points every MISP container at the cross-engine migration target: the postgres service (tests/postgres.env) with attachments in S3 (tests/migrate-target-s3.env), after the copy. |
-| `tests/docker-compose.migrate.yml` | Overlay for the migration suite (tests/e2e/test_migration.py): a second MariaDB as the same-engine target, and the migrate service with the test env and a fixture attachments directory mounted as the source's files. |
-| `tests/docker-compose.postgres.yml` | Second overlay for the PostgreSQL run of the suite: switches every MISP container to the postgres service (tests/postgres.env). The mysql service still starts; MISP does not use it. |
-| `tests/docker-compose.sync-test.yml` | Hub-spoke sync integration test: 3 isolated MISP instances (A, B, C). |
+| `tests/docker-compose.migrate.yml` | Overlay for the migration suite (tests/e2e/test_migration.py): the source's MariaDB, and the migrate service with the test env and a fixture attachments directory mounted as the source's files. |
 | `tests/docker-compose.test.yml` | Test overlay -- overrides deploy/docker-compose.yml with test-specific values. Used by tests/e2e/test_integration.py |
-| `tests/kind/values-postgres.yaml` | tests/run-kind-test.sh --postgres: the postgres component in place of mariadb, on top of values.yaml |
-| `tests/kind/values.yaml` | Values for tests/run-kind-test.sh: the mariadb, redis, cronjobs and housekeeping components, test secrets, the images under the tag kind, and a ReadWriteOnce attachments claim, because kind's local-path storage offers no ReadWriteMany. |
+| `tests/kind/values.yaml` | Values for tests/run-kind-test.sh: the postgres, redis, cronjobs and housekeeping components, test secrets, the images under the tag kind, and a ReadWriteOnce attachments claim, because kind's local-path storage offers no ReadWriteMany. |
 
 ## Commands
 
@@ -326,8 +317,8 @@ Stack files and runners:
 |---|---|
 | `mise run test` | Run unit tests |
 | `mise run test-integration` | Run the upstream guard and the integration tests (requires podman) |
-| `mise run test-sync` | Run hub-spoke sync test (3 MISP instances) |
-| `mise run test-migration` | Run the migration suite (MariaDB to MariaDB and to PostgreSQL) |
+| `mise run test-sync` | Run the hub-spoke sync suite (2 MISP instances) |
+| `mise run test-migration` | Run the migration suite (MISP 2.5.50 on MariaDB into PostgreSQL) |
 | `mise run test-kind` | Install, test, upgrade and roll back the Helm chart on a kind cluster (build the images first) |
 | `mise run agents-md` | Regenerate AGENTS.md from the tree |
 | `mise run docs` | Regenerate the generated regions of the docs and AGENTS.md from the code |
@@ -348,7 +339,7 @@ Stack files and runners:
 | `build` | `gate` | Build ${{ matrix.name }} image |
 | `unit` | `gate` | Install helm and kubeconform; Unit tests |
 | `suite` | `gate`, `build` | Load the images; Run the suite; Upload the test report and the compose logs |
-| `kind` | `gate`, `build` | Load the images; Install kind and helm; Python for the smoke test; Kubernetes test on kind (${{ matrix.database }}) |
+| `kind` | `gate`, `build` | Load the images; Install kind and helm; Python for the smoke test; Kubernetes test on kind |
 | `scan` | `gate`, `build` | Build ${{ matrix.target }} image (from cache); Trivy vulnerability scan (${{ matrix.target }}); Upload scan results; Fail on a fixable CRITICAL finding (${{ matrix.target }}) |
 | `ci-ok` | `gate`, `master-merged`, `build`, `unit`, `suite`, `kind`, `scan` | Check the jobs |
 | `publish` | `gate`, `master-merged`, `build`, `unit`, `suite`, `kind`, `scan` | Install helm; Plan the publication; Log in to GHCR; Check tag immutability; Build and push misp (from cache); Build and push caddy (from cache); Build and push modules (from cache); Push the chart; Create GitHub Release |

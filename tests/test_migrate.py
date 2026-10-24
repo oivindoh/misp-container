@@ -32,17 +32,6 @@ class TestConversion:
         assert migrate.coerce_row((1, "a"), [migrate.to_bool, None]) == (True, "a")
 
 
-class TestSql:
-    def test_insert_quotes_per_engine(self):
-        assert migrate.insert_sql("t", ["a", "b"], db.MYSQL) == "INSERT INTO `t` (`a`, `b`) VALUES (%s, %s)"
-        assert migrate.insert_sql("t", ["a"], db.POSTGRES) == 'INSERT INTO "t" ("a") VALUES (%s)'
-
-    def test_mysql8_collations_rewritten_for_mariadb(self):
-        ddl = "CREATE TABLE `t` (`a` varchar(1) COLLATE utf8mb4_0900_ai_ci) DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci"
-        out = migrate.rewrite_ddl(ddl)
-        assert "0900" not in out and "utf8mb4_unicode_ci" in out
-
-
 class TestIdentity:
     def test_differing_salt_is_a_problem(self):
         problems = migrate.check_identity({"Security.salt": "a" * 32, "MISP.uuid": "u"},
@@ -77,23 +66,12 @@ class TestTargetPlan:
         assert migrate.target_plan(80, self.COPIED, "true", "true") == ("copy", "")
         assert migrate.target_plan(80, self.COPIED, "", "true")[0] == "keep"
 
-    def test_the_copy_date_comes_from_the_sync_log(self):
-        class Cursor:
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *args):
-                return False
-
-            def execute(self, sql):
-                self.sql = sql
-
-            def fetchone(self):
-                return ("2026-09-29 12:00:00",)
-
-        with patch.object(migrate.db, "_cursor", lambda conn: Cursor()):
-            assert migrate.last_copy(None, ["events", "misp_container_sync_log"]) == "2026-09-29 12:00:00"
-        assert migrate.last_copy(None, ["events"]) == ""
+    def test_the_copy_date_comes_from_the_run_record(self):
+        with patch.object(migrate.db, "run_records", return_value={"migrate": {"success": 1, "last_success": 0}}):
+            assert migrate.last_copy(["events", "system_settings"]) == ""
+        with patch.object(migrate.db, "run_records", return_value={"migrate": {"last_success": 1759147200}}):
+            assert migrate.last_copy(["events", "system_settings"]) == "2025-09-29 12:00:00 UTC"
+        assert migrate.last_copy(["events"]) == ""
 
 
 class FakeBucket(migrate.Bucket):
@@ -164,6 +142,14 @@ class TestCopyAttachments:
         assert migrate.copy_attachments(FakeBucket("source", {**self.KEYS, "notes.txt": b"x"}), target) == 3
         assert target.objects == self.KEYS
         assert not (tmp_path / "migrate-attachment").exists()
+
+    def test_org_logos_and_custom_images_go_to_the_volume(self, tmp_path):
+        source = tree(tmp_path / "src", {"img/orgs/7.png": b"logo", "img/custom/top.png": b"banner",
+                                         "img/other.png": b"ships in the image", **self.SOURCE})
+        target = tmp_path / "att"
+        assert migrate.copy_images(source, target) == 2
+        assert (target / "img/orgs/7.png").read_bytes() == b"logo"
+        assert (target / "img/custom/top.png").read_bytes() == b"banner"
 
 
 class TestAttachmentConfig:
@@ -259,7 +245,7 @@ class TestCopyTable:
         monkeypatch.setattr(migrate, "BATCH", 2)
         read = _ReadCursor([(1, 1, "x"), (2, 0, "y"), (3, None, "z")])
         write = _WriteCursor()
-        n = migrate.copy_table(_Conn(read), _Conn(write), "t", ["id", "flag", "name"], db.POSTGRES,
+        n = migrate.copy_table(_Conn(read), _Conn(write), "t", ["id", "flag", "name"],
                                {"id": "integer", "flag": "boolean", "name": "text"})
         assert n == 3
         assert read.sql == "SELECT `id`, `flag`, `name` FROM `t`"
@@ -271,14 +257,14 @@ class TestCopyTable:
     def test_postgres_statements_stay_under_the_parameter_limit(self, monkeypatch):
         monkeypatch.setattr(migrate, "PG_MAX_PARAMS", 5)
         write = _WriteCursor()
-        migrate.insert_rows(write, "t", ["a", "b"], db.POSTGRES, [(1, 2), (3, 4), (5, 6)])
+        migrate.insert_rows(write, "t", ["a", "b"], [(1, 2), (3, 4), (5, 6)])
         assert [len(params) for _, params in write.statements] == [4, 2]
 
-    def test_same_engine_rows_untouched(self):
-        read = _ReadCursor([(1, 1)])
-        write = _WriteCursor()
-        migrate.copy_table(_Conn(read), _Conn(write), "t", ["id", "flag"], db.MYSQL)
-        assert write.calls[0][1] == [(1, 1)]
+    def test_the_run_records_of_a_source_stay_behind(self):
+        read = _ReadCursor([])
+        migrate.copy_table(_Conn(read), _Conn(_WriteCursor()), "system_settings", ["setting", "value"],
+                           {"setting": "character varying", "value": "bytea"})
+        assert read.sql.endswith("FROM `system_settings` WHERE setting NOT LIKE 'misp_docker.runs.%'")
 
 
 class TestIndexes:
@@ -305,32 +291,56 @@ class TestIndexes:
                              "CREATE INDEX attributes_value1 ON public.attributes USING btree"]
 
 
-class TestCrossEngineGate:
+SOURCE = {"host": "old", "port": 3306, "user": "u", "password": "p", "database": "misp", "tls": False}
+
+
+class TestSchemaGate:
     @pytest.fixture
     def steps(self, monkeypatch):
         steps = []
         monkeypatch.setattr(db, "init_schema", lambda: steps.append("baseline"))
         monkeypatch.setattr(migrate, "setup_tmp", lambda: None)
+        monkeypatch.setattr(migrate, "purge_model_cache", lambda: None)
         monkeypatch.setattr(migrate, "prepare_config", lambda: steps.append("app/Config"))
         monkeypatch.setattr(migrate.cake, "run_updates", lambda: steps.append("updates"))
+        monkeypatch.setattr(migrate, "write_database_php", lambda fields: steps.append(fields["datasource"]))
+        monkeypatch.setattr(migrate.cake, "set_setting", lambda name, value: steps.append(f"{name}={value}"))
+        monkeypatch.setattr(migrate.cake, "run_checked", lambda *args: steps.append(" ".join(args)))
+        monkeypatch.setattr(migrate, "target_tables", lambda c: [])
+        monkeypatch.setattr(migrate, "source_tables", lambda c: [])
+        monkeypatch.setattr(migrate, "reset_sequences", lambda c, t: None)
         return steps
 
     def test_schema_mismatch_exits_5(self, monkeypatch, steps):
         monkeypatch.setattr(migrate, "source_schema_state", lambda c: ("120", set()))
-        monkeypatch.setattr(migrate, "target_schema_state", lambda c, e: ("159", {"m1"}))
-        with pytest.raises(SystemExit) as exc:
-            migrate.migrate_cross_engine(object(), object())
+        monkeypatch.setattr(migrate, "target_schema_state", lambda c: ("159", {"m1"}))
+        with patch.dict(os.environ, {"MIGRATE_SOURCE_UPGRADE": ""}), pytest.raises(SystemExit) as exc:
+            migrate.migrate_into_postgres(object(), object(), SOURCE)
         assert exc.value.code == migrate.EXIT_SCHEMA
 
     def test_the_target_takes_misps_updates_before_the_check(self, monkeypatch, steps):
         # A release can ship ledger migrations its PostgreSQL baseline does not record
         monkeypatch.setattr(migrate, "source_schema_state", lambda c: steps.append("check") or ("159", {"m1", "m2"}))
-        monkeypatch.setattr(migrate, "target_schema_state", lambda c, e: ("159", {"m1", "m2"}))
-        monkeypatch.setattr(migrate, "target_tables", lambda c, e: [])
-        monkeypatch.setattr(migrate, "source_tables", lambda c: [])
-        monkeypatch.setattr(migrate, "reset_sequences", lambda c, t: None)
-        assert migrate.migrate_cross_engine(object(), object()) == 0
+        monkeypatch.setattr(migrate, "target_schema_state", lambda c: ("159", {"m1", "m2"}))
+        with patch.dict(os.environ, {"MIGRATE_SOURCE_UPGRADE": ""}):
+            assert migrate.migrate_into_postgres(object(), object(), SOURCE) == 0
         assert steps == ["baseline", "app/Config", "updates", "check"]
+
+    def test_the_source_upgrade_runs_cake_on_the_source_then_points_back(self, monkeypatch, steps):
+        monkeypatch.setattr(migrate, "source_schema_state", lambda c: steps.append("check") or ("159", set()))
+        monkeypatch.setattr(migrate, "target_schema_state", lambda c: ("159", set()))
+        with patch.dict(os.environ, {"MIGRATE_SOURCE_UPGRADE": "true", "DB_HOST": "postgres"}):
+            migrate.migrate_into_postgres(object(), object(), SOURCE)
+        assert steps == ["baseline", "app/Config", "updates", "Database/MysqlObserverExtended", "MISP.osuser=misp",
+                         "Admin runUpgrade", "Database/PostgresObserverExtended", "check"]
+
+    def test_a_failed_source_upgrade_still_points_cake_back(self, monkeypatch, steps):
+        def fail(*args):
+            raise RuntimeError("cake Admin runUpgrade exited 1")
+        monkeypatch.setattr(migrate.cake, "run_checked", fail)
+        with patch.dict(os.environ, {"MIGRATE_SOURCE_UPGRADE": "true"}), pytest.raises(RuntimeError):
+            migrate.migrate_into_postgres(object(), object(), SOURCE)
+        assert steps[-1] == "Database/PostgresObserverExtended"
 
 
 class TestConfig:

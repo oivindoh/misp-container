@@ -33,8 +33,8 @@ class TestEnv:
 
     def test_env_var_wins(self):
         """Explicit env var takes precedence."""
-        with patch.dict(os.environ, {"MYSQL_HOST": "custom-host"}):
-            assert env("MYSQL_HOST") == "custom-host"
+        with patch.dict(os.environ, {"DB_HOST": "custom-host"}):
+            assert env("DB_HOST") == "custom-host"
 
 
 class TestApplyDefaults:

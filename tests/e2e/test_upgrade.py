@@ -1,8 +1,8 @@
 """Upgrade suite: seeds MISP 2.5 from the published 2.5.50 images, converts its
 database to MISP 3.0 with the upgrade step of this tree's images, and checks the
-data through the API and the database, on MariaDB or PostgreSQL.
+data through the API and the database.
 
-    pytest tests/e2e/test_upgrade.py [--skip-build] [--keep] [--db-engine postgres]
+    pytest tests/e2e/test_upgrade.py [--skip-build] [--keep]
 
 The 3.0 images run under MISP_IMAGE_TAG: CI loads them as ci, and a local run
 builds them as upgrade-test. The tests run in file order and share one stack;
@@ -20,6 +20,8 @@ from stack import DEPLOY, TESTS, Stack, env_file
 
 # The newest 2.5 release: what an operator upgrades from
 SOURCE_TAG = "2.5.50"
+# The 2.5.50 images take MySQL unless DB_ENGINE says otherwise
+SOURCE_ENV = TESTS / "upgrade-source.env"
 TARGET_TAG = os.environ.get("MISP_IMAGE_TAG") or "upgrade-test"
 IMAGES = ("ghcr.io/oivindoh/misp-container", "ghcr.io/oivindoh/misp-container-caddy",
           "ghcr.io/oivindoh/misp-container-modules")
@@ -35,9 +37,13 @@ VALUES = (("ip-src", "Network activity", SHARED_IP),
           ("text", "Other", "Grüße aus der Prüfung"))
 
 
-def use(tag):
-    """Compose reads the image tag of every MISP service from MISP_IMAGE_TAG on each call."""
+def use(tag, env=None):
+    """Compose reads the image tag and the extra env file of every MISP service from these on each call."""
     os.environ["MISP_IMAGE_TAG"] = tag
+    if env:
+        os.environ["MISP_TEST_ENV"] = str(env)
+    else:
+        os.environ.pop("MISP_TEST_ENV", None)
 
 
 def add_event(stack, info):
@@ -60,32 +66,28 @@ def related(stack, event_id):
 
 @pytest.fixture(scope="module")
 def stack(options, failed_in_module):
-    files = [DEPLOY / "docker-compose.yml", TESTS / "docker-compose.test.yml"]
-    base = ()
-    if options["db_engine"] == "postgres":
-        files.append(TESTS / "docker-compose.postgres.yml")
-        base = ("postgres",)
-    s = Stack(files, profiles=(*base, "upgrade"))
-    s.base_profiles = base
-    s.schema = "current_schema()" if options["db_engine"] == "postgres" else "DATABASE()"
-    previous = os.environ.get("MISP_IMAGE_TAG")
+    s = Stack([DEPLOY / "docker-compose.yml", TESTS / "docker-compose.test.yml"], profiles=("upgrade",))
+    previous = {k: os.environ.get(k) for k in ("MISP_IMAGE_TAG", "MISP_TEST_ENV")}
     s.compose("down", "-v")
     if not options["skip_build"]:
         use(TARGET_TAG)
         s.compose("build", check=True, timeout=3600)
-    # The engine pulls: a compose runner may skip a service it can build
+    # The engine pulls: a compose runner may skip a service it can build. The
+    # releases are built for amd64 alone; another host runs them emulated
     for image in IMAGES:
-        pulled = subprocess.run([s.engine, "pull", f"{image}:{SOURCE_TAG}"], capture_output=True, text=True)
+        pulled = subprocess.run([s.engine, "pull", "--platform", "linux/amd64", f"{image}:{SOURCE_TAG}"],
+                                capture_output=True, text=True)
         assert pulled.returncode == 0, pulled.stderr
-    use(SOURCE_TAG)
-    s.compose("up", "-d", profiles=base)
-    s.wait_for_misp()
+    use(SOURCE_TAG, SOURCE_ENV)
+    s.compose("up", "-d", profiles=())
+    s.wait_for_misp(timeout=600)
     s.key = s.admin_key(ADMIN_EMAIL)
     yield s
-    if previous is None:
-        os.environ.pop("MISP_IMAGE_TAG", None)
-    else:
-        os.environ["MISP_IMAGE_TAG"] = previous
+    for key, value in previous.items():
+        if value is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = value
     s.finish("upgrade", options["keep"], failed_in_module())
 
 
@@ -105,7 +107,7 @@ def seed(stack):
 @pytest.fixture(scope="module")
 def stopped(stack, seed):
     # Nothing of 2.5 may write while the database converts
-    stack.compose("stop", "web", "worker", profiles=stack.base_profiles)
+    stack.compose("stop", "web", "worker", profiles=())
     use(TARGET_TAG)
     return stack
 
@@ -117,7 +119,13 @@ def upgraded(stopped):
 
 @pytest.fixture(scope="module")
 def on_30(stack, upgraded):
-    stack.compose("up", "-d", "--force-recreate", *MISP_SERVICES, profiles=stack.base_profiles)
+    # New containers, through the engine: podman-compose's --force-recreate also
+    # recreates Redis, which loses the recorrelation job the conversion queued
+    for service in MISP_SERVICES:
+        ids = stack.container_ids(service, stopped=True)
+        if ids:
+            subprocess.run([stack.engine, "rm", "-f", *ids], capture_output=True)
+    stack.compose("up", "-d", *MISP_SERVICES, profiles=())
     stack.wait_for_misp(timeout=600)
     return stack
 
@@ -125,7 +133,7 @@ def on_30(stack, upgraded):
 def has_text_values(stack):
     # Plain SQL: the 2.5.50 image has no db.has_column
     return stack.sql("SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = "
-                     f"{stack.schema} AND table_name = 'attributes' AND column_name = 'value1'") == "1"
+                     "current_schema() AND table_name = 'attributes' AND column_name = 'value1'") == "1"
 
 
 # -- MISP 2.5 ------------------------------------------------------------------------

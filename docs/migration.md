@@ -1,10 +1,9 @@
 # Migrating an existing MISP instance
 
 The migration copies an existing MISP database (MySQL or MariaDB: the official misp-docker,
-a VM, a bare-metal install) into this deployment, on the `mariadb` or the `postgres`
-component, and copies the attachments into this deployment's store: its S3 bucket, or the
-attachments volume. The configure Job then upgrades and configures the copy as on any
-release upgrade.
+a VM, a bare-metal install) into this deployment's PostgreSQL, and copies the attachments
+into this deployment's store: its S3 bucket, or the attachments volume. The configure Job
+then configures the copy as on any release upgrade.
 
 ## TL;DR
 
@@ -15,21 +14,22 @@ release upgrade.
 2. Give the migration the source connection (`migrate.secret`, Compose:
    `secrets-migrate.env`) and, to copy attachments, a mounted copy of the old
    `MISP.attachments_dir` (`app/files` by default) or the old S3 bucket
-   (`MIGRATE_SOURCE_S3_*`).
+   (`MIGRATE_SOURCE_S3_*`). A source on an older MISP release than this image's needs
+   `MIGRATE_SOURCE_UPGRADE=true` and a restored copy of its database (see
+   [An older source](#an-older-source)).
 3. Set the old instance read-only (`MISP.live=false`), then run the copy before the first
    configure run: with the `migrate` component on, the chart runs it as an init container of
-   the configure Job; with Compose, run it by hand first. A deployment that has run once
-   holds a fresh install, which the copy refuses (exit 3): set `MIGRATE_FORCE=true` to drop it
-   before the copy (see [Onto a running deployment](#onto-a-running-deployment)).
-4. Switch the component (or profile) off once the copy has succeeded. Users log in again; org
-   logos, custom images, terms and the GPG keyring are copied by hand.
+   the configure Job; with Compose, run it by hand first. The copy refuses a target that
+   holds anything else (see [The target](#the-target)).
+4. Switch the component (or profile) off once the copy has succeeded. Users log in again;
+   terms and the GPG keyring are copied by hand.
 
 ```mermaid
 flowchart LR
     S[(old MISP<br/>MySQL / MariaDB)] -->|rows, table by table| J[migration]
-    F[/old app/files/] -->|attachments| J
+    F[/old app/files/] -->|attachments, org logos| J
     B[/old S3 bucket/] -->|or: objects| J
-    J --> T[(mariadb or postgres<br/>component)]
+    J --> T[(PostgreSQL)]
     J --> A[/S3 bucket or<br/>attachments claim/]
     T --> C[configure Job<br/>runUpdates, settings, MISP.live]
     C --> W[web, worker]
@@ -37,34 +37,50 @@ flowchart LR
 
 ## What the migration does
 
-| Step | Same engine (target `mysql`) | Cross engine (target `postgres`) |
-|------|------------------------------|----------------------------------|
-| Identity | `MISP.uuid` and the salt and key, where the source stores them, must equal this deployment's values (exit 4) | same |
-| Target | must be empty (exit 3), or `MIGRATE_FORCE=true` drops every table first. A copy the migration made stays (exit 0) unless `MIGRATE_REPLACE_COPY=true` as well | same |
-| Schema | each table created from the source's own `CREATE TABLE` (MySQL 8 collations mapped for MariaDB) | this image's PostgreSQL baseline, then `cake Admin runUpdates` on it; the source must be at the same `db_version` and ledger state (exit 5) |
-| Rows | every table, whole | every table the baseline has, by column name, in multi-row inserts with the table's secondary indexes dropped, then built once; flags become booleans, zero dates become NULL; the id sequences move past the copied ids |
-| After | `MISP.live=false` on the copy, so web and worker wait for the configure Job | same |
-| Files | the attachments of `MIGRATE_SOURCE_FILES` or `MIGRATE_SOURCE_S3_BUCKET` into the deployment's bucket or attachments volume (see [Attachments](#attachments)) | same |
+| Step | What happens |
+|------|--------------|
+| Identity | `MISP.uuid` and the salt and key, where the source stores them, must equal this deployment's values (exit 4) |
+| Target | see [The target](#the-target) |
+| Schema | this image's PostgreSQL baseline, then `cake Admin runUpdates` on it. The source must be at the same `db_version` and ledger state (exit 5); `MIGRATE_SOURCE_UPGRADE=true` upgrades the source first, with `cake Admin runUpgrade` |
+| Rows | every table the baseline has, by column name, in multi-row inserts with the table's secondary indexes dropped, then built once; flags become booleans, zero dates become NULL; the id sequences move past the copied ids |
+| After | `MISP.live=false` on the copy, so web and worker wait for the configure Job |
+| Files | the attachments of `MIGRATE_SOURCE_FILES` or `MIGRATE_SOURCE_S3_BUCKET` into the deployment's bucket or attachments volume, and org logos and custom images onto the volume (see [Attachments](#attachments)) |
 
 The migration holds the configure lock while it copies. A configure Job that starts
-meanwhile waits for it, and then runs `cake Admin runUpdates` on the copy: a source on an
-older MISP release is upgraded there, as on any release upgrade. A source at a newer schema
-than this image is not supported; take the image of the same or a newer release.
-
-A cross-engine copy of an old source is two hops: same engine onto the `mariadb` component,
-a configure run to upgrade it, then a cross-engine copy from that database onto `postgres`.
+meanwhile waits for it, then configures the copy.
 
 | Exit code | Meaning |
 |-----------|---------|
-| 0 | Copied, or the target holds a copy the migration made, which stays unless `MIGRATE_FORCE` and `MIGRATE_REPLACE_COPY` are both `true` |
-| 1 | The copy failed part way, rows or attachments; the target holds a partial copy, run again with `MIGRATE_FORCE=true` |
+| 0 | Copied, or the target holds a copy the migration made, which stays |
+| 1 | The copy failed part way, rows, the source's updates or attachments; the target holds a partial copy, run again with `MIGRATE_FORCE=true` |
 | 2 | Configuration: no `MIGRATE_SOURCE_HOST`, the source refuses the connection, both attachment sources set, a bucket without an access key, or a bucket the migration cannot list |
-| 3 | The target database is not empty and holds no copy the migration made; `MIGRATE_FORCE=true` drops it first |
+| 3 | The target database is not empty and holds no copy the migration made |
 | 4 | An identity setting on the source differs from this deployment's |
-| 5 | The source schema is not this image's (cross engine only) |
+| 5 | The source schema is not this image's |
 
-The run is recorded in `misp_container_sync_log` (operation `migrate`), so the metrics
-exporter reports it like a configure run.
+The migration counts its runs in the target's `system_settings` row
+`misp_docker.runs.migrate`, and the metrics exporter reports them as it does the configure
+runs ([metrics.md](metrics.md)).
+
+### The target
+
+The target must hold no tables. `MIGRATE_FORCE=true` drops every table of a target that
+holds anything else, such as the fresh install of a deployment that has run once. A copy that
+the migration made stays, and the run exits 0, `MIGRATE_FORCE=true` included: this lets the
+copy run again on each upgrade and each configure retry while the component is on. Only
+`MIGRATE_FORCE=true` with `MIGRATE_REPLACE_COPY=true` drops that copy and copies again.
+
+### An older source
+
+MISP changes its schema between releases, and the copy needs the source at this image's
+schema. Restore a dump of the old database into a database of its own, point the migration
+at that copy and set `MIGRATE_SOURCE_UPGRADE=true`: the migration runs
+`cake Admin runUpgrade` on it, which applies the numbered 2.x updates and converts the
+database to MISP 3.0, then copies it. On a large instance the conversion takes hours. Never
+point it at the live source with `MIGRATE_SOURCE_UPGRADE=true`, because the upgrade writes to
+the database it runs on. A
+source at a newer schema than this image is not supported; take the image of the same or a
+newer release.
 
 ### Attachments
 
@@ -77,24 +93,29 @@ exporter reports it like a configure run.
 MISP keeps an attachment at `<event id>/<attribute id>` with a suffix for derived files, and
 the attachments of a proposal under `shadow/`. A source with `MISP.attachments_bucketed`
 also has a `bucket_<n>/` level on disk; the migration drops it, as MISP does on S3 and in
-this image's volume. Other files in the old directory (taxonomies, scripts, images) ship in
-the image and are left out. The migration lists both buckets before it copies the database
-and stops there (exit 2) when it cannot. It signs its S3 requests with an access key, and
+this image's volume. The migration lists both buckets before it copies the database and
+stops there (exit 2) when it cannot. It signs its S3 requests with an access key, and
 reaches an AWS-compatible store path-style at its endpoint, as MISP does.
+
+When `MIGRATE_SOURCE_FILES` is the old `app/files` and the target is the attachments volume,
+the migration also copies the org logos (`img/orgs`) and custom images (`img/custom`) there,
+where every pod reads them. Other files in the old directory (taxonomies, scripts) ship in
+the image and are left out. With the attachments in S3, MISP keeps the images in each pod,
+and the migration copies none.
 
 ## Configuration
 
 | Variable | Meaning |
 |----------|---------|
 | `MIGRATE_SOURCE_HOST`, `MIGRATE_SOURCE_PORT` | The source database (port 3306 by default) |
-| `MIGRATE_SOURCE_NAME`, `MIGRATE_SOURCE_USER`, `MIGRATE_SOURCE_PASSWORD` | Database (`misp` by default) and a user that can read it |
-| `MIGRATE_SOURCE_TLS` | `true` for a TLS connection |
+| `MIGRATE_SOURCE_NAME`, `MIGRATE_SOURCE_USER`, `MIGRATE_SOURCE_PASSWORD` | Database (`misp` by default) and a user that can read it, and write it with `MIGRATE_SOURCE_UPGRADE` |
+| `MIGRATE_SOURCE_TLS` | `true` for a TLS connection, checked against the system CA bundle |
+| `MIGRATE_SOURCE_UPGRADE` | `true` upgrades the source to this image's MISP before the copy (`cake Admin runUpgrade`) |
 | `MIGRATE_SOURCE_FILES` | A mounted copy of the source's attachments directory |
 | `MIGRATE_SOURCE_S3_BUCKET`, `MIGRATE_SOURCE_S3_ENDPOINT`, `MIGRATE_SOURCE_S3_REGION` | The source's bucket, instead of `MIGRATE_SOURCE_FILES`; the endpoint of an AWS-compatible store, empty for AWS; the region (`eu-west-1` by default, as in MISP) |
 | `MIGRATE_SOURCE_S3_ACCESS_KEY`, `MIGRATE_SOURCE_S3_SECRET_KEY` | A key that can list and read the source bucket |
 | `MIGRATE_SOURCE_S3_VALIDATE_CA`, `MIGRATE_SOURCE_S3_CA` | `false` skips the TLS check; a CA bundle for it |
-| `MIGRATE_FORCE` | `true` drops a non-empty target first |
-| `MIGRATE_REPLACE_COPY` | `true`, with `MIGRATE_FORCE`, drops a copy the migration made; its successful runs are in the target's `misp_container_sync_log` |
+| `MIGRATE_FORCE`, `MIGRATE_REPLACE_COPY` | See [The target](#the-target) |
 
 The target is the deployment's own `DB_*` connection, and for attachments its own
 `PLUGIN_S3_*` settings (the key needs write access to the bucket) or its attachments volume.
@@ -129,20 +150,11 @@ The target is the deployment's own `DB_*` connection, and for attachments its ow
    kubectl -n misp logs -l app.kubernetes.io/name=configure -c migrate
    ```
 
-4. Switch the component off after the first successful copy. Each upgrade or sync runs the
-   copy again while the component is on. It then finds its own copy, keeps it and exits 0,
-   `MIGRATE_FORCE=true` included; only `MIGRATE_REPLACE_COPY=true` as well drops it and copies
-   again.
+4. Switch the component off after the first successful copy.
 
-### Onto a running deployment
-
-A deployment that has run once holds a fresh install. Nothing in it is kept: the copy drops
-every table when `MIGRATE_FORCE=true`, then copies. The web and worker pods keep running;
-they answer with errors while the copy runs, and MISP shows itself as offline
-(`MISP.live=false`) until the configure Job has upgraded the copy.
-
-1. Set `MIGRATE_FORCE=true` in `migrate.secret`, switch the component on and upgrade.
-2. Switch the component off, with `MIGRATE_FORCE`, in the next upgrade.
+Onto a deployment that has run once, set `MIGRATE_FORCE=true` in `migrate.secret` as well.
+The web and worker pods keep running; they answer with errors while the copy runs, and MISP
+shows itself as offline (`MISP.live=false`) until the configure Job has configured the copy.
 
 With the `ciliumNetworkPolicy` or `networkPolicy` component the configure pod may reach the
 source on port 3306 and S3 on 443, in the cluster or outside it, while `migrate` is on;
@@ -154,7 +166,7 @@ another port needs a change to the template.
 cd deploy
 # source connection in chart/files/secrets-migrate.env; salt, key and UUID in
 # compose-secrets.env and compose.env
-podman compose up -d mysql redis            # or: --profile postgres up -d postgres redis
+podman compose up -d postgres redis
 podman compose --profile migrate run --rm \
     -v /srv/old-misp/app/files:/mnt/source:ro -e MIGRATE_SOURCE_FILES=/mnt/source migrate
 podman compose up -d
@@ -168,9 +180,8 @@ the attachments go to that bucket.
 
 | Data | Where it goes |
 |------|---------------|
-| Org logos (`app/files/img/orgs`) and custom images (`app/files/img/custom`) | The attachments claim under `img/orgs` and `img/custom` (Kubernetes); the `misp-files-img-orgs` and `misp-files-img-custom` volumes (Compose) |
 | Terms, server certificates | The `misp-certs` Secret (Kubernetes, see [kubernetes.md](kubernetes.md#secrets)); the `misp-files-terms` and `misp-files-certs` volumes (Compose) |
-| GPG keyring | The `misp-gnupg` Secret from the old `private.asc` export; or `AUTOCONF_GPG=true` for a new key, re-exported to sync partners |
+| GPG keyring | The `misp-gnupg` Secret from the old `private.asc` export (Compose: `private.asc` in the `misp-gnupg-key` volume); or a new key, re-exported to sync partners |
 | Attachments already on S3 | Nothing: point `PLUGIN_S3_*` at the same bucket, or copy them to a new one with `MIGRATE_SOURCE_S3_*` |
 
 Sessions, the Redis cache, the CakePHP cache and log files are not copied.
@@ -178,20 +189,18 @@ Sessions, the Redis cache, the CakePHP cache and log files are not copied.
 ## Cut-over
 
 The old instance stays read-only while the migration runs, so time a trial run against a
-copy of the source first. The migration logs each table and, cross engine, each index it
-builds. On PostgreSQL most of the time for a large instance goes to one index: MISP's hash
-index on `attributes.value2`, which is empty for most attributes. A hash index keeps equal
-values in one bucket, so its build time grows faster than the table
-([MISP#11173](https://github.com/MISP/MISP/issues/11173)). In one test with two million
-attributes, the cross-engine copy took 14 minutes, 11 of them for that index; the
-same-engine copy took under 3 minutes.
+copy of the source first. The migration logs each table and each index it builds. Most of
+the time for a large instance goes to one index: MISP's hash index on `attributes.value2`,
+which is empty for most attributes. A hash index keeps equal values in one bucket, so its
+build time grows faster than the table ([MISP#11173](https://github.com/MISP/MISP/issues/11173)).
+In one test with two million attributes, the copy took 14 minutes, 11 of them for that index.
 
 1. Set `MISP.live=false` on the old instance so no event changes during the copy.
 2. Run the migration and the first sync. Check the copy: log in, open an event with an
    attachment, list the sync servers.
 3. Move the DNS name or the ingress to the new instance.
-4. To go back, point the name back at the old instance and set `MISP.live=true` there; the
-   old database was only read.
+4. To go back, point the name back at the old instance and set `MISP.live=true` there. The
+   migration never writes to the old database: `MIGRATE_SOURCE_UPGRADE` runs on a copy.
 
 ## After the copy
 
