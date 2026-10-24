@@ -1,5 +1,6 @@
 """Unit tests for the release tool (scripts/release.py): the next tag and chart version."""
 
+import subprocess
 import sys
 from pathlib import Path
 
@@ -87,3 +88,45 @@ def test_the_image_tag_sits_in_every_compose_file_of_ours():
         text = path.read_text()
         if "ghcr.io/oivindoh/misp-container" in text:
             assert release.IMAGE_DEFAULT.search(text), path
+
+
+class TestMain:
+    """main() on a clone of a bare origin, as a maintainer runs it on master."""
+
+    @staticmethod
+    def git(cwd, *args):
+        return subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True).stdout.strip()
+
+    @pytest.fixture
+    def repo(self, tmp_path, monkeypatch):
+        origin, work = tmp_path / "origin.git", tmp_path / "work"
+        self.git(tmp_path, "init", "--quiet", "--bare", "-b", "master", str(origin))
+        self.git(tmp_path, "clone", "--quiet", str(origin), str(work))
+        for key, value in (("user.name", "t"), ("user.email", "t@example.com"), ("commit.gpgsign", "false"),
+                           ("tag.gpgsign", "false")):
+            self.git(work, "config", key, value)
+        (work / "Dockerfile").write_text("ARG CORE_TAG=3.0_wip\n")
+        (work / "deploy/chart").mkdir(parents=True)
+        (work / "deploy/chart/Chart.yaml").write_text('name: misp\nversion: 3.0.0-wip.1\nappVersion: "3.0.0-wip.1"\n')
+        (work / "deploy/docker-compose.yml").write_text("image: ghcr.io/oivindoh/misp-container:${MISP_IMAGE_TAG:-3.0.0-wip.1}\n")
+        self.git(work, "checkout", "--quiet", "-b", "master")
+        self.git(work, "add", "-A")
+        self.git(work, "commit", "--quiet", "-m", "start")
+        self.git(work, "push", "--quiet", "origin", "master")
+        monkeypatch.setattr(release, "REPO", work)
+        monkeypatch.setattr(release, "CHART_YAML", work / "deploy/chart/Chart.yaml")
+        monkeypatch.setattr(release, "COMPOSE_FILES", [work / "deploy/docker-compose.yml"])
+        monkeypatch.setattr("builtins.input", lambda prompt: "y")
+        return work
+
+    def test_the_first_release_tags_head_when_the_files_name_it(self, repo):
+        head = self.git(repo, "rev-parse", "HEAD")
+        assert release.main([]) == 0
+        assert self.git(repo, "rev-list", "-n", "1", "v3.0.0-wip.1") == head
+
+    def test_the_next_release_commits_the_new_version_then_tags_it(self, repo):
+        self.git(repo, "tag", "v3.0.0-wip.1")
+        assert release.main([]) == 0
+        assert self.git(repo, "log", "-1", "--format=%s") == "release v3.0.0-wip.2, chart 3.0.0-wip.2"
+        assert self.git(repo, "rev-list", "-n", "1", "v3.0.0-wip.2") == self.git(repo, "rev-parse", "HEAD")
+        assert "${MISP_IMAGE_TAG:-3.0.0-wip.2}" in (repo / "deploy/docker-compose.yml").read_text()

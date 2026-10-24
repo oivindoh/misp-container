@@ -146,15 +146,19 @@ def main(argv: list[str]) -> int:
     print(f"Image tag:      {image_tag} (MISP {misp})")
     print(f"Chart version:  {chart_version}")
     print()
-    print(git("diff", "--stat"))
     changed = [str(CHART_YAML), *map(str, COMPOSE_FILES)]
-    if input(f"\nCommit and tag {tag}? [y/N] ").strip().lower() != "y":
-        git("checkout", "--", *changed)
+    # The files can name the release already, as for the first one; then HEAD takes the tag
+    pending = bool(git("status", "--porcelain", "--", *changed))
+    print(git("diff", "--stat") if pending else "The files already name this release.")
+    if input(f"\n{'Commit and tag' if pending else 'Tag HEAD as'} {tag}? [y/N] ").strip().lower() != "y":
+        if pending:
+            git("checkout", "--", *changed)
         print("Aborted; the files are as they were.")
         return 1
 
-    git("add", *changed)
-    git("commit", "--quiet", "-m", f"release {tag}, chart {chart_version}")
+    if pending:
+        git("add", *changed)
+        git("commit", "--quiet", "-m", f"release {tag}, chart {chart_version}")
     git("tag", tag)
     print(f"\nDone. To publish:\n  git push --atomic origin master {tag}")
     return 0

@@ -20,9 +20,9 @@ helm install misp oci://ghcr.io/oivindoh/charts/misp \
     --namespace misp --create-namespace -f values.yaml
 ```
 
-The chart has its own SemVer version, and its `appVersion` is the image tag of the release:
-the MISP version, with `-rN` for a hotfix ([DEVELOPING.md](../DEVELOPING.md#releases)). From a
-checkout, install `deploy/chart` instead.
+The chart's version and its `appVersion`, the image tag of the release, follow the release
+scheme in [DEVELOPING.md](../DEVELOPING.md#releases). A pre-release such as `3.0.0-wip.1` needs
+`--version` or `--devel`. From a checkout, install `deploy/chart` instead.
 
 Check a release from inside the cluster once the configure Job has run:
 
