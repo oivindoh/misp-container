@@ -272,7 +272,7 @@ The stack suites and the smoke test, in pytest (`tests/e2e/`):
 | `garage.py` | The garage S3 store of the test stacks: layout, keys and buckets through its admin API. |
 | `stack.py` | A Compose stack under test: compose calls, container exec, SQL, HTTP and waits. |
 | `test_integration.py` | Integration suite: one MISP stack in Compose, checked feature by feature. |
-| `test_migration.py` | Migration suite: seeds MISP 2.5.50 from the published images on MariaDB, migrates it with the migrate Job of this tree's image into PostgreSQL, which converts it to MISP 3.0 on the way, and checks the copy through the API and the database. The first copy takes the attachments onto the volume, a forced second copy into an S3 bucket in garage; a last run copies that bucket into another. |
+| `test_migration.py` | Migration suite: loads a MISP 2.5 database into MariaDB, MISP's own INSTALL/MYSQL.sql of 2.5 with the rows of tests/migrate-source.sql, migrates it with the migrate Job of this tree's image into PostgreSQL, which converts it to MISP 3.0 on the way, and checks the copy through the API and the database. The first copy takes the attachments onto the volume, a forced second copy into an S3 bucket in garage; a last run copies that bucket into another. |
 | `test_smoke.py` | Smoke test of a live MISP through its API: reachable, authenticated, configured, working. |
 | `test_sync.py` | Hub-spoke sync suite: two MISP instances configured through the org sync container. |
 | `test_upstream.py` | Upstream guard: scripts/check_upstream.py in the MISP image, one test per check. |
@@ -321,7 +321,7 @@ Stack files and runners:
 | `mise run test` | Run unit tests |
 | `mise run test-integration` | Run the upstream guard and the integration tests (requires podman) |
 | `mise run test-sync` | Run the hub-spoke sync suite (2 MISP instances) |
-| `mise run test-migration` | Run the migration suite (MISP 2.5.50 on MariaDB into PostgreSQL) |
+| `mise run test-migration` | Run the migration suite (a MISP 2.5 database on MariaDB into PostgreSQL) |
 | `mise run test-kind` | Install, test, upgrade and roll back the Helm chart on a kind cluster (build the images first) |
 | `mise run agents-md` | Regenerate AGENTS.md from the tree |
 | `mise run docs` | Regenerate the generated regions of the docs and AGENTS.md from the code |

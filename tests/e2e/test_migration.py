@@ -1,9 +1,9 @@
-"""Migration suite: seeds MISP 2.5.50 from the published images on MariaDB,
-migrates it with the migrate Job of this tree's image into PostgreSQL, which
-converts it to MISP 3.0 on the way, and checks the copy through the API and
-the database. The first copy takes the attachments onto the volume, a forced
-second copy into an S3 bucket in garage; a last run copies that bucket into
-another.
+"""Migration suite: loads a MISP 2.5 database into MariaDB, MISP's own
+INSTALL/MYSQL.sql of 2.5 with the rows of tests/migrate-source.sql, migrates
+it with the migrate Job of this tree's image into PostgreSQL, which converts it
+to MISP 3.0 on the way, and checks the copy through the API and the database.
+The first copy takes the attachments onto the volume, a forced second copy
+into an S3 bucket in garage; a last run copies that bucket into another.
 
     pytest tests/e2e/test_migration.py [--skip-build] [--keep]
 
@@ -16,6 +16,7 @@ import base64
 import os
 import shutil
 import subprocess
+import urllib.request
 from functools import partial
 
 import pytest
@@ -28,21 +29,24 @@ SECRETS = env_file(TESTS / "test-compose-secrets.env")
 TEST_ENV = env_file(TESTS / "test-compose.env")
 ADMIN_EMAIL = TEST_ENV["ADMIN_EMAIL"]
 MISP_UUID = TEST_ENV["MISP_UUID"]
-# The source: the newest 2.5 release, on MariaDB
-SOURCE_TAG = "2.5.50"
-SOURCE_ENV = TESTS / "migrate-source.env"
+# The source: MISP's schema at its newest 2.5 release, v2.5.50, then the suite's rows
+SOURCE_SCHEMA = ("https://raw.githubusercontent.com/MISP/MISP/"
+                 "fc99c9e3fc85beddc6ef18835359f3c8b7f44608/INSTALL/MYSQL.sql")
+SOURCE_ROWS = TESTS / "migrate-source.sql"
 TARGET_TAG = os.environ.get("MISP_IMAGE_TAG") or "migration-test"
-IMAGES = ("ghcr.io/oivindoh/misp-container", "ghcr.io/oivindoh/misp-container-caddy",
-          "ghcr.io/oivindoh/misp-container-modules")
 MISP_SERVICES = ("configure", "web", "worker", "caddy", "metrics")
-# The sync user tests/migrate-orgs.yaml creates, with this authkey
+# The authkeys of the admin and of the sync user that tests/migrate-source.sql seeds
+ADMIN_KEY = "migrateadmin0000000000000000000000000000"
 INBOUND_KEY = "migrateinbound00000000000000000000000000"
 ORG_UUID = "7c2f4a9e-3d5b-4e8a-9f10-6b7c8d9e0f11"
+EVENT_ID = 1
 TABLES = ("events", "attributes", "users", "organisations", "servers", "tags")
 # The source's attachments directory, which the migrate service mounts
 FIXTURE_DIR = scratch_dir() / "migrate-source-files"
-# Attachments in the three places MISP keeps them on disk, by the key they get
-FIXTURE_FILES = {"999/1": ("999/1", "legacy attachment"),
+# Attachments by the key they get: the seeded event's attachment, and one in each
+# of the three places MISP keeps them on disk
+FIXTURE_FILES = {"1/1": ("1/1", "migration attachment content"),
+                 "999/1": ("999/1", "legacy attachment"),
                  "998/1": ("bucket_0/998/1", "bucketed attachment"),
                  "shadow/999/2": ("shadow/999/2", "proposal attachment")}
 ATTACHMENTS = "/var/www/MISP/app/attachments"
@@ -52,23 +56,23 @@ S3_TARGET = env_file(S3_ENV)
 COPY_BUCKET = "misp-copy"
 
 
-def use(tag, env=None):
-    """Compose reads the image tag and the extra env file of every MISP service from these on each call."""
-    os.environ["MISP_IMAGE_TAG"] = tag
-    if env:
-        os.environ["MISP_TEST_ENV"] = str(env)
-    else:
-        os.environ.pop("MISP_TEST_ENV", None)
-
-
 def email_of(stack, key):
     user = stack.api("GET", "/users/view/me", key) or {}
     return user.get("User", {}).get("email")
 
 
+def mariadb(stack, sql):
+    """SQL on the source's MariaDB, fed on stdin: the output, tab-separated."""
+    result = subprocess.run([stack.engine, "exec", "-i", "-e", f"MYSQL_PWD={SECRETS['MARIADB_PASSWORD']}",
+                             stack.container_id("mysql"), "mariadb", "-N", "-u", SECRETS["MARIADB_USER"], "misp"],
+                            input=sql, capture_output=True, text=True, timeout=300)
+    if result.returncode != 0:
+        raise RuntimeError(f"mariadb exited {result.returncode}: {result.stderr}")
+    return result.stdout.strip()
+
+
 def migrate(stack, **env):
     """One run of the migrate Job of this tree's image, from the source's MariaDB."""
-    use(TARGET_TAG)
     source = {"MIGRATE_SOURCE_HOST": "mysql", "MIGRATE_SOURCE_USER": SECRETS["DB_USER"],
               "MIGRATE_SOURCE_PASSWORD": SECRETS["DB_PASSWORD"], "MIGRATE_SOURCE_FILES": "/mnt/source"}
     return stack.run("migrate", env={**source, **env})
@@ -93,7 +97,10 @@ def objects(name):
 
 def switch(stack, env=None):
     """Run this tree's MISP on the copy, with an extra env file, and wait for it."""
-    use(TARGET_TAG, env)
+    if env:
+        os.environ["MISP_TEST_ENV"] = str(env)
+    else:
+        os.environ.pop("MISP_TEST_ENV", None)
     stack.compose("up", "-d", "--force-recreate", *MISP_SERVICES, profiles=())
     stack.wait_for_misp(timeout=600)
 
@@ -103,6 +110,8 @@ def switch(stack, env=None):
 @pytest.fixture(scope="module")
 def stack(options, failed_in_module):
     previous = {k: os.environ.get(k) for k in ("MISP_IMAGE_TAG", "MISP_TEST_ENV", "MIGRATE_FIXTURE_DIR")}
+    os.environ["MISP_IMAGE_TAG"] = TARGET_TAG
+    os.environ.pop("MISP_TEST_ENV", None)
     os.environ["MIGRATE_FIXTURE_DIR"] = str(FIXTURE_DIR)
     s = Stack([DEPLOY / "docker-compose.yml", TESTS / "docker-compose.test.yml",
                TESTS / "docker-compose.migrate.yml"], profiles=("migrate",))
@@ -112,18 +121,11 @@ def stack(options, failed_in_module):
         (FIXTURE_DIR / where).parent.mkdir(parents=True, exist_ok=True)
         (FIXTURE_DIR / where).write_text(content)
     if not options["skip_build"]:
-        use(TARGET_TAG)
         s.compose("build", check=True, timeout=3600)
-    # The engine pulls: a compose runner may skip a service it can build. The
-    # releases are built for amd64 alone; another host runs them emulated
-    for image in IMAGES:
-        pulled = subprocess.run([s.engine, "pull", "--platform", "linux/amd64", f"{image}:{SOURCE_TAG}"],
-                                capture_output=True, text=True)
-        assert pulled.returncode == 0, pulled.stderr
-    use(SOURCE_TAG, SOURCE_ENV)
-    s.compose("up", "-d", profiles=())
-    s.wait_for_misp(timeout=600)
-    s.key = s.admin_key(ADMIN_EMAIL)
+    s.compose("up", "-d", "mysql", "postgres", "redis", "garage", profiles=(), check=True)
+    s.wait_for("mysql", "healthcheck.sh --connect --innodb_initialized", timeout=180)
+    with urllib.request.urlopen(SOURCE_SCHEMA, timeout=60) as response:
+        mariadb(s, response.read().decode() + SOURCE_ROWS.read_text())
     garage.layout()
     access, _ = garage.key("migrate", S3_TARGET["PLUGIN_S3_AWS_ACCESS_KEY"], S3_TARGET["PLUGIN_S3_AWS_SECRET_KEY"])
     for name in (S3_TARGET["PLUGIN_S3_BUCKET_NAME"], COPY_BUCKET):
@@ -139,24 +141,13 @@ def stack(options, failed_in_module):
 
 
 @pytest.fixture(scope="module")
-def seed(stack):
-    stack.run("sync", env={"ADMIN_KEY": stack.key, "SYNC_BASE_URL": "http://caddy:8080"},
-              volumes=[f"{TESTS / 'migrate-orgs.yaml'}:/etc/misp-docker/orgs.yaml:ro"])
-    event = stack.api("POST", "/events/add", stack.key, {
-        "info": "Migration suite event", "distribution": "0", "threat_level_id": "4", "analysis": "0"}) or {}
-    event_id = event.get("Event", {}).get("id")
-    attribute = stack.api("POST", f"/attributes/add/{event_id}", stack.key, {
-        "event_id": event_id, "category": "Payload delivery", "type": "attachment", "value": "migrate.txt",
-        "data": base64.b64encode(b"migration attachment content").decode()}) or {}
-    return {"event_id": event_id,
-            "attribute_id": attribute.get("Attribute", {}).get("id"),
-            "counts": {table: stack.sql(f"SELECT COUNT(*) FROM {table}") for table in TABLES}}
+def counts(stack):
+    """The source's row counts, before the first copy changes it."""
+    return {table: mariadb(stack, f"SELECT COUNT(*) FROM {table}") for table in TABLES}
 
 
 @pytest.fixture(scope="module")
-def first_copy(stack, seed):
-    # Nothing of the source may write while the Job copies it
-    stack.compose("stop", "web", "worker", "metrics", profiles=())
+def first_copy(stack, counts):
     return migrate(stack, MIGRATE_SOURCE_UPGRADE="true")
 
 
@@ -184,8 +175,7 @@ def volume_copy(stack, forced_copy):
 
 @pytest.fixture(scope="module")
 def s3_run(stack, volume_copy):
-    # The attachments volume holds the seeded attachment and, from the first
-    # copy, the fixture files: the source of the upload into S3
+    # The attachments volume holds the files of the first copy: the source of the upload into S3
     stack.compose("stop", "web", "worker", "metrics", profiles=())
     return migrate(stack, MIGRATE_FORCE="true", MIGRATE_REPLACE_COPY="true", MIGRATE_SOURCE_FILES=ATTACHMENTS,
                    **S3_TARGET)
@@ -211,54 +201,54 @@ def bucket_copy(stack, s3_copy):
 
 # -- the checks every migrated copy must pass --------------------------------------
 
-def live_set_by_configure(stack, seed, where):
+def live_set_by_configure(stack, counts, where):
     assert stack.sql("SELECT value FROM system_settings WHERE setting='MISP.live'") == "true"
 
 
-def migration_recorded(stack, seed, where):
+def migration_recorded(stack, counts, where):
     assert '"success":1' in stack.sql("SELECT value FROM system_settings WHERE setting='misp_docker.runs.migrate'")
 
 
-def row_count(table, stack, seed, where):
-    assert stack.sql(f"SELECT COUNT(*) FROM {table}") == seed["counts"][table]
+def row_count(table, stack, counts, where):
+    assert stack.sql(f"SELECT COUNT(*) FROM {table}") == counts[table]
 
 
-def uuid_carried_over(stack, seed, where):
+def uuid_carried_over(stack, counts, where):
     assert MISP_UUID in stack.sql("SELECT value FROM system_settings WHERE setting='MISP.uuid'")
 
 
-def admin_key_logs_in(stack, seed, where):
-    assert email_of(stack, stack.key) == ADMIN_EMAIL
+def admin_key_logs_in(stack, counts, where):
+    assert email_of(stack, ADMIN_KEY) == ADMIN_EMAIL
 
 
-def sync_key_logs_in(stack, seed, where):
+def sync_key_logs_in(stack, counts, where):
     assert email_of(stack, INBOUND_KEY) == "migrate-inbound@example.com"
 
 
-def seeded_org_present(stack, seed, where):
-    org = stack.api("GET", f"/organisations/view/{ORG_UUID}", stack.key) or {}
+def seeded_org_present(stack, counts, where):
+    org = stack.api("GET", f"/organisations/view/{ORG_UUID}", ADMIN_KEY) or {}
     assert org.get("Organisation", {}).get("name") == "Migrate Test Org"
 
 
-def sync_server_present(stack, seed, where):
-    _, body = stack.http("GET", "/servers/index", stack.key)
+def sync_server_present(stack, counts, where):
+    _, body = stack.http("GET", "/servers/index", ADMIN_KEY)
     assert "Migrate Test Server" in body
 
 
-def event_intact(stack, seed, where):
-    event = stack.api("GET", f"/events/view/{seed['event_id']}", stack.key) or {}
+def event_intact(stack, counts, where):
+    event = stack.api("GET", f"/events/view/{EVENT_ID}", ADMIN_KEY) or {}
     assert event.get("Event", {}).get("info") == "Migration suite event"
 
 
-def attachment_readable(stack, seed, where):
+def attachment_readable(stack, counts, where):
     # The download endpoint serves an encrypted zip; restSearch returns the bytes base64-encoded
-    found = stack.api("POST", "/attributes/restSearch", stack.key, {
-        "returnFormat": "json", "eventid": seed["event_id"], "type": "attachment", "withAttachments": 1}) or {}
+    found = stack.api("POST", "/attributes/restSearch", ADMIN_KEY, {
+        "returnFormat": "json", "eventid": EVENT_ID, "type": "attachment", "withAttachments": 1}) or {}
     data = (found.get("response", {}).get("Attribute") or [{}])[0].get("data", "")
     assert base64.b64decode(data) == b"migration attachment content"
 
 
-def fixture_attachments_copied(stack, seed, where):
+def fixture_attachments_copied(stack, counts, where):
     if where == "s3":
         found = {key: content.decode() for key, content in objects(S3_TARGET["PLUGIN_S3_BUCKET_NAME"]).items()}
     else:
@@ -273,18 +263,11 @@ COPY_CHECKS = [live_set_by_configure, migration_recorded,
 CHECK_IDS = [c.func.__name__ + "_" + c.args[0] if isinstance(c, partial) else c.__name__ for c in COPY_CHECKS]
 
 
-# -- seed ----------------------------------------------------------------------------
+# -- the source ----------------------------------------------------------------------
 
-def test_seed_sync_user_logs_in(stack, seed):
-    assert email_of(stack, INBOUND_KEY) == "migrate-inbound@example.com"
-
-
-def test_seed_event_created(seed):
-    assert seed["event_id"]
-
-
-def test_seed_attachment_uploaded(seed):
-    assert seed["attribute_id"]
+def test_source_holds_misp_2_attribute_values(stack, counts):
+    # MISP 2.x keeps an attribute's value in value1 and value2; runUpgrade converts them
+    assert mariadb(stack, "SELECT value1 FROM attributes WHERE id = 1") == "migrate.txt"
 
 
 # -- MariaDB to PostgreSQL, attachments onto the volume --------------------------------
@@ -303,8 +286,8 @@ def test_rows_copied(first_copy):
 
 
 def test_attachments_copied(first_copy):
-    # The three fixture attachments; taxonomies/x is no attachment
-    assert f"attachments copied from /mnt/source to {ATTACHMENTS}: 3 files" in first_copy[1]
+    # The seeded attachment and the three fixture attachments; taxonomies/x is no attachment
+    assert f"attachments copied from /mnt/source to {ATTACHMENTS}: 4 files" in first_copy[1]
 
 
 def test_rerun_keeps_the_jobs_copy(stack, first_copy):
@@ -335,8 +318,8 @@ def test_force_dropped_the_tables(forced_copy):
 
 
 @pytest.mark.parametrize("check", COPY_CHECKS, ids=CHECK_IDS)
-def test_volume_copy(stack, seed, volume_copy, check):
-    check(stack, seed, volume_copy)
+def test_volume_copy(stack, counts, volume_copy, check):
+    check(stack, counts, volume_copy)
 
 
 def test_new_rows_get_ids_past_the_copied_ones(stack, volume_copy):
@@ -351,23 +334,22 @@ def test_s3_migrate_exits_0(s3_run):
 
 
 def test_s3_attachments_uploaded(s3_run):
-    # The fixture attachments and the seeded one
     assert f"attachments copied from {ATTACHMENTS} to s3://misp-migrated at http://garage:3900: 4 files" \
         in s3_run[1]
 
 
 @pytest.mark.parametrize("check", COPY_CHECKS, ids=CHECK_IDS)
-def test_s3_copy(stack, seed, s3_copy, check):
-    check(stack, seed, s3_copy)
+def test_s3_copy(stack, counts, s3_copy, check):
+    check(stack, counts, s3_copy)
 
 
 def test_s3_new_attachment_goes_to_the_bucket(stack, s3_copy):
     # The volume still holds a copy of every migrated attachment, so a read through
     # the API passes from disk as well; only a new upload shows where MISP writes
-    event = stack.api("POST", "/events/add", stack.key, {
+    event = stack.api("POST", "/events/add", ADMIN_KEY, {
         "info": "S3 target event", "distribution": "0", "threat_level_id": "4", "analysis": "0"}) or {}
     event_id = event.get("Event", {}).get("id")
-    attribute = stack.api("POST", f"/attributes/add/{event_id}", stack.key, {
+    attribute = stack.api("POST", f"/attributes/add/{event_id}", ADMIN_KEY, {
         "event_id": event_id, "category": "Payload delivery", "type": "attachment", "value": "s3.txt",
         "data": base64.b64encode(b"S3 target attachment").decode()}) or {}
     key = f"{event_id}/{attribute.get('Attribute', {}).get('id')}"

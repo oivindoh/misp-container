@@ -22,7 +22,7 @@ services:
       - misp-files-img-custom:/var/www/MISP/app/attachments/img/custom
       - ${MIGRATE_FIXTURE_DIR:-/tmp}:/mnt/source:ro
 
-  # MISP 2.5.50 of the published images runs on it first (tests/migrate-source.env)
+  # The source: MISP 2.5's schema and the rows of tests/migrate-source.sql, which the suite loads
   mysql:
     image: docker.io/library/mariadb:11.8.9@sha256:79d59758afc91b89b120b0a8904d637f5a3b3e1c4900f29b740d6d46c72fef68
     command:
