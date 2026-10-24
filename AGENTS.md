@@ -96,7 +96,6 @@ The chart's components run periodic work as CronJobs, with their default schedul
 
 | CronJob | Schedule | Runs | Component |
 |---|---|---|---|
-| `user-validity` | `30 5 * * *` | `-m misp_container.task check-user-validity` | `userValidity` |
 | `housekeeping-audit-logs` | `10 3 * * *` | `-m misp_container.housekeeping audit_logs` | `housekeeping` |
 | `housekeeping-jobs` | `0 2 * * *` | `-m misp_container.housekeeping jobs` | `housekeeping` |
 | `housekeeping-logs` | `0 3 * * *` | `-m misp_container.housekeeping logs` | `housekeeping` |
@@ -122,7 +121,6 @@ Values of the misp chart. The comment above each top-level key describes it; doc
 |---|---|---|
 | `configmap-env.yaml` | ConfigMap `misp-env` | misp-env: files/base.env, then the env value. Every MISP pod reads it; its checksum rolls the Deployments. |
 | `configmap-orgs.yaml` | ConfigMap `misp-orgs` | Declarative org config for the org-sync Job (orgSync.orgs; format: deploy/orgs.yaml.example). |
-| `cronjob-user-validity.yaml` | CronJob `user-validity` | The userValidity component: checks every MISP account against the OIDC or LDAP provider through MISP's console. Needs the oidc or ldap group: MISP's check refuses to run without one. check-user-validity reports each user as valid or invalid and changes nothing; block-invalid-users disables the users the provider no longer backs. |
 | `cronjobs-housekeeping.yaml` | CronJob `housekeeping-audit-logs`, CronJob `housekeeping-jobs`, CronJob `housekeeping-logs` | The housekeeping component: nightly batched deletes of old rows in jobs, logs and audit_logs (python3 -m misp_container.housekeeping). Autovacuum reclaims the space. Retention is a policy choice: HOUSEKEEPING_<TABLE>_DAYS in env. |
 | `cronjobs.yaml` | CronJob `cache-feeds`, CronJob `cache-servers`, CronJob `fetch-feeds`, CronJob `periodic-summary`, CronJob `pull-servers`, CronJob `push-servers`, CronJob `push-taxii`, CronJob `sharing-group-blueprints`, CronJob `update-galaxies`, CronJob `update-noticelists`, CronJob `update-object-templates`, CronJob `update-taxonomies`, CronJob `update-warninglists` | The cronjobs component: the periodic tasks, run by the task runner in the main image (python3 -m misp_container.task <task>), one CronJob per entry of cronjobs.tasks and one per workflow ID in cronjobs.workflows. API tasks need ADMIN_KEY in misp-admin; the runner exits 1 with a clear message when it is empty. A run dispatches nothing while the queue holds cronjobs.maxQueued jobs or more (read from the metrics exporter). |
 | `deployment-metrics.yaml` | Deployment `metrics` | Prometheus exporter on port 9191: MISP's database, the job queues in Redis and the sync partners (docs/metrics.md). It reads MISP's data and never changes it. |
@@ -174,7 +172,6 @@ Components, each off by default:
 | `httpRoute` | An HTTPRoute for a Gateway API implementation, in place of the ingress. The Gateway must allow routes from this namespace; set TRUSTED_PROXY_CIDR in env to its proxy pods. |
 | `networkPolicy` | NetworkPolicies for every pod: the paths MISP needs, DNS, HTTPS out and SMTP out, for any CNI that enforces the NetworkPolicy API, Cilium included. ingressNamespace holds the ingress or Gateway proxies, monitoringNamespace Prometheus. |
 | `cronjobs` | The periodic tasks as CronJobs: tasks maps a task to its schedule, workflows a workflow ID to its schedule. API tasks need ADMIN_KEY in secrets.admin and dispatch nothing while maxQueued jobs or more wait. |
-| `userValidity` | A daily check of every account against the OIDC or LDAP provider, through MISP's console. Needs the oidc or ldap group. check-user-validity reports; block-invalid-users disables the accounts the provider no longer backs. |
 | `housekeeping` | Nightly deletes of old rows in jobs, logs and audit_logs (HOUSEKEEPING_<TABLE>_DAYS in env, defaults 2, 30 and 90). |
 | `migrate` | A copy of an existing MySQL or MariaDB MISP into the database, before the configure Job runs (docs/migration.md). secret: entries on top of files/secrets-migrate.env for the misp-migrate Secret. volumes and volumeMounts: the source's attachments directory. |
 

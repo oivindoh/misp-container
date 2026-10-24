@@ -170,6 +170,10 @@ cronjobs:
     push-taxii: "7 * * * *"
     sharing-group-blueprints: "37 * * * *"
     periodic-summary: "0 6 * * *"
+    # Need the oidc or ldap group: give check-user-validity a schedule, such as "30 5 * * *",
+    # to report each account the provider no longer backs, or block-invalid-users to disable it
+    check-user-validity: ""
+    block-invalid-users: ""
   workflows: {}
   resources:
     api:
@@ -178,14 +182,6 @@ cronjobs:
     console:
       requests: {cpu: 50m, memory: 256Mi}
       limits: {cpu: 1000m, memory: 1Gi}
-
-# A daily check of every account against the OIDC or LDAP provider, through MISP's console.
-# Needs the oidc or ldap group. check-user-validity reports; block-invalid-users disables the
-# accounts the provider no longer backs.
-userValidity:
-  enabled: false
-  schedule: "30 5 * * *"
-  task: check-user-validity
 
 # Nightly deletes of old rows in jobs, logs and audit_logs (HOUSEKEEPING_<TABLE>_DAYS in env,
 # defaults 2, 30 and 90).

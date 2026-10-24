@@ -243,15 +243,23 @@ API. tests/test_chart.py checks this list against misp_container.task.CAKE_TASKS
 {{- end }}
 
 {{/*
-A CronJob of the task runner. Takes (dict root name task args schedule).
-API tasks (app.kubernetes.io/component: misp-task) call the API with ADMIN_KEY;
-console tasks (misp-console-task) render app/Config and run MISP's console.
-The network policies select on that label.
+A CronJob of periodic work. Takes (dict root name task args schedule), and
+module "housekeeping" for a housekeeping run. Three shapes, each with its
+app.kubernetes.io/component label, which the network policies select on:
+API tasks (misp-task) call the API with ADMIN_KEY; console tasks
+(misp-console-task) render app/Config and run MISP's console; housekeeping
+(misp-housekeeping) deletes old rows straight in the database.
 */}}
 {{- define "misp.taskCronJob" -}}
 {{- $root := .root }}
-{{- $console := has .task (include "misp.consoleTasks" $root | fromJsonArray) }}
-{{- $component := ternary "misp-console-task" "misp-task" $console }}
+{{- $module := default "task" .module }}
+{{- $shape := "api" }}
+{{- if eq $module "housekeeping" }}
+{{- $shape = "housekeeping" }}
+{{- else if has .task (include "misp.consoleTasks" $root | fromJsonArray) }}
+{{- $shape = "console" }}
+{{- end }}
+{{- $component := get (dict "api" "misp-task" "console" "misp-console-task" "housekeeping" "misp-housekeeping") $shape }}
 apiVersion: batch/v1
 kind: CronJob
 metadata:
@@ -267,26 +275,30 @@ spec:
   jobTemplate:
     spec:
       backoffLimit: {{ ternary 0 2 (eq .task "periodic-summary") }}
-      activeDeadlineSeconds: {{ ternary 3600 1200 $console }}
+      activeDeadlineSeconds: {{ ternary 1200 3600 (eq $shape "api") }}
       template:
         metadata:
           labels:
             app.kubernetes.io/name: {{ .name }}
             app.kubernetes.io/component: {{ $component }}
         spec:
-          restartPolicy: {{ ternary "Never" "OnFailure" $console }}
+          restartPolicy: {{ ternary "Never" "OnFailure" (eq $shape "console") }}
           {{- include "misp.podSecurityContext" $root | nindent 10 }}
           {{- include "misp.podScheduling" $root | nindent 10 }}
           containers:
-            - name: task
+            - name: {{ $module }}
               {{- include "misp.image" $root | nindent 14 }}
-              command: ["/usr/bin/tini", "--", "python3", "-m", "misp_container.task", {{ .task | quote }}{{ range .args }}, {{ . | quote }}{{ end }}]
-              {{- if $console }}
+              command: ["/usr/bin/tini", "--", "python3", "-m", "misp_container.{{ $module }}", {{ .task | quote }}{{ range .args }}, {{ . | quote }}{{ end }}]
+              {{- if eq $shape "console" }}
               {{- include "misp.appEnv" (list $root "misp-db" "misp-app") | nindent 14 }}
               volumeMounts:
                 {{- include "misp.appVolumeMounts" $root | nindent 16 }}
               resources:
                 {{- toYaml $root.Values.cronjobs.resources.console | nindent 16 }}
+              {{- else if eq $shape "housekeeping" }}
+              {{- include "misp.appEnv" (list $root "misp-db") | nindent 14 }}
+              resources:
+                {{- toYaml $root.Values.housekeeping.resources | nindent 16 }}
               {{- else }}
               env:
                 # No misp-env for an API task: only what the runner reads, plus the
@@ -308,7 +320,7 @@ spec:
                 {{- toYaml $root.Values.cronjobs.resources.api | nindent 16 }}
               {{- end }}
               {{- include "misp.containerSecurityContext" $root | nindent 14 }}
-          {{- if $console }}
+          {{- if eq $shape "console" }}
           volumes:
             {{- include "misp.appVolumes" $root | nindent 12 }}
             {{- include "misp.attachmentsVolume" $root | nindent 12 }}

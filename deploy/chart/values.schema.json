@@ -199,15 +199,6 @@
         }
       }
     },
-    "userValidity": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "enabled": {"type": "boolean"},
-        "schedule": {"type": "string"},
-        "task": {"type": "string", "enum": ["check-user-validity", "block-invalid-users"]}
-      }
-    },
     "housekeeping": {
       "type": "object",
       "additionalProperties": false,

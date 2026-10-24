@@ -35,12 +35,13 @@ def test_the_console_tasks_are_the_task_runners():
     assert listed == set(task.CAKE_TASKS)
 
 
-def test_every_task_has_a_cronjob_but_the_alternatives():
-    # workflow runs per workflow ID (cronjobs.workflows); block-invalid-users replaces
-    # check-user-validity in userValidity.task
+def test_every_task_has_a_cronjobs_entry_and_each_scheduled_one_a_cronjob():
+    # workflow runs per workflow ID (cronjobs.workflows)
+    tasks = yaml.safe_load((chart.CHART / "values.yaml").read_text())["cronjobs"]["tasks"]
+    assert set(tasks) == set(task.TASKS) - {task.WORKFLOW_TASK}
     commands = [chart.pod_spec(d)["containers"][0]["command"] for d in kinds(every_component=True)["CronJob"]]
     scheduled = {c[c.index("misp_container.task") + 1] for c in commands if "misp_container.task" in c}
-    assert scheduled == set(task.TASKS) - {task.WORKFLOW_TASK, "block-invalid-users"}
+    assert scheduled == {name for name, schedule in tasks.items() if schedule}
 
 
 def test_a_console_task_renders_app_config_and_an_api_task_calls_the_api():
@@ -145,7 +146,7 @@ DATABASE_SECRET = ("database.user.name=pg-app", "database.user.key=username",
 def test_every_pod_takes_the_database_credentials_from_the_database_secret():
     """env wins over envFrom: a container that reads misp-db gets DB_USER and DB_PASSWORD from database.*."""
     pods = set()
-    for doc in chart.objects("migrate.enabled=true", "userValidity.enabled=true", *DATABASE_SECRET, every_component=True):
+    for doc in chart.objects("migrate.enabled=true", *DATABASE_SECRET, every_component=True):
         spec = chart.pod_spec(doc)
         if not spec:
             continue

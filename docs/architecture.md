@@ -39,7 +39,7 @@ Secrets, then does its own job:
 | worker | `entrypoint-worker.py` | Deployment, scalable | Waits for `MISP.live=true`, then runs the workers of the `default`, `prio`, `email`, `update` and `cache` queues and starts each one again when it exits |
 | org-sync | `entrypoint-sync.py` | Job, once per release revision, after web serves | Applies `orgs.yaml` through the API |
 | metrics | `entrypoint-metrics.py` | Deployment | Prometheus exporter on 9191 |
-| task | `python3 -m misp_container.task` | CronJobs (components `cronjobs`, `userValidity`) | All periodic work, see [Periodic tasks](kubernetes.md#periodic-tasks). MISP's own scheduler never runs |
+| task | `python3 -m misp_container.task` | CronJobs (component `cronjobs`) | All periodic work, see [Periodic tasks](kubernetes.md#periodic-tasks). MISP's own scheduler never runs |
 
 The workers take their jobs from Redis, and nothing connects to them. MISP's worker page and
 its diagnostics expect supervisord beside the web server, so they show no workers:

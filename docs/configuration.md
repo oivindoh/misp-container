@@ -132,7 +132,7 @@ In MISP:
 | `OIDC_ROLES_MAPPING` | The client roles, highest first: `{"admin": "admin", "org-admin": "Org Admin", "publisher": "Publisher", "user": "User", "read-only": "Read Only"}`. OidcAuth takes the first match, so a user gets the highest role held |
 | `OIDCAUTH_ORGANISATION_PROPERTY` | `misp_organisation` |
 | `OIDC_DEFAULT_ORG` | Optional: the organisation of a user in no Keycloak organisation. Empty refuses that login |
-| `OIDCAUTH_OFFLINE_ACCESS` | Optional: `true` for the `userValidity` check. Users then need the realm role `offline_access`, which Keycloak's default roles hold |
+| `OIDCAUTH_OFFLINE_ACCESS` | Optional: `true` for the `check-user-validity` task. Users then need the realm role `offline_access`, which Keycloak's default roles hold |
 
 A user in several Keycloak organisations lands in any one of them. A user whose organisation
 has no MISP organisation of that name cannot log in. The accounts of a migrated instance need
