@@ -23,7 +23,7 @@ description = "Run the upstream guard and the integration tests (requires podman
 run = "python -m pytest tests/e2e/test_upstream.py tests/e2e/test_integration.py -v"
 
 [tasks.test-sync]
-description = "Run the hub-spoke sync suite (2 MISP instances)"
+description = "Run the hub-spoke sync suite (2 MISP instances and a MISP 2.5 partner)"
 run = "python -m pytest tests/e2e/test_sync.py -v"
 
 [tasks.test-migration]

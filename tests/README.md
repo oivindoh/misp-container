@@ -2,12 +2,12 @@
 
 ## TL;DR
 
-Unit tests on the Python library, an upstream guard that checks the MISP in the image against what this repository patches or depends on, and three stack suites in pytest (`tests/e2e/`): an integration suite on one Compose stack, a hub-spoke sync suite on two instances, and a migration suite that imports a MISP 2.5 database on MariaDB into PostgreSQL, converting it to MISP 3.0. A smoke test checks any live MISP through its API. Two Kubernetes checks cover the Helm chart: every render validated against the schemas, and the chart installed and upgraded on a kind cluster with the smoke test.
+Unit tests on the Python library, an upstream guard that checks the MISP in the image against what this repository patches or depends on, and three stack suites in pytest (`tests/e2e/`): an integration suite on one Compose stack, a hub-spoke sync suite on two instances and a MISP 2.5 partner, and a migration suite that imports a MISP 2.5 database on MariaDB into PostgreSQL, converting it to MISP 3.0. A smoke test checks any live MISP through its API. Two Kubernetes checks cover the Helm chart: every render validated against the schemas, and the chart installed and upgraded on a kind cluster with the smoke test.
 
 ```bash
 mise run test                # unit tests, the chart lint and every chart render validated against the schemas
 mise run test-integration    # the upstream guard, then single-instance integration tests (~2min)
-mise run test-sync           # hub-spoke sync test with 2 instances (~2min)
+mise run test-sync           # hub-spoke sync test with 2 instances and a MISP 2.5 partner (~4min)
 mise run test-migration      # the migration: a MISP 2.5 database on MariaDB into PostgreSQL (~2min)
 mise run smoketest https://misp.example.com   # a live MISP; asks for an API key
 mise run test-all            # every suite
@@ -144,35 +144,44 @@ localhost breaks the image pulls there.
 
 ## Hub-spoke sync test
 
-MISP server-to-server synchronisation between two isolated instances.
+MISP server-to-server synchronisation between isolated instances: two on this tree's images
+and a partner on MISP 2.5.
 
-**Stack:** 2 MISP instances, the hub B and the spoke A, each with the deploy stack's
-PostgreSQL, Redis, configure, web, caddy and worker. The fixture writes them into one Compose
-file from `deploy/docker-compose.yml`, with an env file per instance; the configure step
-sets each admin key from `ADMIN_KEY`.
+**Stack:** the hub B and the spoke A, each with the deploy stack's PostgreSQL, Redis,
+configure, web, caddy and worker, and the spoke C: MISP 2.5.50 from the MISP project's own
+images (`misp-core` and `misp-nginx`, pinned by digest) on MariaDB and Redis. The fixture
+writes them into one Compose file from `deploy/docker-compose.yml`, with an env file per
+instance. Each instance sets its admin key from `ADMIN_KEY`. The sync container configures A
+and B. C gets its sync user and its server for B through its API, because the sync container
+writes authkeys into PostgreSQL.
 
 ```mermaid
 flowchart LR
     A[A, spoke :18091] -->|pull, every event| B[B, hub :18092]
     B -->|pull, tag release-to:A| A
     B -->|push, tag release-to:A| A
+    C[C, MISP 2.5 spoke :18093] -->|pull, every event| B
+    B -->|pull, tag release-to:C| C
+    C -->|push| B
+    B -->|push in the hub layout, tag release-to:C| C
 ```
 
 | Phase | What it verifies |
 |-------|------------------|
-| Setup | Both instances ready, configured via the sync container |
-| Pull (unfiltered) | B pulls the event from A |
+| Setup | All instances ready; A and B configured via the sync container, C through its API |
+| Pull (unfiltered) | B pulls the event from A and the one from C |
 | Tagging | B tags it release-to:A, and creates one event tagged release-to:A and one release-to:C |
-| Pull (tag-filtered) | A gets the release-to:A event, not the release-to:C one |
+| Pull (tag-filtered) | A gets the release-to:A event, not the release-to:C one; C gets the release-to:C event, not the release-to:A one |
 | Push (tag-filtered) | B pushes a tagged event to A; an untagged one stays on B |
-| Hub layout | A holds no active servers; B pulls from it, then pushes it only the events tagged release-to:A |
+| Push from MISP 2.5 | C pushes an event to B |
+| Hub layout | A holds no active servers; B pulls from it, then pushes A and C only the events tagged for each |
 
 Pulls and pushes are POSTs; a refused call fails the suite. Before each check the suite waits
 until no job on the instance is unfinished.
 
 **Files:**
 - `e2e/test_sync.py` -- the suite, with the stack it writes to `$TMPDIR/hub-spoke`; one module fixture per phase
-- `test-compose-secrets.env` -- the secrets of both instances
+- `test-compose-secrets.env` -- the secrets of every instance
 
 Run with: `mise run test-sync`
 
