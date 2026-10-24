@@ -57,5 +57,21 @@ def test_the_check_finds_a_list_that_drops_a_file(tmp_path):
     assert problems and "service web" in problems[0] and "deploy/docker-compose.yml" in problems[0]
 
 
+def orphans(overlay: Path) -> list[str]:
+    """Services an overlay overrides that no file below it defines; docker compose refuses the project."""
+    below = set()
+    for layer in ([BASE] if overlay == TEST else [BASE, TEST]):
+        below |= set(yaml.safe_load(layer.read_text()).get("services") or {})
+    services = yaml.safe_load(overlay.read_text()).get("services") or {}
+    return [name for name, spec in services.items()
+            if name not in below and not {"image", "build"} & set(spec or {})]
+
+
+@pytest.mark.parametrize("overlay", OVERLAYS, ids=[p.name for p in OVERLAYS])
+def test_overlay_overrides_only_services_that_exist(overlay):
+    # podman-compose ignores such an override, so only a docker compose run in CI would fail
+    assert not orphans(overlay), f"{rel(overlay)} overrides {orphans(overlay)}, which no base file defines"
+
+
 def test_every_overlay_is_checked():
     assert {p.name for p in OVERLAYS} >= {"docker-compose.test.yml", "docker-compose.migrate.yml"}
