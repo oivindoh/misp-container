@@ -29,12 +29,6 @@ def env_data(*sets: str) -> dict[str, str]:
     return chart.find("ConfigMap", "misp-env", *sets)["data"]
 
 
-def test_the_console_tasks_are_the_task_runners():
-    helper = (chart.CHART / "templates/_helpers.tpl").read_text()
-    listed = set(re.search(r'define "misp.consoleTasks".*?list ((?:"[\w-]+" ?)+)', helper, re.S).group(1).replace('"', "").split())
-    assert listed == set(task.CAKE_TASKS)
-
-
 def test_every_task_has_a_cronjobs_entry_and_each_scheduled_one_a_cronjob():
     # workflow runs per workflow ID (cronjobs.workflows)
     tasks = yaml.safe_load((chart.CHART / "values.yaml").read_text())["cronjobs"]["tasks"]
@@ -44,18 +38,13 @@ def test_every_task_has_a_cronjobs_entry_and_each_scheduled_one_a_cronjob():
     assert scheduled == {name for name, schedule in tasks.items() if schedule}
 
 
-def test_a_console_task_renders_app_config_and_an_api_task_calls_the_api():
-    cronjobs = {d["metadata"]["name"]: d for d in kinds(every_component=True)["CronJob"]}
-    console, api = cronjobs["periodic-summary"], cronjobs["pull-servers"]
-    assert console["metadata"]["labels"]["app.kubernetes.io/component"] == "misp-console-task"
-    assert any(m["mountPath"] == "/var/www/MISP/app/Config" for m in chart.pod_spec(console)["containers"][0]["volumeMounts"])
-    assert api["metadata"]["labels"]["app.kubernetes.io/component"] == "misp-task"
-    assert "envFrom" not in chart.pod_spec(api)["containers"][0]
-
-
-def test_the_backlog_limit_is_the_task_runners_default():
-    values = yaml.safe_load((chart.CHART / "values.yaml").read_text())
-    assert values["cronjobs"]["maxQueued"] == task.DEFAULT_MAX_QUEUED
+def test_every_task_cronjob_renders_app_config_and_mounts_the_attachments():
+    for cronjob in kinds(every_component=True)["CronJob"]:
+        if "misp_container.task" not in chart.pod_spec(cronjob)["containers"][0]["args"]:
+            continue
+        assert cronjob["metadata"]["labels"]["app.kubernetes.io/component"] == "misp-task"
+        mounts = {m["mountPath"] for m in chart.pod_spec(cronjob)["containers"][0]["volumeMounts"]}
+        assert {"/var/www/MISP/app/Config", "/var/www/MISP/app/attachments"} <= mounts, cronjob["metadata"]["name"]
 
 
 def test_a_workflow_cronjob_passes_its_id():

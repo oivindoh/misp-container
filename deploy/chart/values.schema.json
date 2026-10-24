@@ -186,17 +186,9 @@
       "additionalProperties": false,
       "properties": {
         "enabled": {"type": "boolean"},
-        "maxQueued": {"type": "integer", "minimum": 0},
         "tasks": {"type": "object", "additionalProperties": {"type": "string"}},
         "workflows": {"type": "object", "additionalProperties": {"type": "string"}},
-        "resources": {
-          "type": "object",
-          "additionalProperties": false,
-          "properties": {
-            "api": {"$ref": "#/definitions/resources"},
-            "console": {"$ref": "#/definitions/resources"}
-          }
-        }
+        "resources": {"$ref": "#/definitions/resources"}
       }
     },
     "housekeeping": {

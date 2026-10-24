@@ -87,7 +87,7 @@ Each component is off by default:
 | `ingress` | An Ingress to the web Service. The default annotation makes the haproxy ingress replace X-Forwarded-For with the address it sees (docs/kubernetes.md, Client addresses). |
 | `httpRoute` | An HTTPRoute for a Gateway API implementation, in place of the ingress. The Gateway must allow routes from this namespace; set TRUSTED_PROXY_CIDR in env to its proxy pods. |
 | `networkPolicy` | NetworkPolicies for every pod: the paths MISP needs, DNS, HTTPS out and SMTP out, for any CNI that enforces the NetworkPolicy API, Cilium included. ingressNamespace holds the ingress or Gateway proxies, monitoringNamespace Prometheus. |
-| `cronjobs` | The periodic tasks as CronJobs: tasks maps a task to its schedule, workflows a workflow ID to its schedule. API tasks need ADMIN_KEY in secrets.admin and dispatch nothing while maxQueued jobs or more wait. |
+| `cronjobs` | The periodic tasks as CronJobs, each running MISP's console in its pod: tasks maps a task to its schedule, workflows a workflow ID to its schedule. The pod's PHP process has the workers' memory ceiling (WORKER_MEMORY_LIMIT, else PHP_MEMORY_LIMIT), which resources must hold. |
 | `housekeeping` | Nightly deletes of old rows in jobs, logs and audit_logs (HOUSEKEEPING_<TABLE>_DAYS in env, defaults 2, 30 and 90). |
 | `migrate` | A copy of an existing MySQL or MariaDB MISP into the database, before the configure Job runs (docs/migration.md). secret: entries on top of files/secrets-migrate.env for the misp-migrate Secret. volumes and volumeMounts: the source's attachments directory. |
 <!-- end generated -->
@@ -121,7 +121,7 @@ workload gets a whole Secret, or only the keys the table names:
 |---|---|---|---|
 | `misp-db` | `deploy/chart/files/secrets-db.env` | `DB_USER`, `DB_PASSWORD` | configure, cronjobs, housekeeping, metrics (`DB_PASSWORD`, `DB_USER`), migrate, org-sync, postgres (`DB_PASSWORD`, `DB_USER`), web, worker |
 | `misp-app` | `deploy/chart/files/secrets-app.env` | `MISP_REDIS_PASSWORD`, `GNUPG_PASSWORD`, `SECURITY_ENCRYPTION_KEY`, `SECURITY_SALT` | configure, cronjobs, metrics (`MISP_REDIS_PASSWORD`), migrate, redis (`MISP_REDIS_PASSWORD`), web, worker |
-| `misp-admin` | `deploy/chart/files/secrets-admin.env` | `ADMIN_PASSWORD`, `ADMIN_KEY` | configure, cronjobs (`ADMIN_KEY`), misp-test (`ADMIN_KEY`), org-sync |
+| `misp-admin` | `deploy/chart/files/secrets-admin.env` | `ADMIN_PASSWORD`, `ADMIN_KEY` | configure, misp-test (`ADMIN_KEY`), org-sync |
 | `misp-migrate` | `deploy/chart/files/secrets-migrate.env` | `MIGRATE_SOURCE_HOST`, `MIGRATE_SOURCE_USER`, `MIGRATE_SOURCE_PASSWORD`, `MIGRATE_FORCE`, `MIGRATE_REPLACE_COPY`, `MIGRATE_SOURCE_FILES`, `MIGRATE_SOURCE_S3_BUCKET`, `MIGRATE_SOURCE_S3_ENDPOINT`, `MIGRATE_SOURCE_S3_REGION`, `MIGRATE_SOURCE_S3_ACCESS_KEY`, `MIGRATE_SOURCE_S3_SECRET_KEY` | migrate |
 <!-- end generated -->
 
@@ -180,9 +180,9 @@ on one replica only; use the `misp-certs` Secret.
 
 The `networkPolicy` component allows only the paths in the diagram in
 [architecture.md](architecture.md) plus DNS, HTTPS to the outside for web, worker, modules,
-metrics and the console tasks, SMTP (ports 25, 465 and 587, in or outside the cluster)
-for web, worker and the console tasks, and LDAP (ports 389 and 636, in or outside the
-cluster) for web and the console tasks. A mail relay or an LDAP server on another port
+metrics and the task CronJobs, SMTP (ports 25, 465 and 587, in or outside the cluster)
+for web, worker and the task CronJobs, and LDAP (ports 389 and 636, in or outside the
+cluster) for web and the task CronJobs. A mail relay or an LDAP server on another port
 needs a change to the template. `networkPolicy.ingressNamespace` (default `haproxy-controller`) and
 `networkPolicy.monitoringNamespace` (default `monitoring`) name the namespaces of the
 ingress and of Prometheus. The header of `deploy/chart/templates/networkpolicy.yaml`
@@ -200,7 +200,8 @@ usual load, and the ceiling decides what happens under an unusual one.
 |-----|---------------|---------------------|-------------------------|
 | web | `PHP_FCGI_CHILDREN` php-fpm children | `PHP_MEMORY_LIMIT` | the children at their usual size, plus each heavy request at the ceiling. The default limit holds two heavy requests at once; for more, raise `web.resources.phpFpm.limits.memory` or lower the ceiling |
 | worker | the sum of `NUM_WORKERS_*` workers | `WORKER_MEMORY_LIMIT`, or `PHP_MEMORY_LIMIT` when unset | the idle workers (see [architecture.md](architecture.md#startup-and-footprint)) plus each heavy job at the ceiling. A job past the ceiling fails alone; without one (Debian's CLI default) it would grow until the kubelet killed the pod with every worker in it |
-| configure, console tasks | one `cake` process | none | `configure.resources` and `cronjobs.resources.console` bound a schema update or a summary run |
+| configure | one `cake` process | none | `configure.resources` bounds a schema update |
+| task CronJobs | one `cake` process | `WORKER_MEMORY_LIMIT`, or `PHP_MEMORY_LIMIT` when unset | `cronjobs.resources`: a pull, a feed fetch or a summary at the ceiling |
 
 ## Periodic tasks
 
@@ -211,42 +212,38 @@ Manual actions in the UI and the API, such as a pull, a push or fetching one eve
 remote server, do not use a scheduler: the workers run them.
 
 <!-- generated: periodic-tasks -->
-| Task | Does | Kind | CronJob schedule (component) |
+| Task | Does | Runs | CronJob schedule (component) |
 |---|---|---|---|
-| `cache-feeds` | Cache every feed | API | `20 2 * * *` (`cronjobs`) |
-| `fetch-feeds` | Fetch every enabled feed | API | `30 2 * * *` (`cronjobs`) |
-| `cache-servers` | Cache the events of every server | API | `40 2 * * *` (`cronjobs`) |
-| `update-galaxies` | Update MISP's bundled galaxies | API | `0 3 * * *` (`cronjobs`) |
-| `update-taxonomies` | Update MISP's bundled taxonomies | API | `10 3 * * *` (`cronjobs`) |
-| `update-warninglists` | Update MISP's bundled warninglists | API | `20 3 * * *` (`cronjobs`) |
-| `update-noticelists` | Update MISP's bundled noticelists | API | `30 3 * * *` (`cronjobs`) |
-| `update-object-templates` | Update MISP's bundled object templates | API | `40 3 * * *` (`cronjobs`) |
-| `pull-servers` | Pull from every server with pull enabled | API | `*/5 * * * *` (`cronjobs`) |
-| `push-servers` | Push to every server with push enabled | API | `*/15 * * * *` (`cronjobs`) |
-| `push-taxii` | Push to every enabled TAXII server | API | `7 * * * *` (`cronjobs`) |
-| `sharing-group-blueprints` | Apply the sharing group blueprints | API | `37 * * * *` (`cronjobs`) |
-| `workflow` | Run one ad-hoc workflow, by its ID | API | none |
-| `periodic-summary` | Send the daily, weekly (Mondays) and monthly (the first) summaries users subscribed to | console | `0 6 * * *` (`cronjobs`) |
-| `check-user-validity` | Report every account as valid or invalid at the OIDC or LDAP provider | console | none |
-| `block-invalid-users` | Disable the accounts the OIDC or LDAP provider no longer backs | console | none |
+| `cache-feeds` | Cache every feed | `cake Server cacheFeed 1 all` | `20 2 * * *` (`cronjobs`) |
+| `fetch-feeds` | Fetch every enabled feed | `cake Server fetchFeed 1 all` | `30 2 * * *` (`cronjobs`) |
+| `cache-servers` | Cache the events of every server | `cake Server cacheServerAll 1` | `40 2 * * *` (`cronjobs`) |
+| `update-galaxies` | Update MISP's bundled galaxies | `cake Admin updateGalaxies false` | `0 3 * * *` (`cronjobs`) |
+| `update-taxonomies` | Update MISP's bundled taxonomies | `cake Admin updateTaxonomies` | `10 3 * * *` (`cronjobs`) |
+| `update-warninglists` | Update MISP's bundled warninglists | `cake Admin updateWarningLists` | `20 3 * * *` (`cronjobs`) |
+| `update-noticelists` | Update MISP's bundled noticelists | `cake Admin updateNoticeLists` | `30 3 * * *` (`cronjobs`) |
+| `update-object-templates` | Update MISP's bundled object templates | `cake Admin updateObjectTemplates 1` | `40 3 * * *` (`cronjobs`) |
+| `pull-servers` | Pull from every server with pull enabled | `cake Server pullAll 1 full` | `*/5 * * * *` (`cronjobs`) |
+| `push-servers` | Push to every server with push enabled | `cake Server pushAll 1 full` | `*/15 * * * *` (`cronjobs`) |
+| `push-taxii` | Push to every enabled TAXII server | `cake Server push_taxii 1 all` | `7 * * * *` (`cronjobs`) |
+| `sharing-group-blueprints` | Apply the sharing group blueprints | `cake Admin executeSGBlueprint all` | `37 * * * *` (`cronjobs`) |
+| `workflow` | Run one ad-hoc workflow, by its ID | `cake Workflow executeAdHocWorkflow <id>` | none |
+| `periodic-summary` | Send the daily, weekly (Mondays) and monthly (the first) summaries users subscribed to | `cake Server sendPeriodicSummaryToUsers` | `0 6 * * *` (`cronjobs`) |
+| `check-user-validity` | Report every account as valid or invalid at the OIDC or LDAP provider | `cake Admin checkUserValidity` | none |
+| `block-invalid-users` | Disable the accounts the OIDC or LDAP provider no longer backs | `cake Admin blockInvalidUsers` | none |
 <!-- end generated -->
 
-API tasks call the MISP API with `ADMIN_KEY`, which must be set. Before dispatching, a run
-reads the queue depth (`misp_jobs_queued`, which the metrics exporter reads from MISP's job
-queues in Redis) and dispatches nothing while `TASK_MAX_QUEUED` jobs (default 200) or more
-are waiting or running, so a slow worker pool does not pile up work. `cronjobs.maxQueued` sets
-it. An unreachable exporter or Redis does not block dispatch. A partner that refuses a pull or
-push is logged and shows in the metrics; a run exits 1 only when no call succeeded.
-
-Console tasks have no API. The pod renders `app/Config` and runs MISP's console, with the
-configure Job's volumes and the `misp-db` and `misp-app` Secrets. The periodic summary
-needs a mail relay (`SMTP_FQDN`, `SMTP_PORT`).
+Each task runs in its CronJob's pod: the pod renders `app/Config` and runs the console
+command that MISP's own scheduler would hand a worker, as user 1, with the `misp-db` and
+`misp-app` Secrets and the attachments claim. So periodic work never waits in the workers'
+queues, and the workers run only what users start. A run's exit code is the console's, and its
+log is the Job's. The PHP process has the workers' memory ceiling (`WORKER_MEMORY_LIMIT`, else
+`PHP_MEMORY_LIMIT`), which `cronjobs.resources` must hold. The periodic summary needs a mail
+relay (`SMTP_FQDN`, `SMTP_PORT`).
 
 `cronjobs.tasks` maps each task to its schedule: change a schedule, or set it to `null` to
 drop the CronJob. `cronjobs.workflows` maps a workflow ID to a schedule, one CronJob
 `workflow-<id>` each. Every task CronJob pod carries `app.kubernetes.io/component:
-misp-task` (API) or `misp-console-task` (console); the network policies select on that
-label. `check-user-validity` and `block-invalid-users` have no schedule, because MISP runs them
+misp-task`; the network policies select on that label. `check-user-validity` and `block-invalid-users` have no schedule, because MISP runs them
 only with the oidc or ldap group: give `check-user-validity` one to report the accounts the
 provider no longer backs, or `block-invalid-users` to disable them.
 
@@ -254,6 +251,5 @@ On demand:
 
 ```bash
 kubectl -n misp create job --from=cronjob/pull-servers pull-now
-podman compose run --rm --no-deps sync python3 -m misp_container.task pull-servers   # Compose, API task
-podman compose exec worker python3 -m misp_container.task periodic-summary          # Compose, console task
+podman compose exec worker python3 -m misp_container.task pull-servers   # Compose
 ```

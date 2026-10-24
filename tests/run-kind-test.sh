@@ -3,8 +3,8 @@ set -euo pipefail
 
 #
 # Installs the Helm chart on a kind cluster (values tests/kind/values.yaml), runs
-# the smoke test (tests/e2e/test_smoke.py) and the chart's helm test, and runs an
-# API task, a console task and a housekeeping task from their CronJobs. Then it
+# the smoke test (tests/e2e/test_smoke.py) and the chart's helm test, and runs two
+# tasks and a housekeeping run from their CronJobs. Then it
 # upgrades the release with a changed value and rolls it back: each runs the
 # configure Job of its revision and rolls the pods, and the smoke test runs after
 # each.
@@ -159,7 +159,7 @@ if ! helm test misp --namespace "$NAMESPACE" --logs --timeout 5m; then
 fi
 
 section "Periodic tasks"
-# One of each kind, started from its CronJob: an API task, a console task, housekeeping
+# Started from their CronJobs: two tasks through MISP's console, and housekeeping
 for cronjob in update-noticelists periodic-summary housekeeping-jobs; do
     kc create job --from="cronjob/$cronjob" "$cronjob-kind"
     wait_for_job "$cronjob-kind" 300

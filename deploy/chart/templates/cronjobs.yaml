@@ -1,9 +1,8 @@
 # The cronjobs component: the periodic tasks, run by the task runner in the main
 # image (python3 -m misp_container.task <task>), one CronJob per entry of
-# cronjobs.tasks and one per workflow ID in cronjobs.workflows. API tasks need
-# ADMIN_KEY in misp-admin; the runner exits 1 with a clear message when it is
-# empty. A run dispatches nothing while the queue holds cronjobs.maxQueued jobs
-# or more (read from the metrics exporter).
+# cronjobs.tasks with a schedule and one per workflow ID in cronjobs.workflows.
+# Each runs MISP's console in its pod, so the periodic work never waits in the
+# workers' queues.
 {{- if .Values.cronjobs.enabled }}
 {{- range $task, $schedule := .Values.cronjobs.tasks }}
 {{- if $schedule }}

@@ -63,7 +63,7 @@ imagePullPolicy: {{ .Values.image.pullPolicy }}
 
 {{/*
 The mounts of a pod that renders app/Config and runs MISP: configure, web,
-worker and the console tasks. Each pod renders its own app/Config.
+worker and the task CronJobs. Each pod renders its own app/Config.
 */}}
 {{- define "misp.appVolumeMounts" -}}
 - name: files-scripts-tmp
@@ -235,31 +235,17 @@ skipped, as a dict. Takes (list root path).
 {{- end }}
 
 {{/*
-The console tasks: they run MISP's console in the pod instead of calling the
-API. tests/test_chart.py checks this list against misp_container.task.CAKE_TASKS.
-*/}}
-{{- define "misp.consoleTasks" -}}
-{{- list "periodic-summary" "check-user-validity" "block-invalid-users" | toJson }}
-{{- end }}
-
-{{/*
 A CronJob of periodic work. Takes (dict root name task args schedule), and
-module "housekeeping" for a housekeeping run. Three shapes, each with its
-app.kubernetes.io/component label, which the network policies select on:
-API tasks (misp-task) call the API with ADMIN_KEY; console tasks
-(misp-console-task) render app/Config and run MISP's console; housekeeping
-(misp-housekeeping) deletes old rows straight in the database.
+module "housekeeping" for a housekeeping run. A task (app.kubernetes.io/component:
+misp-task) renders app/Config and runs MISP's console in the pod; housekeeping
+(misp-housekeeping) deletes old rows straight in the database. The network
+policies select on that label.
 */}}
 {{- define "misp.taskCronJob" -}}
 {{- $root := .root }}
 {{- $module := default "task" .module }}
-{{- $shape := "api" }}
-{{- if eq $module "housekeeping" }}
-{{- $shape = "housekeeping" }}
-{{- else if has .task (include "misp.consoleTasks" $root | fromJsonArray) }}
-{{- $shape = "console" }}
-{{- end }}
-{{- $component := get (dict "api" "misp-task" "console" "misp-console-task" "housekeeping" "misp-housekeeping") $shape }}
+{{- $task := eq $module "task" }}
+{{- $component := ternary "misp-task" "misp-housekeeping" $task }}
 apiVersion: batch/v1
 kind: CronJob
 metadata:
@@ -275,52 +261,35 @@ spec:
   jobTemplate:
     spec:
       backoffLimit: {{ ternary 0 2 (eq .task "periodic-summary") }}
-      activeDeadlineSeconds: {{ ternary 1200 3600 (eq $shape "api") }}
+      activeDeadlineSeconds: 3600
       template:
         metadata:
           labels:
             app.kubernetes.io/name: {{ .name }}
             app.kubernetes.io/component: {{ $component }}
         spec:
-          restartPolicy: {{ ternary "Never" "OnFailure" (eq $shape "console") }}
+          restartPolicy: {{ ternary "Never" "OnFailure" $task }}
           {{- include "misp.podSecurityContext" $root | nindent 10 }}
           {{- include "misp.podScheduling" $root | nindent 10 }}
           containers:
             - name: {{ $module }}
               {{- include "misp.image" $root | nindent 14 }}
               args: ["python3", "-m", "misp_container.{{ $module }}", {{ .task | quote }}{{ range .args }}, {{ . | quote }}{{ end }}]
-              {{- if eq $shape "console" }}
+              {{- if $task }}
               {{- include "misp.appEnv" (list $root "misp-db" "misp-app") | nindent 14 }}
               volumeMounts:
                 {{- include "misp.appVolumeMounts" $root | nindent 16 }}
+                - name: attachments
+                  mountPath: /var/www/MISP/app/attachments
               resources:
-                {{- toYaml $root.Values.cronjobs.resources.console | nindent 16 }}
-              {{- else if eq $shape "housekeeping" }}
+                {{- toYaml $root.Values.cronjobs.resources | nindent 16 }}
+              {{- else }}
               {{- include "misp.appEnv" (list $root "misp-db") | nindent 14 }}
               resources:
                 {{- toYaml $root.Values.housekeeping.resources | nindent 16 }}
-              {{- else }}
-              env:
-                # No misp-env for an API task: only what the runner reads, plus the
-                # log format and time zone every other pod takes from it
-                {{- include "misp.logEnv" $root | nindent 16 }}
-                - name: SYNC_BASE_URL
-                  value: http://web:8080
-                - name: TASK_METRICS_URL
-                  value: http://metrics:9191/metrics
-                - name: TASK_MAX_QUEUED
-                  value: {{ $root.Values.cronjobs.maxQueued | quote }}
-                - name: ADMIN_KEY
-                  valueFrom:
-                    secretKeyRef:
-                      name: misp-admin
-                      key: ADMIN_KEY
-                      optional: true
-              resources:
-                {{- toYaml $root.Values.cronjobs.resources.api | nindent 16 }}
               {{- end }}
               {{- include "misp.containerSecurityContext" $root | nindent 14 }}
-          {{- if eq $shape "console" }}
+          {{- if $task }}
           volumes:
             {{- include "misp.appVolumes" $root | nindent 12 }}
             {{- include "misp.attachmentsVolume" $root | nindent 12 }}

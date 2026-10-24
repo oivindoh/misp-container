@@ -54,6 +54,7 @@ revisit.
 | `worker-queues` | app/Lib/Tools/BackgroundJobsTool.php | files/misp_container/__init__.py WORKER_QUEUES | adds or drops a job queue |
 | `job-keys` | app/Lib/Tools/BackgroundJobsTool.php | files/misp_container/metrics.py _collect_queue_metrics() | keeps waiting or running jobs under other Redis keys |
 | `scheduler-tasks` | app/Console/Command/SchedulerWorkerShell.php | files/misp_container/task.py SCHEDULER_COVERAGE | offers periodic work that no task covers |
+| `console-commands` | app/Console/Command | files/misp_container/task.py TASKS | renames or drops a console command a task runs |
 | `api-routes` | app/Controller | the file and line named in each problem | drops a controller or an action the image calls |
 | `attachment-keys` | app/Lib/Tools/AttachmentTool.php, app/Lib/Tools/AWSS3Client.php | files/misp_container/migrate.py attachment_key(), files/misp_container/s3.py | keys attachments another way, or stops sending path-style S3 requests |
 | `cakeresque` | app/Config/bootstrap.default.php | Dockerfile stage composer-prep | loads CakeResque while SimpleBackgroundJobs is on |
