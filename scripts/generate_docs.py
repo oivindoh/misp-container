@@ -45,11 +45,10 @@ def periodic_tasks() -> str:
     from misp_container import task
     cronjobs = task_cronjobs()
     rows = []
-    for name in task.TASKS:
-        kind = "console" if name in task.CAKE_TASKS else "API"
+    for name, line in task.TASKS.items():
         runs = ", ".join(f"`{schedule}` (`{component}`)" for schedule, component in cronjobs.get(name, [])) or "none"
-        rows.append((f"`{name}`", task.DESCRIPTIONS[name], kind, runs))
-    return table(("Task", "Does", "Kind", "CronJob schedule (component)"), rows)
+        rows.append((f"`{name}`", task.DESCRIPTIONS[name], f"`cake {' '.join(line)}`", runs))
+    return table(("Task", "Does", "Runs", "CronJob schedule (component)"), rows)
 
 
 def secret_users() -> dict[str, dict[str, set[str]]]:

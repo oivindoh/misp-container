@@ -1,14 +1,14 @@
 # helm test: checks a release from inside the cluster. It loads the login page
 # through the web Service and, with ADMIN_KEY in misp-admin, calls the API as
-# the admin and reads MISP.live. The pod carries the API task label, so the
-# networkPolicy component lets it reach web.
+# the admin and reads MISP.live. The networkPolicy component lets a pod with
+# its component label, misp-test, reach web.
 apiVersion: v1
 kind: Pod
 metadata:
   name: misp-test
   labels:
     {{- include "misp.labels" (dict "root" . "name" "misp-test") | nindent 4 }}
-    app.kubernetes.io/component: misp-task
+    app.kubernetes.io/component: misp-test
   annotations:
     helm.sh/hook: test
     helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded

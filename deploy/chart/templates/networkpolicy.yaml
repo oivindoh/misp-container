@@ -4,8 +4,9 @@
 #
 # Traffic flow:
 #   ingress or Gateway ns --> caddy :8080
-#   task cronjobs         --> caddy :8080, metrics :9191
-#   console task cronjobs --> postgres :5432, redis :6379, SMTP out, HTTPS out (IdP), LDAP out
+#   task cronjobs         --> postgres :5432, redis :6379, HTTPS out (partners, feeds, TAXII, IdP),
+#                             SMTP out, LDAP out
+#   helm test             --> caddy :8080
 #   caddy                 --> php-fpm :9002  (localhost in same pod)
 #   php-fpm               --> postgres :5432, redis :6379, modules :6666,
 #                             HTTPS out (IdP, partners), SMTP out, LDAP out
@@ -16,9 +17,9 @@
 #   metrics               --> postgres :5432, redis :6379, HTTPS out (partner probes)
 #   all pods              --> kube-dns :53
 #
-# Task CronJob pods carry app.kubernetes.io/component: misp-task (API tasks),
-# misp-console-task (tasks that run MISP's console) or misp-housekeeping; the
-# rules select on that label.
+# Task CronJob pods carry app.kubernetes.io/component: misp-task or
+# misp-housekeeping, and the helm test pod misp-test; the rules select on that
+# label.
 #
 # Everything else is denied by default.
 
@@ -124,7 +125,7 @@ spec:
       app.kubernetes.io/name: web
   policyTypes: [Ingress, Egress]
   ingress:
-    # The ingress or Gateway proxies, org-sync and the API task CronJobs
+    # The ingress or Gateway proxies, org-sync and the helm test
     - from:
         - namespaceSelector:
             matchLabels:
@@ -134,7 +135,7 @@ spec:
               app.kubernetes.io/name: org-sync
         - podSelector:
             matchLabels:
-              app.kubernetes.io/component: misp-task
+              app.kubernetes.io/component: misp-test
       ports:
         - port: 8080
           protocol: TCP
@@ -219,13 +220,13 @@ spec:
     {{- include "misp.np.httpsOut" $ | nindent 4 }}
     {{- include "misp.np.dns" $ | nindent 4 }}
 ---
-# -- MISP API task cronjobs (feeds, sync, updates) --
+# -- Task cronjobs: MISP's console runs the periodic work in the pod --
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: cronjob
+  name: task
   labels:
-    {{- include "misp.labels" (dict "root" $ "name" "cronjob") | nindent 4 }}
+    {{- include "misp.labels" (dict "root" $ "name" "task") | nindent 4 }}
 spec:
   podSelector:
     matchLabels:
@@ -233,29 +234,10 @@ spec:
   policyTypes: [Ingress, Egress]
   ingress: []
   egress:
-    {{- include "misp.np.toPod" (dict "name" "web" "port" 8080) | nindent 4 }}
-    # Backlog check before dispatching (misp_jobs_queued)
-    {{- include "misp.np.toPod" (dict "name" "metrics" "port" 9191) | nindent 4 }}
-    {{- include "misp.np.dns" $ | nindent 4 }}
----
-# -- Console task cronjobs (periodic summary, user validity) --
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: console-task
-  labels:
-    {{- include "misp.labels" (dict "root" $ "name" "console-task") | nindent 4 }}
-spec:
-  podSelector:
-    matchLabels:
-      app.kubernetes.io/component: misp-console-task
-  policyTypes: [Ingress, Egress]
-  ingress: []
-  egress:
     {{- include "misp.np.db" $ | nindent 4 }}
     {{- include "misp.np.redis" $ | nindent 4 }}
     {{- include "misp.np.smtp" $ | nindent 4 }}
-    # Outbound HTTPS: the OIDC provider
+    # Outbound HTTPS: sync partners, feeds, TAXII servers, the OIDC provider
     {{- include "misp.np.httpsOut" $ | nindent 4 }}
     {{- include "misp.np.ldap" $ | nindent 4 }}
     {{- include "misp.np.dns" $ | nindent 4 }}
@@ -310,14 +292,11 @@ spec:
       app.kubernetes.io/name: metrics
   policyTypes: [Ingress, Egress]
   ingress:
-    # Prometheus, and the task runner's backlog check
+    # Prometheus
     - from:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: {{ $.Values.networkPolicy.monitoringNamespace }}
-        - podSelector:
-            matchLabels:
-              app.kubernetes.io/component: misp-task
       ports:
         - port: 9191
           protocol: TCP
@@ -343,7 +322,7 @@ spec:
   ingress:
     {{- include "misp.np.fromPods" (dict "port" 5432 "selectors" (list
           (dict "app.kubernetes.io/name" "web") (dict "app.kubernetes.io/name" "worker")
-          (dict "app.kubernetes.io/component" "misp-console-task") (dict "app.kubernetes.io/name" "configure")
+          (dict "app.kubernetes.io/component" "misp-task") (dict "app.kubernetes.io/name" "configure")
           (dict "app.kubernetes.io/name" "org-sync") (dict "app.kubernetes.io/component" "misp-housekeeping")
           (dict "app.kubernetes.io/name" "metrics"))) | nindent 4 }}
   egress:
@@ -364,7 +343,7 @@ spec:
   ingress:
     {{- include "misp.np.fromPods" (dict "port" 6379 "selectors" (list
           (dict "app.kubernetes.io/name" "web") (dict "app.kubernetes.io/name" "worker")
-          (dict "app.kubernetes.io/component" "misp-console-task") (dict "app.kubernetes.io/name" "configure")
+          (dict "app.kubernetes.io/component" "misp-task") (dict "app.kubernetes.io/name" "configure")
           (dict "app.kubernetes.io/name" "metrics"))) | nindent 4 }}
   egress:
     {{- include "misp.np.dns" $ | nindent 4 }}

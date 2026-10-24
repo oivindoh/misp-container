@@ -32,10 +32,11 @@ from misp_container import CONFIG_DEFAULTS, WORKER_QUEUES  # noqa: E402
 from misp_container.init import LOG_BLOCK, render_log_block  # noqa: E402
 from misp_container.logrelay import FILES as RELAYED  # noqa: E402
 from misp_container.metrics import RUNNING_PREFIX  # noqa: E402
-from misp_container.task import SCHEDULER_COVERAGE  # noqa: E402
+from misp_container.task import SCHEDULER_COVERAGE, TASKS  # noqa: E402
 
 BACKGROUND_JOBS = "app/Lib/Tools/BackgroundJobsTool.php"
 SCHEDULER_SHELL = "app/Console/Command/SchedulerWorkerShell.php"
+CONSOLE_COMMANDS = "app/Console/Command"
 CONSOLE_SHELL = "app/Lib/cakephp/lib/Cake/Console/Shell.php"
 CONTROLLERS = "app/Controller"
 ATTACHMENT_TOOL = "app/Lib/Tools/AttachmentTool.php"
@@ -56,7 +57,7 @@ MISP_PHP = ("app/Model", "app/Lib", "app/Controller", "app/Console", "app/Plugin
 NOT_MISP_PARTS = {"cakephp", "Vendor"}
 
 # The modules that call MISP's HTTP API; every route-like string in them is a MISP route
-API_CALLERS = ("misp_container/api.py", "misp_container/sync.py", "misp_container/task.py",
+API_CALLERS = ("misp_container/api.py", "misp_container/sync.py",
                "misp_container/metrics.py")
 ROUTE = re.compile(r"^/([a-z][A-Za-z_]*(?:/[a-z][A-Za-z_]*){0,2})(?:[/?.{]|$)")
 
@@ -170,6 +171,18 @@ def uncovered(source: str, coverage: dict = SCHEDULER_COVERAGE) -> list[str]:
 
 def scheduler_tasks(root: Path) -> list[str]:
     return [f"not covered by the task runner: {item}" for item in uncovered(read(root, SCHEDULER_SHELL))]
+
+
+def console_commands(root: Path) -> list[str]:
+    """Every task's console command, as a public method of its MISP shell."""
+    problems = []
+    for name, (shell, command, *_) in TASKS.items():
+        path = f"{CONSOLE_COMMANDS}/{shell}Shell.php"
+        if not (root / path).is_file():
+            problems.append(f"{name}: MISP has no {path}")
+        elif not re.search(rf"public\s+function\s+{re.escape(command)}\s*\(", read(root, path)):
+            problems.append(f"{name}: {path} has no {command}(), so the task's CronJob fails every run")
+    return problems
 
 
 # -- attachment keys -----------------------------------------------------------------
@@ -444,6 +457,8 @@ CHECKS = [
           fails_when="keeps waiting or running jobs under other Redis keys"),
     Check("scheduler-tasks", SCHEDULER_SHELL, "files/misp_container/task.py SCHEDULER_COVERAGE", scheduler_tasks,
           fails_when="offers periodic work that no task covers"),
+    Check("console-commands", CONSOLE_COMMANDS, "files/misp_container/task.py TASKS", console_commands,
+          fails_when="renames or drops a console command a task runs"),
     Check("api-routes", CONTROLLERS, "the file and line named in each problem", api_routes,
           fails_when="drops a controller or an action the image calls"),
     Check("attachment-keys", f"{ATTACHMENT_TOOL}, {AWS_S3_CLIENT}",

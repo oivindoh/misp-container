@@ -150,12 +150,11 @@ networkPolicy:
   ingressNamespace: haproxy-controller
   monitoringNamespace: monitoring
 
-# The periodic tasks as CronJobs: tasks maps a task to its schedule, workflows a workflow ID to
-# its schedule. API tasks need ADMIN_KEY in secrets.admin and dispatch nothing while maxQueued
-# jobs or more wait.
+# The periodic tasks as CronJobs, each running MISP's console in its pod: tasks maps a task to
+# its schedule, workflows a workflow ID to its schedule. The pod's PHP process has the workers'
+# memory ceiling (WORKER_MEMORY_LIMIT, else PHP_MEMORY_LIMIT), which resources must hold.
 cronjobs:
   enabled: false
-  maxQueued: 200
   tasks:
     cache-feeds: "20 2 * * *"
     fetch-feeds: "30 2 * * *"
@@ -176,12 +175,8 @@ cronjobs:
     block-invalid-users: ""
   workflows: {}
   resources:
-    api:
-      requests: {cpu: 5m, memory: 32Mi}
-      limits: {cpu: 200m, memory: 128Mi}
-    console:
-      requests: {cpu: 50m, memory: 256Mi}
-      limits: {cpu: 1000m, memory: 1Gi}
+    requests: {cpu: 50m, memory: 256Mi}
+    limits: {cpu: 1000m, memory: 2560Mi}
 
 # Nightly deletes of old rows in jobs, logs and audit_logs (HOUSEKEEPING_<TABLE>_DAYS in env,
 # defaults 2, 30 and 90).

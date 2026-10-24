@@ -61,12 +61,6 @@ def me(stack, key=None):
     return stack.api("GET", "/users/view/me", key or stack.key) or {}
 
 
-def task(stack, *args, key=None):
-    """The task runner in the sync service: its exit code and output."""
-    return stack.run("sync", "python3", "-m", "misp_container.task", *args,
-                     env={"ADMIN_KEY": stack.key if key is None else key, "SYNC_BASE_URL": "http://caddy:8080"})
-
-
 # -- non-root operation --------------------------------------------------------------
 
 @pytest.mark.parametrize("service", ["web", "worker"])
@@ -492,6 +486,12 @@ def test_oidc_mixed_auth_keeps_the_password_form(stack, oidc):
 
 # -- task runner ---------------------------------------------------------------------
 
+def task(stack, *args):
+    """A task through MISP's console, as its CronJob runs it; in Compose the worker has the volumes."""
+    return stack.exec_rc("worker", "python3 -m misp_container.task " + " ".join(args), env={"ADMIN_KEY": ""},
+                         timeout=900)
+
+
 @pytest.fixture(scope="module")
 def update_taxonomies(stack):
     return task(stack, "update-taxonomies")
@@ -501,33 +501,26 @@ def test_task_update_taxonomies_exits_0(update_taxonomies):
     assert update_taxonomies[0] == 0, update_taxonomies[1][-2000:]
 
 
-def test_task_update_taxonomies_calls_the_api(update_taxonomies):
-    assert "POST /taxonomies/update" in update_taxonomies[1]
+def test_task_update_taxonomies_ran_the_console(update_taxonomies):
+    assert "cake Admin updateTaxonomies" in update_taxonomies[1]
 
 
-def test_task_pull_servers_without_servers(stack):
-    assert task(stack, "pull-servers")[0] == 0
-
-
-def test_task_without_admin_key_exits_1(stack):
-    assert task(stack, "pull-servers", key="")[0] == 1
-
-
-@pytest.mark.parametrize("name", ["cache-servers", "update-object-templates", "push-taxii", "sharing-group-blueprints"])
+@pytest.mark.parametrize("name", ["pull-servers", "push-servers", "cache-servers", "cache-feeds", "fetch-feeds",
+                                  "update-object-templates", "push-taxii"])
 def test_task_replacing_the_scheduler(stack, name):
-    # With no TAXII servers and no blueprints the index tasks make no call and exit 0
+    # No server, feed or TAXII server is set up: each console command has nothing to do
     rc, out = task(stack, name)
     assert rc == 0, out[-2000:]
 
 
-def test_task_push_taxii_lists_the_servers(stack):
-    assert "push-taxii: 0 TAXII server(s)" in task(stack, "push-taxii")[1]
+def test_task_without_blueprints_runs_nothing(stack):
+    rc, out = task(stack, "sharing-group-blueprints")
+    assert rc == 0 and "no sharing group blueprint exists" in out, out[-2000:]
 
 
 @pytest.fixture(scope="module")
 def periodic_summary(stack):
-    # Console tasks render app/Config and run MISP's console; in Compose the worker has the volumes
-    return stack.exec_rc("worker", "python3 -m misp_container.task periodic-summary")
+    return task(stack, "periodic-summary")
 
 
 def test_task_periodic_summary_exits_0(periodic_summary):
@@ -540,7 +533,7 @@ def test_task_periodic_summary_ran_the_console(periodic_summary):
 
 @pytest.fixture(scope="module")
 def user_validity(stack):
-    return stack.exec_rc("worker", "python3 -m misp_container.task check-user-validity")
+    return task(stack, "check-user-validity")
 
 
 def test_task_check_user_validity_exits_0_with_oidc(user_validity):

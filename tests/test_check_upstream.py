@@ -121,6 +121,11 @@ class BackgroundJobsTool
 }
 """
 
+# The console shells, with every command the tasks run
+SHELLS = {}
+for _shell, _command, *_ in cu.TASKS.values():
+    SHELLS.setdefault(_shell, []).append(f"    public function {_command}()\n    {{\n    }}\n")
+
 CONSOLE_SHELL = """<?php
 class Shell extends CakeObject {
 	protected function _useLogger($enable = true) {
@@ -282,6 +287,8 @@ def misp(tmp_path, monkeypatch):
     write(root, cu.MISP_REQUIREMENTS, REQUIREMENTS)
     write(root, cu.BACKGROUND_JOBS, BACKGROUND_JOBS)
     write(root, cu.SCHEDULER_SHELL, SCHEDULER_SHELL)
+    for shell, methods in SHELLS.items():
+        write(root, f"{cu.CONSOLE_COMMANDS}/{shell}Shell.php", "<?php\nclass X {\n" + "".join(methods) + "}\n")
     write(root, cu.CONSOLE_SHELL, CONSOLE_SHELL)
     write(root, cu.BOOTSTRAP, BOOTSTRAP)
     write(root, cu.ATTACHMENT_TOOL, ATTACHMENT_TOOL)
@@ -323,6 +330,18 @@ class TestShapeOf2547:
         edit(misp, cu.BACKGROUND_JOBS, "self::SCHEDULER_QUEUE,\n", "self::SCHEDULER_QUEUE,\n self::KAFKA_QUEUE,\n")
         [problem] = problems(misp, "worker-queues")
         assert f"upstream: {cu.BACKGROUND_JOBS}" in problem and "ours: files/misp_container/__init__.py" in problem
+
+
+class TestConsoleCommands:
+    def test_a_renamed_command_fails_its_task(self, misp):
+        edit(misp, f"{cu.CONSOLE_COMMANDS}/ServerShell.php", "function pullAll()", "function pullEverything()")
+        [problem] = problems(misp, "console-commands")
+        assert "pull-servers" in problem and "pullAll()" in problem
+
+    def test_a_missing_shell_fails_its_tasks(self, misp):
+        (misp / cu.CONSOLE_COMMANDS / "WorkflowShell.php").unlink()
+        [problem] = problems(misp, "console-commands")
+        assert problem.startswith(f"workflow: MISP has no {cu.CONSOLE_COMMANDS}/WorkflowShell.php")
 
 
 class TestWorkerQueues:
@@ -372,17 +391,18 @@ class TestApiRoutes:
 
     def test_the_callers_name_the_routes(self):
         routes = cu.called_routes()
-        assert {"servers/pull", "admin/users/edit", "users/login", "servers/getVersion", "roles"} <= set(routes)
-        assert "misp_container/task.py" in routes["servers/pull"][0]
+        assert {"servers/add", "admin/users/edit", "users/login", "servers/getVersion", "roles"} <= set(routes)
+        assert "misp_container/sync.py" in routes["servers/add"][0]
 
     def test_a_removed_action(self, misp):
-        edit(misp, f"{cu.CONTROLLERS}/ServersController.php", "public function pull(", "public function pullAll(")
+        edit(misp, f"{cu.CONTROLLERS}/ServersController.php", "public function getVersion(", "public function version(")
         [problem] = problems(misp, "api-routes")
-        assert problem.startswith("/servers/pull (misp_container/task.py:") and "has no action pull" in problem
+        assert problem.startswith("/servers/getVersion (misp_container/metrics.py:") and "has no action getVersion" in problem
 
     def test_a_removed_controller(self, misp):
-        (misp / cu.CONTROLLERS / "TaxiiServersController.php").unlink()
-        assert all("MISP has no TaxiiServersController.php" in p for p in problems(misp, "api-routes"))
+        (misp / cu.CONTROLLERS / "WarninglistsController.php").unlink()
+        found = problems(misp, "api-routes")
+        assert found and all("MISP has no WarninglistsController.php" in p for p in found)
 
 
 class TestAttachmentKeys:

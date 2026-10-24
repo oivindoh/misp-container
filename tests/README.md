@@ -85,7 +85,7 @@ The full MISP stack in Compose, checked feature by feature.
 | S3 attachment storage | Garage S3 bootstrap, upload, download, bucket verification |
 | Custom auth | Header login (200), no-header redirect (302) |
 | OIDC login | Redirect to Keycloak, its login form, the callback, the user's email, the highest client role, the team of the user's Keycloak organisation, mixed auth |
-| Task runner | API tasks, the index tasks without items, the console tasks `periodic-summary` and `check-user-validity`, a missing `ADMIN_KEY` |
+| Task runner | Every scheduled task through MISP's console, without `ADMIN_KEY`; `sharing-group-blueprints` without blueprints; `periodic-summary` and `check-user-validity` |
 | Org sync | Org/user/tag/server creation, server authkey (DB verify), sync user authkey prefix, taxonomy enable, disabled user, an unnamed local user disabled and the OIDC user left enabled, a break-glass password login, custom warninglist create/update, warm run idempotency |
 | Metrics exporter | Endpoints, core metrics, no scrape errors, a waiting job in `misp_jobs_queued` and back to 0, `misp_scheduled_tasks_enabled` |
 | MISP modules | Enrichment through the modules service |
@@ -120,8 +120,8 @@ pass:
 
 1. The configure Job and the Deployments finish; the smoke test (`e2e/test_smoke.py`) passes
    through a port-forward on 38080, and so does the chart's `helm test`.
-2. An API task (`update-noticelists`), a console task (`periodic-summary`) and a housekeeping
-   task (`housekeeping-jobs`), each started from its CronJob, succeed.
+2. Two tasks (`update-noticelists`, `periodic-summary`) and a housekeeping run
+   (`housekeeping-jobs`), each started from its CronJob, succeed.
 3. An upgrade with a changed value runs `configure-2`, removes `configure-1` and rolls the web
    pods; the smoke test passes.
 4. `helm rollback` to revision 1 runs `configure-1` again, removes `configure-2`, restores the
