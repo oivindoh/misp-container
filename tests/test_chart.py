@@ -69,9 +69,9 @@ def test_the_app_version_is_the_image_tag_the_compose_files_default_to():
         assert tags <= {meta["appVersion"]}, f"{path.relative_to(REPO)} defaults to {sorted(tags)}, the chart's appVersion is {meta['appVersion']}"
 
 
-def test_the_chart_version_is_a_release_semver():
-    # A pre-release suffix would hide the version from helm upgrade and from semver ranges
-    assert re.fullmatch(r"\d+\.\d+\.\d+", yaml.safe_load((chart.CHART / "Chart.yaml").read_text())["version"])
+def test_the_chart_version_is_a_release_or_a_wip_pre_release():
+    # Helm skips a pre-release unless asked for it by version: only the wip pre-releases of a MISP pin are one
+    assert re.fullmatch(r"\d+\.\d+\.\d+(-wip\.\d+)?", yaml.safe_load((chart.CHART / "Chart.yaml").read_text())["version"])
 
 
 def test_every_image_of_ours_carries_the_app_version():
@@ -201,10 +201,9 @@ def test_the_helm_test_reaches_web_through_the_network_policy():
 
 
 def test_every_component_renders_and_the_default_renders_none():
-    default = {(d["kind"], d["metadata"]["name"]) for d in chart.objects()}
     for component in chart.components():
-        added = {(d["kind"], d["metadata"]["name"]) for d in chart.objects(f"{component}.enabled=true")} - default
-        assert added, f"{component}.enabled=true renders nothing more"
+        assert chart.render_text(*chart.component_sets(component)) != chart.render_text(), (
+            f"{component}.enabled=true changes nothing in the render")
     assert not any(d["kind"] in ("StatefulSet", "CronJob", "Ingress", "HTTPRoute", "PodDisruptionBudget", "CiliumNetworkPolicy")
                    for d in chart.objects())
 

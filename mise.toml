@@ -69,5 +69,5 @@ description = "Resolve the Python packages of MISP's own scripts for the current
 run = "python scripts/update_misp_requirements.py"
 
 [tasks.release]
-description = "Prepare a release of one kind (hotfix, normal or breaking): tag, image tags, chart version"
+description = "Prepare a release: the next 3.0.0-wip.N while MISP is a work-in-progress pin, else of one kind (hotfix, normal or breaking)"
 run = "python scripts/release.py ${@}"

@@ -157,6 +157,14 @@ def execute(sql: str, params=None) -> int:
         conn.close()
 
 
+def has_column(table: str, column: str) -> bool:
+    """Whether a table of the database DB_* points at has this column."""
+    rows = dict_query("SELECT 1 AS present FROM information_schema.columns "
+                      "WHERE table_schema = current_schema() AND table_name = %s AND column_name = %s",
+                      (table, column))
+    return bool(rows)
+
+
 def query_ok(sql: str) -> bool:
     """Run a statement, return True if it succeeded."""
     try:

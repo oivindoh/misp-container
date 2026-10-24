@@ -1,7 +1,11 @@
 # MISP Container
 
-A container image for [MISP](https://www.misp-project.org/) 2.5, built for Kubernetes and
-usable with Compose (podman) for development.
+A container image for [MISP](https://www.misp-project.org/) 3.0 on PostgreSQL, built for
+Kubernetes and usable with Compose (podman) for development.
+
+MISP has not released 3.0 yet: the image runs MISP's `3.0_wip` branch, pinned to a commit,
+and its releases are the pre-releases `3.0.0-wip.N`. A MISP 2.x database comes in through the
+migrate Job. See [docs/misp-3.md](docs/misp-3.md).
 
 ## TL;DR
 
@@ -22,14 +26,14 @@ One Dockerfile, three targets:
 
 | Target | Image | On disk | Pull (compressed) | Purpose |
 |--------|-------|---------|-------------------|---------|
-| `final` | `misp-container` | 950 MB | 260 MB | PHP-FPM, workers, configure, org sync, metrics exporter, task runner, migrate, and the Python packages MISP's own scripts import (STIX, TAXII, ZeroMQ, sample extraction); `app/files` (360 MB of lists, galaxies and geolocation data) ships in the image |
-| `caddy` | `misp-container-caddy` | 76 MB | 29 MB | Static files and FastCGI reverse proxy (scratch image) |
+| `final` | `misp-container` | 980 MB | 270 MB | PHP-FPM, workers, configure, org sync, metrics exporter, task runner, migrate, and the Python packages MISP's own scripts import (STIX, TAXII, ZeroMQ, sample extraction); `app/files` (360 MB of lists, galaxies and geolocation data) ships in the image |
+| `caddy` | `misp-container-caddy` | 84 MB | 31 MB | Static files and FastCGI reverse proxy (scratch image) |
 | `modules` | `misp-container-modules` | 360 MB | 98 MB | MISP enrichment, import, export and action modules (distroless) |
 
-Sizes are arm64 builds, `final` of MISP 2.5.50, `caddy` and `modules` of MISP 2.5.47; amd64 is
-within a few percent.
+Sizes are arm64 builds of MISP `3.0_wip` at commit 8888b98; the compressed size is the gzip of
+the image's layers.
 
-Image tags match the MISP version (`2.5.47`, hotfixes `2.5.47-r1`). See
+Image tags are the release versions, `3.0.0-wip.N` while MISP 3.0 is a work in progress. See
 [DEVELOPING.md](DEVELOPING.md) for releases.
 
 ## Quick start
@@ -88,6 +92,7 @@ values and lists the components, Secrets, storage, network policies and periodic
 | [docs/metrics.md](docs/metrics.md) | The Prometheus metrics and example alerts |
 | [docs/migration.md](docs/migration.md) | Copying an existing MISP database and its attachments into a deployment |
 | [docs/operations.md](docs/operations.md) | Backup and restore, keys and secrets, upgrades |
+| [docs/misp-3.md](docs/misp-3.md) | The MISP 3.0 pin, its versions, a 2.x database, and how 3.0 differs from 2.5 |
 | [DEVELOPING.md](DEVELOPING.md) | The settings engine, the tests, new MISP releases, the release process |
 | [tests/README.md](tests/README.md) | The test suites |
 | [AGENTS.md](AGENTS.md) | A map of the tree for agents, generated from the tree (`mise run agents-md`) |

@@ -304,6 +304,8 @@ class TestSchemaGate:
         monkeypatch.setattr(migrate, "prepare_config", lambda: steps.append("app/Config"))
         monkeypatch.setattr(migrate.cake, "run_updates", lambda: steps.append("updates"))
         monkeypatch.setattr(migrate, "write_database_php", lambda fields: steps.append(fields["datasource"]))
+        monkeypatch.setattr(migrate.cake, "set_setting", lambda name, value: steps.append(f"{name}={value}"))
+        monkeypatch.setattr(migrate.cake, "run_checked", lambda *args: steps.append(" ".join(args)))
         monkeypatch.setattr(migrate, "target_tables", lambda c: [])
         monkeypatch.setattr(migrate, "source_tables", lambda c: [])
         monkeypatch.setattr(migrate, "reset_sequences", lambda c, t: None)
@@ -329,15 +331,13 @@ class TestSchemaGate:
         monkeypatch.setattr(migrate, "target_schema_state", lambda c: ("159", set()))
         with patch.dict(os.environ, {"MIGRATE_SOURCE_UPGRADE": "true", "DB_HOST": "postgres"}):
             migrate.migrate_into_postgres(object(), object(), SOURCE)
-        assert steps == ["baseline", "app/Config", "updates", "Database/MysqlObserverExtended", "updates",
-                         "Database/PostgresObserverExtended", "check"]
+        assert steps == ["baseline", "app/Config", "updates", "Database/MysqlObserverExtended", "MISP.osuser=misp",
+                         "Admin runUpgrade", "Database/PostgresObserverExtended", "check"]
 
     def test_a_failed_source_upgrade_still_points_cake_back(self, monkeypatch, steps):
-        def fail():
-            steps.append("updates")
-            if steps.count("updates") == 2:
-                raise RuntimeError("cake Admin runUpdates exited 1")
-        monkeypatch.setattr(migrate.cake, "run_updates", fail)
+        def fail(*args):
+            raise RuntimeError("cake Admin runUpgrade exited 1")
+        monkeypatch.setattr(migrate.cake, "run_checked", fail)
         with patch.dict(os.environ, {"MIGRATE_SOURCE_UPGRADE": "true"}), pytest.raises(RuntimeError):
             migrate.migrate_into_postgres(object(), object(), SOURCE)
         assert steps[-1] == "Database/PostgresObserverExtended"

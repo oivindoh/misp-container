@@ -1,8 +1,6 @@
 # Tests, scans and releases the images and the Helm chart: unit tests, the chart
 # renders, the stack suites in Compose, the chart on kind and Trivy; on a tag,
 # pushes the images and the chart and creates the release (tests/README.md, CI).
-# On the misp-3.0 branch, pushes the MISP 3.0 Early Access images instead. The
-# file is the same on master and misp-3.0: the gate decides what a run does.
 name: CI
 
 on:
@@ -11,10 +9,10 @@ on:
     # Tag pushes: test + scan + release.
     # A release pushes master and its tag together, which starts two runs of one
     # commit: the gate stops the master run, and the tag run tests and releases.
-    branches: [master, misp-3.0]
+    branches: [master]
     tags: ["v*"]
   pull_request:
-    branches: [master, misp-3.0]
+    branches: [master]
     # A draft runs the unit tests only; marking it ready for review runs the rest
     types: [opened, synchronize, reopened, ready_for_review]
 
@@ -37,11 +35,10 @@ jobs:
   #   runs go ahead.
   # - A draft pull request runs the unit tests only, and ci-ok fails, so it
   #   cannot merge before a run of the pull request marked ready passed.
-  # - A push to misp-3.0 that merges a pull request skips the unit tests and the
+  # - A push to master that merges a pull request skips the unit tests and the
   #   stack suites: the ruleset requires them on the pull request and requires it
   #   to be up to date, so the merge commit has the tree they tested. When the
   #   lookup fails, they run.
-  # - The upgrade suite runs where its module exists, which is on misp-3.0.
   gate:
     runs-on: ubuntu-latest
     permissions:
@@ -54,9 +51,6 @@ jobs:
       suites: ${{ steps.plan.outputs.suites }}
       publish: ${{ steps.plan.outputs.publish }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          sparse-checkout: tests/e2e
       - name: Plan the run
         id: plan
         env:
@@ -72,7 +66,7 @@ jobs:
           elif [ "$DRAFT" = true ]; then
             echo "A draft runs the unit tests only: mark the pull request ready for review to run the rest."
             build=false stack=false
-          elif [ "$GITHUB_EVENT_NAME" = push ] && [ "$GITHUB_REF" = refs/heads/misp-3.0 ]; then
+          elif [ "$GITHUB_EVENT_NAME" = push ] && [ "$GITHUB_REF" = refs/heads/master ]; then
             PR=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/pulls" \
               --jq "[.[] | select(.merge_commit_sha == \"$GITHUB_SHA\")][0].number // empty" 2>/dev/null || true)
             if [ -n "$PR" ]; then
@@ -82,8 +76,6 @@ jobs:
           fi
           if [ "$build" = true ] && [ "$GITHUB_REF_TYPE" = tag ]; then
             publish=release
-          elif [ "$build" = true ] && [ "$GITHUB_EVENT_NAME" = push ] && [ "$GITHUB_REF" = refs/heads/misp-3.0 ]; then
-            publish=prerelease
           fi
           # name is the check name; id names the report
           suites='[
@@ -91,10 +83,6 @@ jobs:
              "tests": "tests/e2e/test_upstream.py tests/e2e/test_integration.py"},
             {"name": "hub-spoke", "id": "sync", "timeout": 15, "tests": "tests/e2e/test_sync.py"},
             {"name": "migration", "id": "migration", "timeout": 20, "tests": "tests/e2e/test_migration.py"}]'
-          if [ -f tests/e2e/test_upgrade.py ]; then
-            suites=$(jq -c '. + [
-              {"name": "upgrade", "id": "upgrade", "timeout": 30, "tests": "tests/e2e/test_upgrade.py"}]' <<<"$suites")
-          fi
           {
             echo "build=$build"
             echo "unit=$unit"
@@ -102,27 +90,6 @@ jobs:
             echo "publish=$publish"
             echo "suites=$(jq -c . <<<"$suites")"
           } >> "$GITHUB_OUTPUT"
-
-  # Fails while master has commits misp-3.0 lacks, so no 3.0 build ships without
-  # the 2.5 fixes. The Sync misp-3.0 workflow on master merges them.
-  master-merged:
-    if: github.ref == 'refs/heads/misp-3.0' || github.base_ref == 'misp-3.0'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-      - name: Check that master is merged
-        run: |
-          set -euo pipefail
-          git fetch --quiet origin master
-          if ! git merge-base --is-ancestor origin/master HEAD; then
-            echo "ERROR: misp-3.0 lacks $(git rev-list --count HEAD..origin/master) commits of master; the Sync misp-3.0 workflow merges them:"
-            git log --oneline HEAD..origin/master | head -20
-            exit 1
-          fi
 
   # Builds each image into its own layer cache scope, in parallel. The suite
   # jobs rebuild from those caches in seconds and run against the images they
@@ -336,7 +303,7 @@ jobs:
   # The one required check: it fails on any failed or cancelled job, and on a
   # draft, whose run skips the stack suites. Every other skip is the gate's.
   ci-ok:
-    needs: [gate, master-merged, build, unit, suite, kind, scan]
+    needs: [gate, build, unit, suite, kind, scan]
     if: always()
     runs-on: ubuntu-latest
     permissions: {}
@@ -355,23 +322,18 @@ jobs:
           fi
           echo "Every job passed, or the gate skipped it."
 
-  # Publishes after every other job. On a tag: the images under the tag without
-  # its v, the chart at the version of Chart.yaml, and a GitHub Release. On a
-  # push to misp-3.0: the MISP 3.0 Early Access, the images as
-  # 3.0-wip-<MISP commit>-<commit>, which never moves, and 3.0-wip, the newest;
-  # the chart as 3.0.0-wip.<run>.<attempt>, with that image tag as appVersion,
-  # and no GitHub Release: the Early Access is not for production
-  # (docs/misp-3.md). The unit tests and the suites may be skipped only where the
+  # Publishes a tag after every other job: the images under the tag without its
+  # v, the chart at the version of Chart.yaml, and a GitHub Release that names
+  # the MISP commit. The unit tests and the suites may be skipped only where the
   # gate skipped them.
   publish:
-    needs: [gate, master-merged, build, unit, suite, kind, scan]
+    needs: [gate, build, unit, suite, kind, scan]
     if: >-
       always() && needs.gate.outputs.publish != '' &&
       needs.build.result == 'success' && needs.scan.result == 'success' &&
       !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') &&
       (needs.gate.outputs.unit != 'true' || needs.unit.result == 'success') &&
-      (needs.gate.outputs.stack != 'true' || (needs.suite.result == 'success' && needs.kind.result == 'success')) &&
-      (needs.gate.outputs.publish == 'release' || needs.master-merged.result == 'success')
+      (needs.gate.outputs.stack != 'true' || (needs.suite.result == 'success' && needs.kind.result == 'success'))
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -392,50 +354,39 @@ jobs:
       - name: Plan the publication
         id: plan
         env:
-          PUBLISH: ${{ needs.gate.outputs.publish }}
           REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           echo "$REGISTRY_TOKEN" | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
-          if [ "$PUBLISH" = release ]; then
-            TAG="${GITHUB_REF#refs/tags/v}"
-            APP=$(awk '$1 == "appVersion:" {gsub(/"/, "", $2); print $2}' deploy/chart/Chart.yaml)
-            CHART=$(awk '$1 == "version:" {print $2}' deploy/chart/Chart.yaml)
-            if [ "$APP" != "$TAG" ]; then
-              echo "ERROR: deploy/chart/Chart.yaml has appVersion ${APP}, the tag is ${TAG}: mise run release sets it."
-              exit 1
-            fi
-            if out=$(helm show chart "oci://ghcr.io/${{ github.repository_owner }}/charts/misp" --version "$CHART" 2>&1); then
-              echo "ERROR: chart version ${CHART} exists in GHCR. Chart versions are immutable: mise run release raises it."
-              exit 1
-            elif ! grep -qiE "not found|manifest unknown|name unknown|denied" <<<"$out"; then
-              echo "ERROR: cannot tell whether chart version ${CHART} exists in GHCR:"
-              echo "$out"
-              exit 1
-            fi
-            MOVING=
-            echo "misp_version=$(grep '^ARG CORE_TAG=' Dockerfile | cut -d= -f2)" >> "$GITHUB_OUTPUT"
-          else
-            MISP=$(grep '^ARG CORE_COMMIT=' Dockerfile | cut -d= -f2)
-            if [ -z "$MISP" ]; then
-              echo "ERROR: the Dockerfile pins no CORE_COMMIT: an Early Access image names the MISP commit it carries."
-              exit 1
-            fi
-            TAG="3.0-wip-${MISP::7}-${GITHUB_SHA::7}"
-            CHART="3.0.0-wip.${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}"
-            MOVING=3.0-wip
+          TAG="${GITHUB_REF#refs/tags/v}"
+          APP=$(awk '$1 == "appVersion:" {gsub(/"/, "", $2); print $2}' deploy/chart/Chart.yaml)
+          CHART=$(awk '$1 == "version:" {print $2}' deploy/chart/Chart.yaml)
+          if [ "$APP" != "$TAG" ]; then
+            echo "ERROR: deploy/chart/Chart.yaml has appVersion ${APP}, the tag is ${TAG}: mise run release sets it."
+            exit 1
           fi
+          if out=$(helm show chart "oci://ghcr.io/${{ github.repository_owner }}/charts/misp" --version "$CHART" 2>&1); then
+            echo "ERROR: chart version ${CHART} exists in GHCR. Chart versions are immutable: mise run release raises it."
+            exit 1
+          elif ! grep -qiE "not found|manifest unknown|name unknown|denied" <<<"$out"; then
+            echo "ERROR: cannot tell whether chart version ${CHART} exists in GHCR:"
+            echo "$out"
+            exit 1
+          fi
+          MISP=$(grep '^ARG CORE_TAG=' Dockerfile | cut -d= -f2)
+          COMMIT=$(grep '^ARG CORE_COMMIT=' Dockerfile | cut -d= -f2)
+          echo "misp_version=${MISP}${COMMIT:+ at ${COMMIT}}" >> "$GITHUB_OUTPUT"
           for image in misp caddy modules; do
             case $image in
               misp) name="${{ env.IMAGE_MISP }}" ;;
               caddy) name="${{ env.IMAGE_CADDY }}" ;;
               modules) name="${{ env.IMAGE_MODULES }}" ;;
             esac
-            echo "${image}_tags=${name}:${TAG}${MOVING:+,${name}:${MOVING}}" >> "$GITHUB_OUTPUT"
+            echo "${image}_tags=${name}:${TAG}" >> "$GITHUB_OUTPUT"
           done
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "chart=${CHART}" >> "$GITHUB_OUTPUT"
-          echo "Images: ${TAG}${MOVING:+ and ${MOVING}}; chart ${CHART}"
+          echo "Images: ${TAG}; chart ${CHART}"
 
       - name: Log in to GHCR
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
@@ -448,7 +399,6 @@ jobs:
       # overwrite one, and a lookup that fails for another reason than "not
       # there" must not pass either
       - name: Check tag immutability
-        if: needs.gate.outputs.publish == 'release'
         run: |
           set -euo pipefail
           TAG="${{ steps.plan.outputs.tag }}"
@@ -506,7 +456,6 @@ jobs:
           helm push "$RUNNER_TEMP/misp-${{ steps.plan.outputs.chart }}.tgz" "oci://ghcr.io/${{ github.repository_owner }}/charts"
 
       - name: Create GitHub Release
-        if: needs.gate.outputs.publish == 'release'
         run: |
           TAG="${GITHUB_REF#refs/tags/}"
           VER="${{ steps.plan.outputs.tag }}"

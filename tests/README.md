@@ -2,7 +2,7 @@
 
 ## TL;DR
 
-Unit tests on the Python library, an upstream guard that checks the MISP in the image against what this repository patches or depends on, and three stack suites in pytest (`tests/e2e/`): an integration suite on one Compose stack, a hub-spoke sync suite on two instances, and a migration suite that copies a seeded MISP 2.5.50 on MariaDB into PostgreSQL. A smoke test checks any live MISP through its API. Two Kubernetes checks cover the Helm chart: every render validated against the schemas, and the chart installed and upgraded on a kind cluster with the smoke test.
+Unit tests on the Python library, an upstream guard that checks the MISP in the image against what this repository patches or depends on, and three stack suites in pytest (`tests/e2e/`): an integration suite on one Compose stack, a hub-spoke sync suite on two instances, and a migration suite that imports a seeded MISP 2.5.50 on MariaDB into PostgreSQL, converting it to MISP 3.0. A smoke test checks any live MISP through its API. Two Kubernetes checks cover the Helm chart: every render validated against the schemas, and the chart installed and upgraded on a kind cluster with the smoke test.
 
 ```bash
 mise run test                # unit tests, the chart lint and every chart render validated against the schemas
@@ -25,6 +25,7 @@ Tests of the Python entrypoint library (`files/misp_container/`), the scripts an
 |---|---|
 | `test_admin.py` | Unit tests for admin helpers: every value reaches SQL as a parameter. |
 | `test_agents_md.py` | AGENTS.md is what scripts/generate_agents_md.py makes of the tree. |
+| `test_apply_patches.py` | The patches of patches/ and their applier (scripts/apply_patches.py), on real git trees. |
 | `test_chart.py` | The Helm chart renders what the code and the release expect (helm template, no cluster). |
 | `test_chart_schema.py` | helm lint, and every render of the chart validated against the Kubernetes and CRD schemas. |
 | `test_check_upstream.py` | Unit tests for the upstream guard (scripts/check_upstream.py). |
@@ -38,7 +39,6 @@ Tests of the Python entrypoint library (`files/misp_container/`), the scripts an
 | `test_init.py` | Unit tests for init container logic (file operations, no containers needed). |
 | `test_log.py` | Unit tests for the container log formats (LOG_FORMAT json or text). |
 | `test_logrelay.py` | Unit tests for the log relay (misp_container.logrelay). |
-| `test_merge_into_misp3.py` | The merge of master into misp-3.0 (scripts/merge_into_misp3.py), on real git repositories. |
 | `test_metrics.py` | Unit tests for the Prometheus metrics exporter. |
 | `test_migrate.py` | Unit tests for the migration Job (misp_container.migrate). |
 | `test_release.py` | Unit tests for the release tool (scripts/release.py): the next tag and chart version. |
@@ -183,7 +183,8 @@ MariaDB (`MISP_TEST_ENV=tests/migrate-source.env`), seeds it (an org with a user
 with a known authkey, a sync server, an event with an attachment) and records the row counts.
 The mounted source files hold an attachment in each place MISP keeps one on disk: flat, under
 `bucket_<n>/` and under `shadow/`. The suite then runs the migrate Job of this tree's image
-into PostgreSQL with `MIGRATE_SOURCE_UPGRADE=true` and checks the refusals (a non-empty
+into PostgreSQL with `MIGRATE_SOURCE_UPGRADE=true`, which converts the source to MISP 3.0
+first, and checks the refusals (a non-empty
 target, an identity mismatch, `MIGRATE_FORCE` alone on the Job's own copy, then with
 `MIGRATE_REPLACE_COPY`). It runs this tree's images on the copy and checks it: row counts,
 both authkeys, the org, the server, the event, the attachment download, the fixture
@@ -242,20 +243,18 @@ The suites behave the same under podman-compose, locally, and docker compose, in
 
 ## CI
 
-GitHub Actions on every push to master and `misp-3.0`, every tag and every pull request. Both
-branches carry the same `ci.yaml`:
+GitHub Actions on every push to master, every tag and every pull request:
 
 | Job | Runs |
 |-----|------|
-| `gate` | Decides what the run does: nothing on a master push whose commit carries a release tag, since the tag run tests and releases that commit; the unit tests only on a draft; no unit tests and no suites on a push to `misp-3.0` that merges a pull request, which ran them on the same tree |
-| `master-merged` | On `misp-3.0` and its pull requests: fails while master has commits the branch lacks |
+| `gate` | Decides what the run does: nothing on a master push whose commit carries a release tag, since the tag run tests and releases that commit; the unit tests only on a draft; no unit tests and no suites on a push to master that merges a pull request, which ran them on the same tree |
 | `build` | The three images into the layer cache. The misp image's final stage is built fresh each run, so it carries the current Debian packages |
 | `unit` | The unit tests, the chart lint and every chart render validated against the schemas |
-| `suite` | The stack suites, one job each, in parallel, against the images from `build` (`MISP_IMAGE_TAG=ci`): `integration` (the upstream guard, then the integration suite), `hub-spoke`, `migration`, and `upgrade` where the upgrade suite exists. Each uploads its JUnit report and, after a failure, the compose logs |
+| `suite` | The stack suites, one job each, in parallel, against the images from `build` (`MISP_IMAGE_TAG=ci`): `integration` (the upstream guard, then the integration suite), `hub-spoke` and `migration`. Each uploads its JUnit report and, after a failure, the compose logs |
 | `kind` | The chart on a kind cluster: install, smoke test, `helm test`, task runs, upgrade, rollback |
 | `scan` | Trivy on the three images, one scan each: CRITICAL and HIGH findings with a fix go to the Security tab, and a CRITICAL one fails the job, which blocks `publish` |
 | `ci-ok` | The one required check: fails when a job failed or was cancelled, and on a draft |
-| `publish` | After every other job: on a tag, the images, the chart and the GitHub Release; on a push to `misp-3.0`, the Early Access images and chart |
+| `publish` | After every other job, on a tag: the images, the chart and the GitHub Release |
 
 ## Environment
 

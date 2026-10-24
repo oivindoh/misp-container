@@ -62,23 +62,23 @@ The Job is idempotent: run it as often as you like.
 
 ## Startup and footprint
 
-Measured on MISP 2.5.50 with the Compose stack on a podman machine (arm64, six cores):
+Measured on MISP `3.0_wip` at commit 8888b98 with the Compose stack on a podman machine (arm64, six cores):
 
 | What | Time |
 |------|------|
-| Configure Job on an empty database: schema import, `runUpdates`, about 150 settings, admin user, GPG | 16 s |
+| Configure Job on an empty database: schema import, `runUpdates`, about 150 settings, admin user, GPG | 22 s |
 | Configure Job on a configured instance | 1 to 3 s |
 | Web or worker pod, from start to serving, once the Job has run | 1 s |
-| Compose stack from `up` to the login page, images present, empty volumes | 42 s |
+| Compose stack from `up` to the login page, images present, empty volumes | 41 s |
 
 Idle memory per container, after the first start:
 
 | Container | Idle RSS | Note |
 |-----------|----------|------|
-| web | 45 MB | Grows with the PHP-FPM children under load (`PHP_FCGI_CHILDREN`, `PHP_MEMORY_LIMIT` per request) |
-| worker | 470 MB | 21 PHP worker processes under supervisord (`NUM_WORKERS_*`) |
+| web | 42 MB | Grows with the PHP-FPM children under load (`PHP_FCGI_CHILDREN`, `PHP_MEMORY_LIMIT` per request) |
+| worker | 400 MB | 21 PHP worker processes under supervisord (`NUM_WORKERS_*`) |
 | modules | 140 MB | |
-| metrics | 26 MB | |
+| metrics | 28 MB | |
 | caddy | 11 MB | |
 | PostgreSQL | 79 MB | Default `shared_buffers` (128 MB); the chart's component sets 512 MB |
 | Redis | 5 MB | `maxmemory` 128 MB |

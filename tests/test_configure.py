@@ -72,3 +72,21 @@ class TestEveryGroupIsApplied:
                    | set(config.CONFIG_PHP_GROUPS) | {config.S3_GROUP}
                    | {group for group, _ in config.CONDITIONAL_CONFIG_PHP_GROUPS})
         assert groups <= applied, f"never applied: {sorted(groups - applied)}"
+
+
+class TestLayoutCheck:
+    def test_a_2x_database_is_refused(self, monkeypatch):
+        monkeypatch.setattr(configure.db, "query_ok", lambda sql: True)
+        monkeypatch.setattr(configure.db, "has_column", lambda t, c: (t, c) == ("attributes", "value1"))
+        with pytest.raises(SystemExit):
+            configure.check_layout()
+
+    def test_a_30_database_passes(self, monkeypatch):
+        monkeypatch.setattr(configure.db, "query_ok", lambda sql: True)
+        monkeypatch.setattr(configure.db, "has_column", lambda t, c: False)
+        configure.check_layout()
+
+    def test_an_empty_database_passes(self, monkeypatch):
+        monkeypatch.setattr(configure.db, "query_ok", lambda sql: False)
+        monkeypatch.setattr(configure.db, "has_column", lambda t, c: pytest.fail("looked for a column"))
+        configure.check_layout()

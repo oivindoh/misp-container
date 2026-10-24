@@ -74,6 +74,14 @@ def check_identity() -> None:
         sys.exit(1)
 
 
+def check_layout() -> None:
+    """Refuse a database that holds attribute values as text, as MISP 2.x does."""
+    if db.query_ok("SELECT 1 FROM attributes LIMIT 1") and db.has_column("attributes", "value1"):
+        log.error("the database holds MISP 2.x data, and this image runs MISP 3.0: import a 2.x database "
+                  "with the migrate component, from its MySQL or MariaDB source (docs/migration.md)")
+        sys.exit(1)
+
+
 def configure_misp() -> None:
     """Run the full MISP configuration (settings, admin, GPG, auth) under the lock."""
     db.acquire_config_lock()
@@ -120,6 +128,7 @@ def run() -> None:
     check_identity()
     db.wait_for_db()
     db.init_schema()
+    check_layout()
 
     # Early custom hook: after the DB is ready, before MISP configuration.
     run_custom_script(CUSTOM_SETUP_SCRIPT, "setup")

@@ -269,3 +269,16 @@ class TestWaitForLive:
         monkeypatch.setattr(db, "query", lambda sql, check=False: "\n".join(f"{k}\t{v}" for k, v in next(outputs)))
         monkeypatch.setattr(db.time, "sleep", lambda s: None)
         db.wait_for_live(retries=1, wait_seconds=0)
+
+
+class TestHasColumn:
+    def test_the_lookup_takes_the_current_schema_and_parameters(self, monkeypatch):
+        seen = {}
+
+        def dict_query(sql, params=None):
+            seen.update(sql=sql, params=params)
+            return [{"present": 1}]
+
+        monkeypatch.setattr(db, "dict_query", dict_query)
+        assert db.has_column("attributes", "value1") is True
+        assert "table_schema = current_schema()" in seen["sql"] and seen["params"] == ("attributes", "value1")

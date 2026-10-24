@@ -1,6 +1,9 @@
-# Opens a pull request for each new MISP release: bumps CORE_TAG, resolves
+# Opens a pull request for each new MISP release of the major version the
+# Dockerfile pins: bumps CORE_TAG, clears a CORE_COMMIT pin, resolves
 # files/composer.lock and files/requirements-misp.txt, and regenerates the
-# settings catalogue (DEVELOPING.md, New MISP releases).
+# settings catalogue (DEVELOPING.md, New MISP releases). While the pin is a
+# work-in-progress branch such as 3.0_wip, the first release of that major
+# version replaces it.
 name: Track MISP releases
 
 on:
@@ -22,12 +25,16 @@ jobs:
       - name: Get latest MISP release
         id: misp
         run: |
-          LATEST=$(gh api repos/MISP/MISP/releases/latest --jq '.tag_name')
+          set -euo pipefail
           CURRENT=$(grep '^ARG CORE_TAG=' Dockerfile | cut -d= -f2)
+          # 3.0_wip and v3.0.1 both pin major version 3; MISP keeps releasing older majors
+          MAJOR=$(sed -E 's/^v?([0-9]+)[._].*/\1/' <<<"${CURRENT}")
+          LATEST=$(gh api --paginate repos/MISP/MISP/releases \
+            --jq '.[] | select(.draft or .prerelease | not) | .tag_name' | grep -E "^v${MAJOR}\." | sort -V | tail -1 || true)
           echo "latest=${LATEST}" >> "$GITHUB_OUTPUT"
           echo "current=${CURRENT}" >> "$GITHUB_OUTPUT"
-          echo "Current: ${CURRENT}, Latest: ${LATEST}"
-          if [ "${LATEST}" != "${CURRENT}" ]; then
+          echo "Current: ${CURRENT}, Latest of major ${MAJOR}: ${LATEST:-none}"
+          if [ -n "${LATEST}" ] && [ "${LATEST}" != "${CURRENT}" ]; then
             echo "changed=true" >> "$GITHUB_OUTPUT"
           fi
         env:
@@ -45,7 +52,7 @@ jobs:
             echo "skip=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          sed -i "s/^ARG CORE_TAG=.*/ARG CORE_TAG=${NEW}/" Dockerfile
+          sed -i "s/^ARG CORE_TAG=.*/ARG CORE_TAG=${NEW}/; s/^ARG CORE_COMMIT=.*/ARG CORE_COMMIT=/" Dockerfile
         id: bump
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

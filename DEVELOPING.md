@@ -3,14 +3,15 @@
 ## TL;DR
 
 - `mise run test` for the unit tests, `mise run test-integration` for the Compose suite,
-  `mise run test-sync` for the three-instance sync suite. Podman runs the containers.
+  `mise run test-sync` for the two-instance sync suite. Podman runs the containers.
 - Settings: curated defaults in `files/misp-config/settings.yaml`, the generated catalogue in
   `settings-upstream.yaml` (`mise run settings-update`).
 - New MISP release: the tracking workflow opens a PR with the bump, `files/composer.lock`,
   `files/requirements-misp.txt` and the catalogue; CI's strict checks tell you what changed.
-- Release: `mise run release <hotfix|normal|breaking>`, then push master and the tag.
+- MISP: the `Dockerfile` pins MISP's `3.0_wip` branch at a commit (see The MISP pin).
+- Release: `mise run release` makes the next `3.0.0-wip.N`; push master and the tag.
 - Pull requests: a draft runs the unit tests only; marking it ready for review runs every suite.
-- MISP 3.0 Early Access lives on the `misp-3.0` branch; a workflow merges master into it.
+  A pull request merges once `ci-ok` passes on a tree up to date with master.
 
 ## Setup
 
@@ -69,38 +70,66 @@ A new queue needs its name in `WORKER_QUEUES` and `NUM_WORKERS_<QUEUE>` in
 `deploy/chart/files/base.env`. New periodic work needs a task in `misp_container/task.py`
 (`SCHEDULER_COVERAGE`) and a schedule in `cronjobs.tasks` in `deploy/chart/values.yaml`.
 
-The `Dockerfile` patches two upstream files. Each patch checks its anchor first and fails
-the build with the file and the reason when the anchor moved:
+### Patches to MISP
 
-- **`app/composer.json`:** the build drops `iglocska/cake-resque`, which SimpleBackgroundJobs
-  replaces.
-- **CakePHP's `Postgres.php`:** `describe()` resets its sequence match per column
-  ([MISP#11172](https://github.com/MISP/MISP/issues/11172)). On a failure, check whether
-  the release carries the fix and drop the patch, or adapt it.
+Each change to MISP's code is a patch in `patches/`: a git diff against MISP's root, after a
+header with a title, a `Why:` line and an `Upstream:` line. AGENTS.md lists them.
+`scripts/apply_patches.py` applies them in name order in the image build. A patch that no
+longer applies, or that MISP already carries, fails the build with its name: check whether
+MISP fixed the problem, then delete the patch or adapt it to the new MISP.
+
+| Task | Command |
+|------|---------|
+| Apply the patches to a MISP checkout | `python3 scripts/apply_patches.py <MISP checkout>` |
+| Make a patch | Change the file in a MISP checkout, `git diff > patches/<NN>-<name>.patch`, then add the header on top |
+
+## The MISP pin
+
+The `Dockerfile` pins MISP's `3.0_wip` branch: `ARG CORE_TAG=3.0_wip`, and `ARG CORE_COMMIT`
+names the commit. MISP has not released 3.0 yet; the tracking workflow opens the pull request
+that moves the pin to `v3.0.0` once it does. The pin shapes the image in these places:
+
+| Where | What | Because |
+|-------|------|---------|
+| `Dockerfile` | No `cake-resque` patch in `composer-prep`; submodules without recursion | MISP 3.0 requires no `iglocska/cake-resque`, and only `misp-iconify` nests submodules, over SSH URLs |
+| The version marker | `3.0_wip+<CORE_COMMIT>` | It changes with each pin, so the pods wait for the configure run of their own build |
+| `settings.yaml` | No switch for background jobs, and four other settings fewer | MISP 3.0 defines none of them; an `s3://` attachments directory turns S3 on |
+| The configure step | Refuses a database whose `attributes` table has the text column `value1` | That is MISP 2.x's layout; the migrate Job imports such a database (docs/migration.md) |
+
+### Moving to a newer 3.0_wip commit
+
+MISP changes its schema one way, so a database configured by a newer pin cannot go back to an
+older image. Each pin move is a release of its own.
+
+1. On a branch from master, set `ARG CORE_COMMIT` in the `Dockerfile` to the commit.
+2. Run `mise run composer-lock` and `mise run misp-requirements`.
+3. Run `mise run settings-update`. Remove from `settings.yaml` each setting the summary names
+   as stale.
+4. Open a pull request to master. The upstream guard and the suites report what MISP changed.
+5. After the merge, release it (see Releases).
 
 ## Releases
 
-Each release has a kind, which sets the chart version. The git tag and the images carry the
-MISP version of the `Dockerfile`: `v2.5.48` for the first release of that version, then
-`v2.5.48-r1` and on. The chart has its own SemVer version, with the image tag as its
-`appVersion`.
+While MISP is a work-in-progress pin, every release is the next pre-release of the version the
+pin prepares, the same for the git tag, the images and the chart: `v3.0.0-wip.1`, then
+`v3.0.0-wip.2` and on. `mise run release` takes no kind then.
+
+Once the pin is a MISP release tag such as `v3.0.0`, each release has a kind. The git tag and
+the images carry the MISP version, with `-rN` from the second release of it on, and the chart
+has its own SemVer version. The first release after the pre-releases takes their version
+without the suffix.
 
 | Kind | Command | Chart version | For |
 |------|---------|---------------|-----|
-| `normal` | `mise run release normal` | minor up: `1.4.2` to `1.5.0` | A new MISP version, new features |
-| `hotfix` | `mise run release hotfix` | patch up: `1.4.2` to `1.4.3` | A base image update, a fix, a security patch |
-| `breaking` | `mise run release breaking` | major up: `1.4.2` to `2.0.0` | A change that breaks existing values or the upgrade path |
-
-A new MISP version comes in through its bump pull request (see New MISP releases), which
-also resolves `files/composer.lock` and the settings catalogue. After the merge, release it
-as `normal`.
+| `normal` | `mise run release normal` | minor up: `3.0.2` to `3.1.0` | A new MISP version, new features |
+| `hotfix` | `mise run release hotfix` | patch up: `3.0.2` to `3.0.3` | A base image update, a fix, a security patch |
+| `breaking` | `mise run release breaking` | major up: `3.0.2` to `4.0.0` | A change that breaks existing values or the upgrade path |
 
 `scripts/release.py`:
 1. Refuses to run off master, with changes to tracked files, or out of step with origin.
-2. Computes the next tag from the MISP version and the tags that exist.
-3. Reads the chart version that the previous release published, from the `Chart.yaml` of its
-   tag, and raises the part the kind names. The first release with a chart publishes the
-   version `Chart.yaml` has.
+2. Computes the next tag from the `Dockerfile` pin and the tags that exist.
+3. For a kind, reads the chart version that the previous release published, from the
+   `Chart.yaml` of its tag, and raises the part the kind names.
 4. Sets `version` and `appVersion` in `deploy/chart/Chart.yaml` and the `MISP_IMAGE_TAG`
    default of the Compose files.
 5. Shows the plan and the diff. On a yes it commits and tags; on a no it restores the files.
@@ -115,106 +144,26 @@ The push starts two runs of the release commit. The `gate` job stops the master 
 tag run tests the commit and releases it.
 
 CI runs the tests and the scans, then pushes the images and the chart, and creates a GitHub
-Release. The `publish` job refuses a tag whose image tag differs from `appVersion`, an image tag
-that GHCR already holds, and a chart version that GHCR already holds.
+Release that names the MISP commit. The `publish` job refuses a tag whose image tag differs
+from `appVersion`, an image tag that GHCR already holds, and a chart version that GHCR
+already holds.
 
 | Artefact | Version |
 |----------|---------|
 | `ghcr.io/oivindoh/misp-container`, `-caddy`, `-modules` | the image tag: the git tag without the `v` |
 | `oci://ghcr.io/oivindoh/charts/misp` | the chart version of `Chart.yaml` |
 
-## The misp-3.0 branch
+Helm installs a pre-release chart only when the command names its version (`--version
+3.0.0-wip.N`) or passes `--devel`.
 
-The repository builds two lines of MISP, one per branch:
+## Merging
 
-| Line | Branch | MISP | Publishes |
-|------|--------|------|-----------|
-| Release | `master` | 2.5, at the release tag `CORE_TAG` | on a release tag (`mise run release`): images `2.5.x`, a chart `x.y.z`, a GitHub Release |
-| Early Access | `misp-3.0` | 3.0, MISP's `3.0_wip` branch at `CORE_COMMIT` | on every push: images `3.0-wip-<MISP commit>-<commit>` and `3.0-wip`, a chart `3.0.0-wip.<run>.<attempt>` ([its guide](https://github.com/oivindoh/misp-container/blob/misp-3.0/docs/misp-3.md)) |
-
-Where a change goes:
-
-| Change | Pull request to | Then |
-|--------|-----------------|------|
-| A fix or a feature for both lines | `master` | the sync carries it to `misp-3.0` |
-| A new MISP 2.5 release | `master` (the tracking workflow opens it) | the sync keeps the 3.0 pins |
-| A change only MISP 3.0 needs, or a newer `3.0_wip` commit | `misp-3.0` | CI publishes a pre-release after the merge |
-
-A change for both lines that lands only on `misp-3.0` never reaches master.
-
-The branch ends when MISP releases 3.0: master then moves to the 3.0 release, and the sync
-workflow, `scripts/merge_into_misp3.py`, the `master-merged` job, the branch's
-`.gitattributes` and its ruleset go.
-
-```mermaid
-flowchart LR
-    M[push to master] --> S[Sync misp-3.0 workflow]
-    S -->|clean, or the pins only| P[pull request to misp-3.0<br/>opened by the App, auto-merge on]
-    S -->|any other conflict| I[issue: master does not<br/>merge into misp-3.0]
-    P --> C[CI: the required checks]
-    C -->|all pass| G[GitHub merges it]
-    G --> B[CI on misp-3.0: build, scan, master-merged]
-    B --> R[publish: images and chart]
-```
-
-CI on `misp-3.0` fails its `master-merged` job while master has commits the branch lacks, and
-`publish` needs that job: no 3.0 build ships without the fixes of master. A sync pull
-request whose checks fail stays open; the next push to master merges again and updates it.
-
-The ruleset requires a pull request to be up to date with `misp-3.0`, so its merge commit has
-the tree its checks ran on. The push run of that merge commit skips `unit` and the suites, and
-builds, scans and publishes. A push that merges no pull request runs every job. A sync pull
-request that falls behind `misp-3.0` waits for the next push to master, which merges again.
-Both branches carry the same `ci.yaml`: its `gate` job tells the branches apart.
-
-`scripts/merge_into_misp3.py` does the merge. Where the branch pins MISP 3.0 and master pins
-2.5, the merge keeps the branch's side:
-
-| Pin | Kept by |
-|-----|---------|
-| `ARG CORE_TAG` and `ARG CORE_COMMIT` in the `Dockerfile` | the script: a conflict of only these lines takes the branch's side |
-| `files/composer.lock`, `files/misp-config/settings-upstream.yaml` | the branch's `.gitattributes` (`merge=ours`): the files stay whole |
-| `files/requirements-misp.txt` | the branch's `.gitattributes` keeps it through the merge, and the workflow resolves it anew for the branch's MISP commit |
-| `AGENTS.md` and the generated regions of the docs | the branch's `.gitattributes` keeps `AGENTS.md` through the merge, and the workflow writes both anew from the merged tree |
-
-### Moving to a newer 3.0_wip commit
-
-1. On a branch from `misp-3.0`, set `ARG CORE_COMMIT` in the `Dockerfile` to the commit.
-2. Run `mise run composer-lock` and `mise run misp-requirements`.
-3. Run `mise run settings-update`. Remove from `settings.yaml` each setting the summary names
-   as stale.
-4. Open a pull request to `misp-3.0`. The upgrade suite and the upstream guard report what
-   MISP changed.
-
-### When the sync stops at a conflict
-
-The issue "master does not merge into misp-3.0" names the files. Resolve them on a branch from
-`misp-3.0`:
-
-```bash
-git fetch origin && git switch --no-track -c merge-master origin/misp-3.0
-python3 scripts/merge_into_misp3.py origin/master   # merges, or names the files it cannot
-git -c merge.ours.driver=true merge origin/master   # resolve those files, then commit
-mise run docs                                       # the branch's generated files, into the merge
-git commit --all --amend --no-edit
-```
-
-Open a pull request to `misp-3.0`, then close the issue.
-
-### Setup
-
-The sync needs these pieces of the repository's settings:
-
-| Piece | Is |
-|-------|----|
-| GitHub App `misp-v3-sync` | Installed on this repository, with read and write access to contents, pull requests, issues and workflows. It opens the pull requests: a pull request made with `GITHUB_TOKEN` starts no CI, and `GITHUB_TOKEN` may not push a change to a workflow file. |
-| Variable `MISP3_SYNC_CLIENT_ID` | The App's client ID |
-| Secret `MISP3_SYNC_PRIVATE_KEY` | A private key of the App |
-| Ruleset "misp-3.0 requires CI" | Requires the check `ci-ok`, on a pull request that is up to date with `misp-3.0`, before a merge into `misp-3.0`. Repository admins bypass it. |
-| Auto-merge | Allowed for the repository. The workflow turns it on for its pull request only while a rule requires checks; without one, the pull request waits for a person. |
-
-`ci-ok` fails when any job of the run failed or was cancelled, and on a draft. Rename it in the
-ruleset as well: a required check that never reports holds every sync pull request open.
+The ruleset "master requires CI" requires the check `ci-ok` on a pull request that is up to
+date with master, before a merge into master. Repository admins bypass it. `ci-ok` fails when
+any job of the run failed or was cancelled, and on a draft. The push run of a merge commit
+skips `unit` and the suites, since its tree is the one the pull request tested. Rename
+`ci-ok` in the ruleset as well: a required check that never reports holds every pull request
+open.
 
 ## Settings Engine
 

@@ -41,7 +41,7 @@ flowchart LR
 |------|--------------|
 | Identity | `MISP.uuid` and the salt and key, where the source stores them, must equal this deployment's values (exit 4) |
 | Target | see [The target](#the-target) |
-| Schema | this image's PostgreSQL baseline, then `cake Admin runUpdates` on it. The source must be at the same `db_version` and ledger state (exit 5); `MIGRATE_SOURCE_UPGRADE=true` runs MISP's updates on the source first |
+| Schema | this image's PostgreSQL baseline, then `cake Admin runUpdates` on it. The source must be at the same `db_version` and ledger state (exit 5); `MIGRATE_SOURCE_UPGRADE=true` upgrades the source first, with `cake Admin runUpgrade` |
 | Rows | every table the baseline has, by column name, in multi-row inserts with the table's secondary indexes dropped, then built once; flags become booleans, zero dates become NULL; the id sequences move past the copied ids |
 | After | `MISP.live=false` on the copy, so web and worker wait for the configure Job |
 | Files | the attachments of `MIGRATE_SOURCE_FILES` or `MIGRATE_SOURCE_S3_BUCKET` into the deployment's bucket or attachments volume, and org logos and custom images onto the volume (see [Attachments](#attachments)) |
@@ -75,8 +75,10 @@ copy run again on each upgrade and each configure retry while the component is o
 MISP changes its schema between releases, and the copy needs the source at this image's
 schema. Restore a dump of the old database into a database of its own, point the migration
 at that copy and set `MIGRATE_SOURCE_UPGRADE=true`: the migration runs
-`cake Admin runUpdates` on it, then copies it. Never point it at the live source with
-`MIGRATE_SOURCE_UPGRADE=true`, because the updates write to the database they run on. A
+`cake Admin runUpgrade` on it, which applies the numbered 2.x updates and converts the
+database to MISP 3.0, then copies it. On a large instance the conversion takes hours. Never
+point it at the live source with `MIGRATE_SOURCE_UPGRADE=true`, because the upgrade writes to
+the database it runs on. A
 source at a newer schema than this image is not supported; take the image of the same or a
 newer release.
 
@@ -108,7 +110,7 @@ and the migration copies none.
 | `MIGRATE_SOURCE_HOST`, `MIGRATE_SOURCE_PORT` | The source database (port 3306 by default) |
 | `MIGRATE_SOURCE_NAME`, `MIGRATE_SOURCE_USER`, `MIGRATE_SOURCE_PASSWORD` | Database (`misp` by default) and a user that can read it, and write it with `MIGRATE_SOURCE_UPGRADE` |
 | `MIGRATE_SOURCE_TLS` | `true` for a TLS connection, checked against the system CA bundle |
-| `MIGRATE_SOURCE_UPGRADE` | `true` runs MISP's schema updates on the source before the copy |
+| `MIGRATE_SOURCE_UPGRADE` | `true` upgrades the source to this image's MISP before the copy (`cake Admin runUpgrade`) |
 | `MIGRATE_SOURCE_FILES` | A mounted copy of the source's attachments directory |
 | `MIGRATE_SOURCE_S3_BUCKET`, `MIGRATE_SOURCE_S3_ENDPOINT`, `MIGRATE_SOURCE_S3_REGION` | The source's bucket, instead of `MIGRATE_SOURCE_FILES`; the endpoint of an AWS-compatible store, empty for AWS; the region (`eu-west-1` by default, as in MISP) |
 | `MIGRATE_SOURCE_S3_ACCESS_KEY`, `MIGRATE_SOURCE_S3_SECRET_KEY` | A key that can list and read the source bucket |
@@ -187,11 +189,8 @@ Sessions, the Redis cache, the CakePHP cache and log files are not copied.
 ## Cut-over
 
 The old instance stays read-only while the migration runs, so time a trial run against a
-copy of the source first. The migration logs each table and each index it builds. Most of
-the time for a large instance goes to one index: MISP's hash index on `attributes.value2`,
-which is empty for most attributes. A hash index keeps equal values in one bucket, so its
-build time grows faster than the table ([MISP#11173](https://github.com/MISP/MISP/issues/11173)).
-In one test with two million attributes, the copy took 14 minutes, 11 of them for that index.
+copy of the source first. The migration logs the conversion to MISP 3.0, each table and each
+index it builds. On a large instance the conversion takes hours.
 
 1. Set `MISP.live=false` on the old instance so no event changes during the copy.
 2. Run the migration and the first sync. Check the copy: log in, open an event with an

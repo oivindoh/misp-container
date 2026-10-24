@@ -28,10 +28,11 @@ CRD_SCHEMAS = str(REPO / "tests/schemas") + "/{{.Group}}/{{.ResourceKind}}_{{.Re
 def renders() -> dict[str, list[str]]:
     """{name: --set values}: what the chart must render and validate."""
     parts = chart.components()
-    cases = {"default": [], **{c: [f"{c}.enabled=true"] for c in parts},
-             "all": [f"{c}.enabled=true" for c in parts],
+    every = [v for c in parts for v in chart.component_sets(c)]
+    cases = {"default": [], **{c: chart.component_sets(c) for c in parts},
+             "all": every,
              "secrets-supplied": ["secrets.create=false"],
-             "database-secret": [f"{c}.enabled=true" for c in parts] + [
+             "database-secret": every + [
                  "database.user.name=pg-app", "database.user.key=username",
                  "database.password.name=pg-app", "database.password.key=password"],
              "attachments-in-s3": ["attachments.claim=false", "env.PLUGIN_S3_BUCKET_NAME=misp"],

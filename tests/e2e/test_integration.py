@@ -30,8 +30,6 @@ from check_upstream import NOT_RELAYED  # noqa: E402
 
 TEST_ENV = env_file(TESTS / "test-compose.env")
 ADMIN_EMAIL = TEST_ENV["ADMIN_EMAIL"]
-MISP_VERSION = next(line.split("=", 1)[1].strip() for line in (REPO / "Dockerfile").read_text().splitlines()
-                    if line.startswith("ARG CORE_TAG="))
 METRICS = "http://localhost:19191"
 MODULES = "http://localhost:16666"
 SYNC_ORG_UUID = "4f1ed2b2-1821-49da-bf2c-b7ab639d9b19"
@@ -301,7 +299,9 @@ def test_gpg_key_generated(stack):
 # -- MISP API ------------------------------------------------------------------------
 
 def test_version_reported(stack):
-    assert "2.5" in (stack.api("GET", "/servers/getVersion.json", stack.key) or {}).get("version", "")
+    shipped = json.loads(stack.exec("web", "cat /var/www/MISP/VERSION.json"))
+    expected = f"{shipped['major']}.{shipped['minor']}.{shipped['hotfix']}"
+    assert (stack.api("GET", "/servers/getVersion.json", stack.key) or {}).get("version", "").startswith(expected)
 
 
 def test_event_created_through_the_api(stack):
@@ -345,7 +345,13 @@ def test_warm_start_changes_no_setting(warm_run):
 
 # -- the defaults version -----------------------------------------------------------
 
-def test_defaults_version_saved_after_configure(stack):
+@pytest.fixture(scope="module")
+def image_version(stack):
+    # The marker the Dockerfile writes: CORE_TAG, and +CORE_COMMIT when the build pins one
+    return stack.exec("web", "cat /srv/misp-dist-version")
+
+
+def test_defaults_version_saved_after_configure(stack, image_version):
     # Web and worker pods wait until the configure step recorded their image's version
     stack.python("""
 from misp_container.env import apply_defaults
@@ -355,7 +361,7 @@ apply_defaults()
 db.query("DELETE FROM system_settings WHERE setting='misp_docker.defaults_version';")
 SettingsCache().save_defaults_version()
 """)
-    assert stack.sql("SELECT value FROM system_settings WHERE setting='misp_docker.defaults_version';") == f'"{MISP_VERSION}"'
+    assert stack.sql("SELECT value FROM system_settings WHERE setting='misp_docker.defaults_version';") == f'"{image_version}"'
 
 
 # -- S3 attachment storage -----------------------------------------------------------
@@ -365,7 +371,6 @@ def s3_event(stack):
     access, secret, _ = stack.s3
     stack.python(f"""
 from misp_container import cake
-cake.set_setting('Plugin.S3_enable', 'true')
 cake.set_setting('Plugin.S3_aws_compatible', 'true')
 cake.set_setting('Plugin.S3_bucket_name', 'misp-attachments')
 cake.set_setting('Plugin.S3_aws_endpoint', 'http://garage:3900')

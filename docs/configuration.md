@@ -54,9 +54,7 @@ MISP's baseline into it. An external PostgreSQL such as StackGres needs only the
 values. Keep a connection pooler in front of it in session mode, as StackGres's is by
 default: the configure Job holds an advisory lock for its whole run. The migrate Job copies a
 MySQL or MariaDB MISP into it ([migration.md](migration.md)). The On Demand correlation
-engine needs MySQL, so it is not available. MISP does not create its high-performance indexes
-on the object, correlation, tag and warninglist tables on PostgreSQL
-([MISP#11178](https://github.com/MISP/MISP/issues/11178)).
+engine needs MySQL, so it is not available.
 
 ## HTTPS
 
