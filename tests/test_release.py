@@ -72,24 +72,6 @@ def test_set_chart_changes_the_two_versions_only():
         '# comment\nversion: 1.1.0\n# about the app\nappVersion: "2.5.48"\nname: misp\n'
 
 
-def test_set_image_default_changes_every_image_of_ours():
-    text = ("image: ghcr.io/oivindoh/misp-container:${MISP_IMAGE_TAG:-2.5.37}\n"
-            "image: ghcr.io/oivindoh/misp-container-caddy:${MISP_IMAGE_TAG:-2.5.37}\n"
-            "image: docker.io/library/redis:8\n")
-    assert release.set_image_default(text, "2.5.48-r1") == (
-        "image: ghcr.io/oivindoh/misp-container:${MISP_IMAGE_TAG:-2.5.48-r1}\n"
-        "image: ghcr.io/oivindoh/misp-container-caddy:${MISP_IMAGE_TAG:-2.5.48-r1}\n"
-        "image: docker.io/library/redis:8\n")
-
-
-def test_the_image_tag_sits_in_every_compose_file_of_ours():
-    # A compose file with our image but no MISP_IMAGE_TAG default would keep an old tag
-    for path in release.COMPOSE_FILES:
-        text = path.read_text()
-        if "ghcr.io/oivindoh/misp-container" in text:
-            assert release.IMAGE_DEFAULT.search(text), path
-
-
 class TestMain:
     """main() on a clone of a bare origin, as a maintainer runs it on master."""
 
@@ -108,14 +90,12 @@ class TestMain:
         (work / "Dockerfile").write_text("ARG CORE_TAG=3.0_wip\n")
         (work / "deploy/chart").mkdir(parents=True)
         (work / "deploy/chart/Chart.yaml").write_text('name: misp\nversion: 3.0.0-wip.1\nappVersion: "3.0.0-wip.1"\n')
-        (work / "deploy/docker-compose.yml").write_text("image: ghcr.io/oivindoh/misp-container:${MISP_IMAGE_TAG:-3.0.0-wip.1}\n")
         self.git(work, "checkout", "--quiet", "-b", "master")
         self.git(work, "add", "-A")
         self.git(work, "commit", "--quiet", "-m", "start")
         self.git(work, "push", "--quiet", "origin", "master")
         monkeypatch.setattr(release, "REPO", work)
         monkeypatch.setattr(release, "CHART_YAML", work / "deploy/chart/Chart.yaml")
-        monkeypatch.setattr(release, "COMPOSE_FILES", [work / "deploy/docker-compose.yml"])
         monkeypatch.setattr("builtins.input", lambda prompt: "y")
         return work
 
@@ -129,4 +109,4 @@ class TestMain:
         assert release.main([]) == 0
         assert self.git(repo, "log", "-1", "--format=%s") == "release v3.0.0-wip.2, chart 3.0.0-wip.2"
         assert self.git(repo, "rev-list", "-n", "1", "v3.0.0-wip.2") == self.git(repo, "rev-parse", "HEAD")
-        assert "${MISP_IMAGE_TAG:-3.0.0-wip.2}" in (repo / "deploy/docker-compose.yml").read_text()
+        assert "appVersion: \"3.0.0-wip.2\"" in (repo / "deploy/chart/Chart.yaml").read_text()

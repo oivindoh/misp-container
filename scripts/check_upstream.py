@@ -45,7 +45,7 @@ BOOTSTRAP = "app/Config/bootstrap.default.php"
 SERVER_MODEL = "app/Model/Server.php"
 ORG_IMG_HELPER = "app/View/Helper/OrgImgHelper.php"
 # Where MISP keeps the files of each upload rule of Server::getFileRules(): the
-# chart mounts the attachments claim and Compose a volume at these paths
+# chart mounts the attachments claim at these paths
 IMAGE_DIRS = {"orgs": "files/img/orgs", "img": "files/img/custom"}
 # The packages MISP's own scripts import, and the pins the image installs for them
 MISP_REQUIREMENTS = "requirements.txt"
@@ -474,7 +474,7 @@ CHECKS = [
           "files/misp_container/logrelay.py FILES", relayed_files,
           fails_when="writes a new file under app/tmp/logs, or stops writing one the relay follows"),
     Check("image-paths", f"{SERVER_MODEL}, {ORG_IMG_HELPER}",
-          "deploy/chart/templates/_helpers.tpl misp.appVolumeMounts, deploy/docker-compose.yml", image_paths,
+          "deploy/chart/templates/_helpers.tpl misp.appVolumeMounts", image_paths,
           fails_when="uploads org logos or custom images to, or reads them from, a directory the volumes do not mount"),
     Check("python-requirements", MISP_REQUIREMENTS, "files/requirements-misp.txt", python_requirements,
           fails_when="needs a Python package, or a version of one, that the pins do not give (mise run misp-requirements)"),

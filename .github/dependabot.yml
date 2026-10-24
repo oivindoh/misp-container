@@ -18,14 +18,13 @@ updates:
     schedule:
       interval: weekly
 
-  # The PostgreSQL and Redis images of the Compose stacks and the migration suite's source
-  # MariaDB, one PR per image for both directories. The chart pins the same PostgreSQL and
-  # Redis images in values.yaml: tests/test_chart.py fails until it follows. MariaDB stays
-  # on its LTS line, 11.8.
-  - package-ecosystem: docker-compose
+  # The images of the chart (the postgres and redis components, in values.yaml) and of
+  # the stack suites' test services (tests/k3s), one PR per image for both directories.
+  # MariaDB stays on its LTS line, 11.8.
+  - package-ecosystem: docker
     directories:
-      - /deploy
-      - /tests
+      - /deploy/chart
+      - /tests/k3s
     schedule:
       interval: weekly
     groups:

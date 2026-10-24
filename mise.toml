@@ -1,10 +1,10 @@
 [tools]
 python = "3.13"
 uv = "latest"
-# Kubernetes checks; CI downloads the same versions (.github/workflows/ci.yaml)
+# The chart checks and the stack suites; CI downloads the same versions (.github/actions/install-helm)
 helm = "4.3.0"
 kubeconform = "0.8.0"
-kind = "0.33.0"
+kubectl = "1.37.1"
 
 [env]
 VIRTUAL_ENV = "{{config_root}}/.venv"
@@ -18,21 +18,25 @@ run = "test -d .venv || uv sync --python 3.13"
 description = "Run unit tests"
 run = "python -m pytest tests/ -v --ignore=tests/e2e"
 
+[tasks.build]
+description = "Build the misp, caddy and modules images under MISP_IMAGE_TAG, else the chart's appVersion"
+run = "python scripts/build.py ${@}"
+
 [tasks.test-integration]
-description = "Run the upstream guard and the integration tests (requires podman)"
-run = "python -m pytest tests/e2e/test_upstream.py tests/e2e/test_integration.py -v"
+description = "Run the upstream guard and the integration suite (k3s in podman)"
+run = "python -m pytest tests/e2e/test_upstream.py tests/e2e/test_integration.py -v ${@}"
 
 [tasks.test-sync]
 description = "Run the hub-spoke sync suite (2 MISP instances and a MISP 2.5 partner)"
-run = "python -m pytest tests/e2e/test_sync.py -v"
+run = "python -m pytest tests/e2e/test_sync.py -v ${@}"
 
 [tasks.test-migration]
 description = "Run the migration suite (a MISP 2.5 database on MariaDB into PostgreSQL)"
-run = "python -m pytest tests/e2e/test_migration.py -v"
+run = "python -m pytest tests/e2e/test_migration.py -v ${@}"
 
-[tasks.test-kind]
-description = "Install, test, upgrade and roll back the Helm chart on a kind cluster (build the images first)"
-run = "tests/run-kind-test.sh ${@}"
+[tasks.test-lifecycle]
+description = "Run the lifecycle suite: upgrade from the newest release, helm test, CronJobs, upgrade and rollback"
+run = "python -m pytest tests/e2e/test_lifecycle.py -v ${@}"
 
 [tasks.agents-md]
 description = "Regenerate AGENTS.md from the tree"
@@ -43,9 +47,10 @@ description = "Regenerate the generated regions of the docs and AGENTS.md from t
 run = ["python scripts/generate_docs.py", "python scripts/generate_agents_md.py"]
 
 [tasks.test-all]
-description = "Run unit + integration + sync + migration tests"
-# One after the other: the integration and migration suites share a compose project
-run = ["mise run test", "mise run test-integration", "mise run test-sync", "mise run test-migration"]
+description = "Run the unit tests, then every stack suite"
+# One after the other: the suites publish the same ports on localhost. The first builds the images
+run = ["mise run test", "mise run test-integration", "mise run test-sync --skip-build",
+       "mise run test-migration --skip-build", "mise run test-lifecycle --skip-build"]
 
 [tasks.smoketest]
 description = "Run smoke test against a live MISP instance"
@@ -57,7 +62,7 @@ python -m pytest tests/e2e/test_smoke.py -v --url "$URL" --key "$KEY"
 """
 
 [tasks.settings-update]
-description = "Regenerate files/misp-config/settings-upstream.yaml from a live MISP (builds and runs the test stack)"
+description = "Regenerate files/misp-config/settings-upstream.yaml from a live MISP (builds the images, installs the chart on k3s)"
 run = "python scripts/update_settings.py --stack --write ${@}"
 
 [tasks.composer-lock]

@@ -6,7 +6,7 @@
 #   final    PHP-FPM, workers, configure, org sync, metrics (one image, a module per role)
 #   caddy    static files + FastCGI reverse proxy (scratch)
 #   modules  misp-modules (distroless)
-# Build through compose: podman compose build
+# Build all three: mise run build (scripts/build.py)
 #
 
 # MISP 3.0 Early Access: the 3.0_wip branch, pinned to a commit (DEVELOPING.md, MISP 3.0)
@@ -279,7 +279,7 @@ COPY --from=composer-build --chown=${MISP_UID}:${MISP_GID} /tmp/Vendor /var/www/
 COPY --from=misp-source --chown=${MISP_UID}:${MISP_GID} /srv/misp-config /srv/misp-config
 COPY --from=misp-source --chown=${MISP_UID}:${MISP_GID} /tmp/misp-dist-version /srv/misp-dist-version
 
-# Prepare writable directories (overlaid by emptyDir volumes in K8s, tmpfs or named volumes in Compose).
+# Prepare writable directories (overlaid by the pods' emptyDir volumes and claims).
 # app/files ships in the image; MISP writes only to these five subdirectories of it.
 RUN for dir in app/files/scripts/tmp app/files/certs app/files/terms app/files/img/orgs \
                app/files/img/custom app/attachments app/tmp app/tmp/cache app/tmp/cache/models \
@@ -295,9 +295,7 @@ COPY --chown=${MISP_UID}:${MISP_GID} files/misp_container/ /opt/misp_container/
 COPY --chown=${MISP_UID}:${MISP_GID} files/php-fpm-pool.conf /etc/misp-docker/php-fpm-pool.conf
 COPY --chown=${MISP_UID}:${MISP_GID} files/php.ini /etc/misp-docker/php.ini
 COPY --chown=${MISP_UID}:${MISP_GID} files/misp-config/ /etc/misp-docker/
-# gnupg/ is the mount point of the instance GPG key (the misp-gnupg Secret, the
-# Compose volume misp-gnupg-key that configure writes); a new volume takes the
-# owner of this directory
+# gnupg/ is the mount point of the instance GPG key (the misp-gnupg Secret)
 RUN find /etc/misp-docker -type f -exec chmod 0440 {} + && \
     find /etc/misp-docker -type d -exec chmod 0550 {} + && \
     install -d -o ${MISP_UID} -g ${MISP_GID} -m 0700 /etc/misp-docker/gnupg

@@ -42,10 +42,9 @@ taxonomies:
 
 `deploy/orgs.yaml.example` shows every key.
 
-| Where | How the file gets in | Where `${VAR}` values come from |
-|-------|----------------------|---------------------------------|
-| Kubernetes | The `orgSync.orgs` value: the content of `orgs.yaml`, which the chart puts in the `misp-orgs` ConfigMap | `secrets.admin` (the `misp-admin` Secret), or `env` for a value that is no secret |
-| Compose | Mount it at `/etc/misp-docker/orgs.yaml` on the `sync` service | `compose-secrets.env` |
+The `orgSync.orgs` value holds the content of `orgs.yaml`, which the chart puts in the
+`misp-orgs` ConfigMap. `${VAR}` values come from `secrets.admin` (the `misp-admin` Secret),
+or from `env` for a value that is no secret.
 
 | Variable | Description |
 |----------|-------------|

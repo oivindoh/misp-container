@@ -2,8 +2,8 @@
 
 Usage: python3 -m misp_container.task <task> [workflow id]
 
-Runs as a Kubernetes CronJob (the chart's cronjobs component) or on demand from
-Compose. Every task runs MISP's console in this pod, with the command line MISP's
+Runs as a Kubernetes CronJob (the chart's cronjobs component), or as a Job made
+from one. Every task runs MISP's console in this pod, with the command line MISP's
 own scheduler would hand a worker (app/Console/Command/SchedulerWorkerShell.php):
 the pod renders app/Config, and the work happens here, not on the workers.
 """

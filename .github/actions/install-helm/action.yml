@@ -1,13 +1,13 @@
-# Installs helm, and on request kubeconform and kind, at the versions mise.toml
+# Installs helm, and on request kubeconform and kubectl, at the versions mise.toml
 # pins, with their checksums.
 name: Install helm
-description: helm, plus kubeconform and kind when asked, pinned and checked
+description: helm, plus kubeconform and kubectl when asked, pinned and checked
 inputs:
   kubeconform:
     description: Also install kubeconform
     default: "false"
-  kind:
-    description: Also install kind
+  kubectl:
+    description: Also install kubectl
     default: "false"
 runs:
   using: composite
@@ -26,9 +26,9 @@ runs:
           echo "9bc2bffbf71f261128533edaf912153948b7ff238f9a531ae6d34466ec287883  kubeconform.tgz" | sha256sum -c
           tar -xzf kubeconform.tgz -C bin kubeconform
         fi
-        if [ "${{ inputs.kind }}" = true ]; then
-          curl -sfLo bin/kind https://github.com/kubernetes-sigs/kind/releases/download/v0.33.0/kind-linux-amd64
-          echo "aee6151561422756b764a4ae28e7f44cda5af5a9eead3cc9985112b1de8d8e0d  bin/kind" | sha256sum -c
-          chmod +x bin/kind
+        if [ "${{ inputs.kubectl }}" = true ]; then
+          curl -sfLo bin/kubectl https://dl.k8s.io/release/v1.37.1/bin/linux/amd64/kubectl
+          echo "65691ff77eb6fa44c908b77a1082c9f092c3b9733b5cefabec0d1104890e21a8  bin/kubectl" | sha256sum -c
+          chmod +x bin/kubectl
         fi
         echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"

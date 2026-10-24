@@ -1,6 +1,6 @@
 # Example org sync configuration.
-# Copy to orgs.yaml and customise. Mount into the sync container at
-# /etc/misp-docker/orgs.yaml (see docker-compose.yml).
+# The chart's orgSync.orgs value takes this content; the org-sync Job reads it
+# from the misp-orgs ConfigMap at /etc/misp-docker/orgs.yaml (docs/org-sync.md).
 #
 # All string values support ${ENV_VAR} expansion for secrets injection.
 

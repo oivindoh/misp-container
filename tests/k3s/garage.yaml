@@ -1,0 +1,67 @@
+# garage: S3 on 3900 and its admin API on 3903 (tests/e2e/garage.py), single-node
+# and ephemeral, for the attachments in S3
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: garage-config
+data:
+  garage.toml: |
+    metadata_dir = "/tmp/garage/meta"
+    data_dir = "/tmp/garage/data"
+    db_engine = "sqlite"
+    replication_factor = 1
+    rpc_bind_addr = "[::]:3901"
+    rpc_secret = "0000000000000000000000000000000000000000000000000000000000000000"
+
+    [s3_api]
+    s3_region = "garage"
+    api_bind_addr = "[::]:3900"
+
+    [admin]
+    api_bind_addr = "[::]:3903"
+    admin_token = "s3cr3t-admin-t0ken"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: garage
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: garage
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: garage
+    spec:
+      enableServiceLinks: false
+      containers:
+        - name: garage
+          image: docker.io/dxflrs/garage:v2.4.1
+          env:
+            - name: GARAGE_CONFIG_FILE
+              value: /etc/garage/garage.toml
+          volumeMounts:
+            - name: config
+              mountPath: /etc/garage
+            - name: data
+              mountPath: /tmp/garage
+      volumes:
+        - name: config
+          configMap:
+            name: garage-config
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: garage
+spec:
+  selector:
+    app.kubernetes.io/name: garage
+  ports:
+    - name: s3
+      port: 3900
+    - name: admin
+      port: 3903

@@ -28,10 +28,9 @@ flowchart LR
 ```
 
 The `misp-container` image serves six roles, each a module that starts as `python3 -m
-misp_container.<role>`. Every role first renders `app/Config`
-from this image's MISP, `settings.yaml` and env into a scratch of its own: an emptyDir, or a
-tmpfs in Compose. It imports the GPG key and copies the server certificates from their
-Secrets, then does its own job:
+misp_container.<role>`. Every role first renders `app/Config` from this image's MISP,
+`settings.yaml` and env into an emptyDir of its own. It imports the GPG key and copies the
+server certificates from their Secrets, then does its own job:
 
 | Role | Module | Runs as | Does |
 |------|------------|---------|------|
@@ -66,14 +65,13 @@ The Job is idempotent: run it as often as you like.
 
 ## Startup and footprint
 
-Measured on MISP `3.0_wip` at commit 8888b98 with the Compose stack on a podman machine (arm64, six cores):
+Measured on MISP `3.0_wip` at commit 8888b98 on a podman machine (arm64, six cores):
 
 | What | Time |
 |------|------|
 | Configure Job on an empty database: schema import, `runUpdates`, about 150 settings, admin user, GPG | 22 s |
 | Configure Job on a configured instance | 1 to 3 s |
 | Web or worker pod, from start to serving, once the Job has run | 1 s |
-| Compose stack from `up` to the login page, images present, empty volumes | 41 s |
 
 Idle memory per container, after the first start:
 
@@ -112,11 +110,10 @@ change; the upgrade removes the Job of the previous revision.
 | Helm | Each `helm install` or `helm upgrade` creates the Jobs of its revision and removes those of the previous one. |
 | Argo CD | The Jobs are Sync hooks (`configure` in wave 1, the Deployments in wave 2, `org-sync` in wave 3), recreated on every sync. Argo CD renders the chart as revision 1 every time, so the hook, not the name, makes the new Job. The Deployments do not even roll before the Job succeeded. |
 | Flux | A HelmRelease upgrades the release as `helm upgrade` does. |
-| Compose | The `configure` service is a one-shot; `web` and `worker` depend on its completion. |
 
 ## Scaling
 
 | Deployment | Replicas | Notes |
 |------------|----------|-------|
 | web | any | Sessions live in Redis; org logos and attachments are on a shared claim |
-| worker | any | Redis `BRPOP` gives each job to one worker. A stopping worker gets `WORKER_STOP_GRACE` seconds (default 300) to finish, and the pod's termination grace period is 30 s more (Compose: `stop_grace_period` 330 s); a job on a worker that dies is lost |
+| worker | any | Redis `BRPOP` gives each job to one worker. A stopping worker gets `WORKER_STOP_GRACE` seconds (default 300) to finish, and the pod's termination grace period is 30 s more; a job on a worker that dies is lost |

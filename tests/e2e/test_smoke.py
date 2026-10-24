@@ -3,22 +3,20 @@
     pytest tests/e2e/test_smoke.py --url https://misp.example.com [--key <authkey>]
 
 Without --url the module skips; without --key only the login page is checked.
-The kind test (tests/run-kind-test.sh) runs it against the base on a cluster.
+The lifecycle suite (tests/e2e/test_lifecycle.py) runs it after each install,
+upgrade and rollback.
 """
 
 import pytest
 
-from stack import Stack
+from stack import Misp
 
 
 @pytest.fixture(scope="module")
 def misp(options):
     if not options["url"]:
         pytest.skip("no --url given")
-    s = Stack([])  # no compose files: HTTP only
-    s.base_url = options["url"]
-    s.key = options["key"]
-    return s
+    return Misp(options["url"], options["key"])
 
 
 @pytest.fixture(scope="module")

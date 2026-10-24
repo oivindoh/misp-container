@@ -7,9 +7,8 @@ All defaults live in two places:
 apply_defaults() loads settings.yaml defaults into os.environ so that
 env("MISP_REDIS_HOST") works everywhere without inline defaults.
 
-Docker Compose (env_file:) and the Helm chart (the misp-env ConfigMap and the
-Secrets) load the env files before the container starts, so those values are
-already in os.environ.
+The Helm chart (the misp-env ConfigMap and the Secrets) loads the env files
+before the container starts, so those values are already in os.environ.
 """
 
 import os
@@ -83,7 +82,7 @@ def apply_defaults():
     """Apply runtime defaults that can't live in env files.
 
     MISP setting defaults live in settings.yaml (loaded by the config engine).
-    Container config defaults live in base.env (read by the Helm chart and Compose).
+    Container config defaults live in base.env (read by the Helm chart).
     This function handles the derived variables and the aliases.
     """
     for source, targets in DERIVED.items():

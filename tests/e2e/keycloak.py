@@ -1,8 +1,7 @@
-"""The browser side of a Keycloak login to MISP, run in the sync container of a test stack.
+"""The browser side of a Keycloak login to MISP, run in the toolbox of a release under test.
 
 MISP and the browser reach Keycloak under one name, so the issuer matches only inside
-the compose network. The sync container is read-only like the Kubernetes Jobs, so the
-cookies stay in memory.
+the cluster. The toolbox is read-only like the chart's Jobs, so the cookies stay in memory.
 """
 
 import json
@@ -21,7 +20,7 @@ def open_(opener, url, data=None, accept=None):
         return opener.open(request, timeout=30)
     except urllib.error.HTTPError as e:
         return e
-auth = open_(stay, "http://caddy:8080/users/login?OidcAuth=enable").headers.get("Location", "")
+auth = open_(stay, "http://web:8080/users/login?OidcAuth=enable").headers.get("Location", "")
 print("auth=" + auth)
 login = urllib.parse.urlencode({"username": sys.argv[1], "password": sys.argv[2]}).encode()
 # With organisations on, Keycloak asks for the username first and the password on a second page
@@ -33,7 +32,7 @@ for _ in range(3):
     print("form=" + html.unescape(form.group(1)))
     final = open_(follow, html.unescape(form.group(1)), data=login)
 print(f"final={final.geturl()} {final.status}")
-me = open_(follow, "http://caddy:8080/users/view/me.json", accept="application/json").read()
+me = open_(follow, "http://web:8080/users/view/me.json", accept="application/json").read()
 try:
     print(json.dumps(json.loads(me)))
 except ValueError:
@@ -45,8 +44,8 @@ def login(stack, username: str, password: str) -> dict:
     """Log in through MISP's OidcAuth and Keycloak's form: the flow's output and the user MISP shows.
 
     Mixed auth needs ?OidcAuth=enable to start the flow; the callback lands on
-    http://caddy:8080/users/login.
+    http://web:8080/users/login.
     """
-    _, out = stack.run("sync", "python3", "-c", FLOW, username, password)
+    _, out = stack.run("python3", "-c", FLOW, username, password)
     user = next((json.loads(line) for line in reversed(out.splitlines()) if line.startswith("{")), {})
     return {"out": out, "user": user}

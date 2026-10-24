@@ -1,7 +1,7 @@
-"""The garage S3 store of the test stacks: layout, keys and buckets through its admin API.
+"""The garage S3 store of the stack suites: layout, keys and buckets through its admin API.
 
-tests/docker-compose.test.yml runs garage with the admin API on localhost:3903
-and S3 on localhost:3900 (garage:3900 in the compose network).
+tests/k3s/garage.yaml runs garage. The suite publishes its admin API on
+localhost:3903 and S3 on localhost:3900; in the cluster, S3 is garage:3900.
 """
 
 import json

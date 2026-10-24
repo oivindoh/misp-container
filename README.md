@@ -1,7 +1,7 @@
 # MISP Container
 
-A container image for [MISP](https://www.misp-project.org/) 3.0 on PostgreSQL, built for
-Kubernetes and usable with Compose (podman) for development.
+A container image for [MISP](https://www.misp-project.org/) 3.0 on PostgreSQL, and a Helm
+chart that runs it on Kubernetes.
 
 MISP has not released 3.0 yet: the image runs MISP's `3.0_wip` branch, pinned to a commit,
 and its releases are the pre-releases `3.0.0-wip.N`. A MISP 2.x database comes in through the
@@ -17,8 +17,8 @@ migrate Job. See [docs/misp-3.md](docs/misp-3.md).
 - Kubernetes: the Helm chart `deploy/chart` renders MISP itself; components switch on the
   optional parts (database, cache, ingress or HTTPRoute, network policies, CronJobs for all
   periodic work, PDBs). Each release publishes it to GHCR.
-- Compose: `cd deploy && podman compose up -d`, login `admin@admin.test` /
-  `ChangeMe-Str0ng!Pass#2026` at `http://localhost:8080`.
+- On one machine, k3s in podman runs the chart ([Quick start](#quick-start)). The test suites
+  run it the same way.
 
 ## Images
 
@@ -38,22 +38,34 @@ Image tags are the release versions, `3.0.0-wip.N` while MISP 3.0 is a work in p
 
 ## Quick start
 
+k3s in podman runs the chart on one machine. On macOS, k3s needs the podman machine's rootful
+connection: add `--connection podman-machine-default-root` to each `podman` command.
+
 ```bash
-cd deploy
-podman compose build
-podman compose up -d
-open http://localhost:8080
+podman run -d --name k3s --privileged -p 6443:6443 \
+    docker.io/rancher/k3s:v1.37.1-k3s1 server --disable traefik
+podman exec k3s cat /etc/rancher/k3s/k3s.yaml > k3s.yaml
+export KUBECONFIG=$PWD/k3s.yaml
+cat > values.yaml <<EOF
+env:
+  MISP_BASEURL: http://localhost:8080
+  MISP_UUID: $(python3 -c "import uuid; print(uuid.uuid4())")
+secrets:
+  db: {DB_PASSWORD: $(openssl rand -hex 16)}
+  app: {MISP_REDIS_PASSWORD: $(openssl rand -hex 16), GNUPG_PASSWORD: $(openssl rand -hex 16), SECURITY_SALT: $(openssl rand -hex 32)}
+  admin: {ADMIN_PASSWORD: $(openssl rand -hex 16)}
+postgres: {enabled: true}
+redis: {enabled: true}
+attachments: {accessMode: ReadWriteOnce}
+EOF
+helm install misp oci://ghcr.io/oivindoh/charts/misp --devel \
+    --namespace misp --create-namespace -f values.yaml
+kubectl -n misp port-forward svc/web 8080:8080
 ```
 
-Default login: `admin@admin.test` / `ChangeMe-Str0ng!Pass#2026`.
-
-`deploy/docker-compose.yml` is the single-host development stack: the same images and
-entrypoints, named volumes instead of claims, a GPG key that the configure container generates
-on first start, and no CronJobs: run periodic tasks on demand
-(see [Periodic tasks](docs/kubernetes.md#periodic-tasks)). Values come from
-`deploy/chart/files/*.env`, the chart's defaults, with `deploy/compose.env` and
-`deploy/compose-secrets.env` on top.
-`MISP_IMAGE_TAG` selects the image tag.
+Log in at `http://localhost:8080` as `admin@admin.test`, with the `ADMIN_PASSWORD` of
+`values.yaml`. `podman rm -f k3s` deletes the cluster. From a checkout, `mise run build` builds
+the images; [DEVELOPING.md](DEVELOPING.md) shows how a test suite runs them on k3s.
 
 ## Essential variables
 

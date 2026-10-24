@@ -4,7 +4,7 @@
 Usage: generate_agents_md.py [--check]
 
 Every line comes from the tree: module docstrings, the first comment block of
-a chart template, compose file or script, the objects the chart renders, the
+a chart template, test manifest or script, the objects the chart renders, the
 comments of the chart's values, the stage comments of the Dockerfile, the task runner's tasks, the upstream guard's
 checks, the mise tasks, the CI jobs and the header comments of the workflows.
 To change a line, change its source
@@ -88,17 +88,22 @@ def docs() -> str:
 def image() -> str:
     stages = [(m.group(2), m.group(3)) for m in
               re.finditer(r"^# Stage (\d+): ([\w-]+) - (.+)$", (REPO / "Dockerfile").read_text(), re.M)]
-    roles = []
-    for service, spec in yaml.safe_load((REPO / "deploy/docker-compose.yml").read_text())["services"].items():
-        command = spec.get("command")
-        if isinstance(command, list) and command[:2] == ["python3", "-m"] and command[2].startswith("misp_container."):
-            module = REPO / "files" / (command[2].replace(".", "/") + ".py")
-            roles.append((f"`{service}`", f"`{' '.join(command)}`", docstring(module)))
+    workloads: dict[str, list[str]] = {}
+    for _, doc in chart.render(every_component=True):
+        spec = chart.pod_spec(doc)
+        for container in [*(spec or {}).get("initContainers", []), *(spec or {}).get("containers", [])]:
+            args = container.get("args") or []
+            if args[:2] == ["python3", "-m"] and args[2].startswith("misp_container."):
+                name = re.sub(r"-\d+$", "-<revision>", doc["metadata"]["name"])
+                workloads.setdefault(args[2], []).append(f"{doc['kind']} `{name}`")
+    roles = [(f"`python3 -m {module}`", ", ".join(dict.fromkeys(found)),
+              docstring(REPO / "files" / (module.replace(".", "/") + ".py")))
+             for module, found in sorted(workloads.items())]
     return ("## Image\n\nThe `Dockerfile` builds the images from these stages:\n\n"
             + table(("Stage", "What it holds"), stages)
             + "\n\nEach role of the main image is a module of the package, run under the image's tini "
-            "entrypoint; the Compose services start them so:\n\n"
-            + table(("Service", "Command", "Does"), roles))
+            "entrypoint; the chart's workloads start them so:\n\n"
+            + table(("Command", "Run by, every component on", "Does"), roles))
 
 
 def library() -> str:
@@ -128,30 +133,6 @@ def kubernetes() -> str:
             + "\n\n" + table(("Template", "Renders, every component on", "Note"), templates)
             + "\n\nValues:\n\n" + table(("Value", "Is"), values)
             + "\n\nComponents, each off by default:\n\n" + table(("Component", "Adds"), components))
-
-
-def compose() -> str:
-    rows, pending = [], []
-    in_services = False
-    for line in (REPO / "deploy/docker-compose.yml").read_text().splitlines():
-        if line.startswith("services:"):
-            in_services = True
-            continue
-        if in_services and line and not line.startswith(" "):
-            break
-        if not in_services:
-            continue
-        if line.startswith("  #"):
-            text = line.strip().lstrip("#").strip().strip("- ").strip()
-            if text:
-                pending.append(text)
-        elif re.match(r"^  [\w-]+:$", line):
-            rows.append((f"`{line.strip()[:-1]}`", " ".join(pending)))
-            pending = []
-        elif not line.startswith("    #"):
-            pending = [] if re.match(r"^  \S", line) else pending
-    return ("## Compose: `deploy/docker-compose.yml`\n\n" + comment_block(REPO / "deploy/docker-compose.yml")
-            + "\n\n" + table(("Service", "Comment"), rows))
 
 
 def settings() -> str:
@@ -209,12 +190,11 @@ def tests() -> str:
     e2e = [(f"`{p.name}`", docstring(p)) for p in sorted((REPO / "tests/e2e").glob("*.py"))]
     unit = [(f"`{p.name}`", docstring(p)) for p in sorted((REPO / "tests").glob("test_*.py"))]
     other = [(f"`{rel(p)}`", comment_block(p)) for p in sorted((REPO / "tests").glob("*.sh"))]
-    other += [(f"`{rel(p)}`", comment_block(p)) for p in sorted((REPO / "tests").glob("docker-compose*.yml"))]
-    other += [(f"`{rel(p)}`", comment_block(p)) for p in sorted((REPO / "tests/kind").glob("*.yaml"))]
-    return ("## Tests: `tests/`\n\nThe stack suites and the smoke test, in pytest (`tests/e2e/`):\n\n"
+    other += [(f"`{rel(p)}`", comment_block(p)) for p in sorted((REPO / "tests/k3s").glob("*.yaml"))]
+    return ("## Tests: `tests/`\n\nThe stack suites, their harness and the smoke test, in pytest (`tests/e2e/`):\n\n"
             + table(("Module", "Does"), e2e)
             + "\n\nUnit tests (`tests/`, no containers):\n\n" + table(("Module", "Tests"), unit)
-            + "\n\nStack files and runners:\n\n" + table(("File", "Is"), other))
+            + "\n\nValues and manifests of the stack suites:\n\n" + table(("File", "Is"), other))
 
 
 def tasks() -> str:
@@ -250,7 +230,7 @@ def workflows() -> str:
 
 
 def generate() -> str:
-    sections = [docs(), image(), library(), periodic(), kubernetes(), compose(), settings(), upstream(), patches(),
+    sections = [docs(), image(), library(), periodic(), kubernetes(), settings(), upstream(), patches(),
                 scripts(),
                 tests(), tasks(), ci(), workflows()]
     head = ("# AGENTS.md\n\nA map of this repository for agents, generated by `scripts/generate_agents_md.py` from "

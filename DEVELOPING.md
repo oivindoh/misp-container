@@ -2,8 +2,8 @@
 
 ## TL;DR
 
-- `mise run test` for the unit tests, `mise run test-integration` for the Compose suite,
-  `mise run test-sync` for the two-instance sync suite. Podman runs the containers.
+- `mise run test` for the unit tests. `mise run build` builds the images, and each stack suite
+  (`mise run test-integration` and the others) installs the chart on a k3s cluster in podman.
 - Settings: curated defaults in `files/misp-config/settings.yaml`, the generated catalogue in
   `settings-upstream.yaml` (`mise run settings-update`).
 - New MISP release: the tracking workflow opens a PR with the bump, `files/composer.lock`,
@@ -28,7 +28,7 @@ mise run test          # unit tests, the chart lint and every chart render valid
 
 `.github/workflows/track-misp-releases.yaml` checks upstream daily. For a new release it
 bumps `CORE_TAG`, resolves `files/composer.lock` and `files/requirements-misp.txt` for that
-release, builds the image, starts the Compose stack, regenerates the settings catalogue from
+release, builds the images, installs the chart on k3s, regenerates the settings catalogue from
 that MISP, and opens a PR with all four changes. CI then builds, scans and runs every suite on the PR. Three checks warn
 about a change in MISP:
 
@@ -61,7 +61,7 @@ revisit.
 | `cakelog-streams` | app/Config/bootstrap.default.php | files/misp_container/init.py LOG_BLOCK | configures a CakeLog file stream that the logging block does not drop |
 | `shell-streams` | app/Lib/cakephp/lib/Cake/Console/Shell.php | files/misp_container/init.py LOG_BLOCK | checks other stream names before it adds its console streams |
 | `relayed-files` | app/Model, app/Lib, app/Controller, app/Console, app/Plugin | files/misp_container/logrelay.py FILES | writes a new file under app/tmp/logs, or stops writing one the relay follows |
-| `image-paths` | app/Model/Server.php, app/View/Helper/OrgImgHelper.php | deploy/chart/templates/_helpers.tpl misp.appVolumeMounts, deploy/docker-compose.yml | uploads org logos or custom images to, or reads them from, a directory the volumes do not mount |
+| `image-paths` | app/Model/Server.php, app/View/Helper/OrgImgHelper.php | deploy/chart/templates/_helpers.tpl misp.appVolumeMounts | uploads org logos or custom images to, or reads them from, a directory the volumes do not mount |
 | `python-requirements` | requirements.txt | files/requirements-misp.txt | needs a Python package, or a version of one, that the pins do not give (mise run misp-requirements) |
 | `log-block-php` | php | files/misp_container/init.py LOG_BLOCK | cannot run the logging block, in either format |
 <!-- end generated -->
@@ -130,8 +130,7 @@ without the suffix.
 2. Computes the next tag from the `Dockerfile` pin and the tags that exist.
 3. For a kind, reads the chart version that the previous release published, from the
    `Chart.yaml` of its tag, and raises the part the kind names.
-4. Sets `version` and `appVersion` in `deploy/chart/Chart.yaml` and the `MISP_IMAGE_TAG`
-   default of the Compose files.
+4. Sets `version` and `appVersion` in `deploy/chart/Chart.yaml`.
 5. Shows the plan and the diff. On a yes it commits and tags; on a no it restores the files.
 
 Publish the release. `--atomic` lands the branch and the tag together:
@@ -201,7 +200,7 @@ container, which carries each setting's description. The image never applies tho
 documents them and makes every MISP setting overridable through its derived env var.
 
 ```bash
-mise run settings-update              # build the stack, regenerate, tear down
+mise run settings-update              # build the images, install the chart on k3s, regenerate, delete the cluster
 mise run settings-update -- --skip-build
 mise run composer-lock                # resolve files/composer.lock for the current CORE_TAG
 mise run misp-requirements           # resolve files/requirements-misp.txt for the current CORE_TAG

@@ -57,34 +57,42 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # Build the new version, start it, and regenerate the settings catalogue
-      # from what this MISP defines, so the PR carries the settings diff and
-      # CI's strict coverage check can pass.
-      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      # Resolve the new version's dependencies first: the image build installs
+      # exactly files/composer.lock and fails while it lags upstream. docker's
+      # own builder keeps the composer-lock image in docker for its run.
+      - name: Resolve the dependencies
         if: steps.misp.outputs.changed == 'true' && steps.bump.outputs.skip != 'true'
-      # Warm the layer cache the CI job fills (scope misp): the extension stage
-      # does not change between MISP releases, only the source and later stages rebuild.
-      - name: Build misp image (cached)
-        if: steps.misp.outputs.changed == 'true' && steps.bump.outputs.skip != 'true'
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
-        with:
-          context: .
-          target: final
-          load: true
-          # The tag is irrelevant: compose builds its own; this run only fills the local layer cache
-          tags: misp-container:cache-warm
-          cache-from: type=gha,scope=misp
-      - name: Regenerate the settings catalogue
-        if: steps.misp.outputs.changed == 'true' && steps.bump.outputs.skip != 'true'
-        timeout-minutes: 60
         env:
-          COMPOSE_CMD: docker compose
           CONTAINER_CMD: docker
         run: |
           pip install --quiet pyyaml uv
           scripts/update-composer-lock.sh
           python3 scripts/update_misp_requirements.py
-          python3 scripts/update_settings.py --stack --write --summary "$RUNNER_TEMP/settings-summary.md"
+
+      # Build the new version from the CI job's layer caches, install it on k3s,
+      # and regenerate the settings catalogue from what this MISP defines, so the
+      # PR carries the settings diff and CI's strict coverage check can pass.
+      - name: Build the images
+        if: steps.misp.outputs.changed == 'true' && steps.bump.outputs.skip != 'true'
+        uses: ./.github/actions/load-images
+        with:
+          misp: ghcr.io/${{ github.repository }}
+          caddy: ghcr.io/${{ github.repository }}-caddy
+          modules: ghcr.io/${{ github.repository }}-modules
+          tag: settings
+      - name: Install helm and kubectl
+        if: steps.misp.outputs.changed == 'true' && steps.bump.outputs.skip != 'true'
+        uses: ./.github/actions/install-helm
+        with:
+          kubectl: "true"
+      - name: Regenerate the settings catalogue
+        if: steps.misp.outputs.changed == 'true' && steps.bump.outputs.skip != 'true'
+        timeout-minutes: 60
+        env:
+          CONTAINER_CMD: docker
+          MISP_IMAGE_TAG: settings
+          TMPDIR: ${{ runner.temp }}
+        run: python3 scripts/update_settings.py --stack --skip-build --write --summary "$RUNNER_TEMP/settings-summary.md"
 
       - name: Commit and open PR
         if: steps.misp.outputs.changed == 'true' && steps.bump.outputs.skip != 'true'

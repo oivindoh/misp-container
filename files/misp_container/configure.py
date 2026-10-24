@@ -1,7 +1,6 @@
 """One-shot MISP configuration: schema, settings, admin user, GPG, auth.
 
-Runs in the configure Job (Kubernetes) or the configure service (Compose)
-before any web or worker starts. Sets MISP.live=true when done; web and
+Runs in the configure Job before any web or worker starts. Sets MISP.live=true when done; web and
 worker entrypoints wait for that flag.
 """
 
