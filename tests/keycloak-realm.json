@@ -5,20 +5,24 @@
   "roles": {
     "client": {
       "misp": [
-        {"name": "read-only"},
-        {"name": "user"},
-        {"name": "publisher"},
-        {"name": "org-admin"},
-        {"name": "admin"}
+        {
+          "name": "read-only"
+        },
+        {
+          "name": "user"
+        },
+        {
+          "name": "publisher"
+        },
+        {
+          "name": "org-admin"
+        },
+        {
+          "name": "admin"
+        }
       ]
     }
   },
-  "groups": [
-    {
-      "name": "test-org",
-      "attributes": {"organization": ["2399b00e-b7f4-4fdb-aeb9-03d28e83a210"]}
-    }
-  ],
   "clients": [
     {
       "clientId": "misp",
@@ -29,8 +33,12 @@
       "secret": "misp-oidc-test-secret",
       "standardFlowEnabled": true,
       "directAccessGrantsEnabled": false,
-      "redirectUris": ["http://caddy:8080/users/login"],
-      "webOrigins": ["+"],
+      "redirectUris": [
+        "http://caddy:8080/users/login"
+      ],
+      "webOrigins": [
+        "+"
+      ],
       "protocol": "openid-connect",
       "protocolMappers": [
         {
@@ -47,23 +55,19 @@
             "userinfo.token.claim": "true",
             "introspection.token.claim": "true"
           }
-        },
-        {
-          "name": "organization",
-          "protocol": "openid-connect",
-          "protocolMapper": "oidc-usermodel-attribute-mapper",
-          "config": {
-            "user.attribute": "organization",
-            "claim.name": "organization",
-            "jsonType.label": "String",
-            "multivalued": "false",
-            "aggregate.attrs": "false",
-            "id.token.claim": "true",
-            "access.token.claim": "true",
-            "userinfo.token.claim": "true",
-            "introspection.token.claim": "true"
-          }
         }
+      ],
+      "defaultClientScopes": [
+        "web-origins",
+        "acr",
+        "roles",
+        "organization",
+        "profile",
+        "basic",
+        "email"
+      ],
+      "optionalClientScopes": [
+        "offline_access"
       ]
     }
   ],
@@ -75,10 +79,41 @@
       "firstName": "Oidc",
       "lastName": "Tester",
       "enabled": true,
-      "credentials": [{"type": "password", "value": "oidc-test-password", "temporary": false}],
-      "groups": ["/test-org"],
-      "realmRoles": ["default-roles-misp"],
-      "clientRoles": {"misp": ["user", "org-admin"]}
+      "credentials": [
+        {
+          "type": "password",
+          "value": "oidc-test-password",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "default-roles-misp"
+      ],
+      "clientRoles": {
+        "misp": [
+          "user",
+          "org-admin"
+        ]
+      }
+    }
+  ],
+  "organizationsEnabled": true,
+  "organizations": [
+    {
+      "name": "OIDC Team",
+      "alias": "oidc-team",
+      "enabled": true,
+      "domains": [
+        {
+          "name": "example.com"
+        }
+      ],
+      "members": [
+        {
+          "username": "oidc",
+          "membershipType": "MANAGED"
+        }
+      ]
     }
   ]
 }

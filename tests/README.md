@@ -83,7 +83,7 @@ The full MISP stack in Compose, checked feature by feature.
 | Defaults version | The configure step records the image version the pods wait for |
 | S3 attachment storage | Garage S3 bootstrap, upload, download, bucket verification |
 | Custom auth | Header login (200), no-header redirect (302) |
-| OIDC login | Redirect to Keycloak, its login form, the callback, the user's email, the highest client role, the organisation from the claim, mixed auth |
+| OIDC login | Redirect to Keycloak, its login form, the callback, the user's email, the highest client role, the team of the user's Keycloak organisation, mixed auth |
 | Task runner | API tasks, the index tasks without items, the console tasks `periodic-summary` and `check-user-validity`, a missing `ADMIN_KEY` |
 | Org sync | Org/user/tag/server creation, server authkey (DB verify), sync user authkey prefix, taxonomy enable, disabled user, an unnamed local user disabled and the OIDC user left enabled, a break-glass password login, custom warninglist create/update, warm run idempotency |
 | Metrics exporter | Endpoints, core metrics, no scrape errors, a waiting job in `misp_jobs_queued` and back to 0, `misp_scheduled_tasks_enabled` |
@@ -95,7 +95,7 @@ The full MISP stack in Compose, checked feature by feature.
 **Files:**
 - `e2e/test_integration.py` -- the suite, in the order above; later sections use the state earlier ones leave
 - `docker-compose.test.yml` -- overlay on `deploy/docker-compose.yml` (test ports, env, Garage S3, Keycloak). `MISP_TEST_ENV` names one more env file for the MISP containers, layered last; `none.env` is its empty default
-- `keycloak-realm.json` -- the Keycloak realm: the MISP client, its roles and mappers, a group with an organisation, a user
+- `keycloak-realm.json` -- the Keycloak realm: the MISP client with its roles and the `roles` mapper, an organisation, and a user in it
 - `test-compose.env` -- test env overrides (BASE_URL, ADMIN_EMAIL, etc.)
 - `test-compose-secrets.env` -- test secrets (passwords, Redis key), layered over `deploy/chart/files/secrets-*.env`
 - `garage.toml` -- Garage S3 config for attachment testing

@@ -461,11 +461,15 @@ def open_(opener, url, data=None, accept=None):
         return e
 auth = open_(stay, "http://caddy:8080/users/login?OidcAuth=enable").headers.get("Location", "")
 print("auth=" + auth)
-page = open_(follow, auth).read().decode()
-form = html.unescape(re.search(r'<form id="kc-form-login"[^>]*action="([^"]+)"', page).group(1))
-print("form=" + form)
 login = urllib.parse.urlencode({"username": "oidc", "password": "oidc-test-password"}).encode()
-final = open_(follow, form, data=login)
+# With organisations on, Keycloak asks for the username first and the password on a second page
+final = open_(follow, auth)
+for _ in range(3):
+    form = re.search(r'<form id="kc-form-login"[^>]*action="([^"]+)"', final.read().decode())
+    if not form:
+        break
+    print("form=" + html.unescape(form.group(1)))
+    final = open_(follow, html.unescape(form.group(1)), data=login)
 print(f"final={final.geturl()} {final.status}")
 me = open_(follow, "http://caddy:8080/users/view/me.json", accept="application/json").read()
 try:
@@ -477,6 +481,8 @@ except ValueError:
 
 @pytest.fixture(scope="module")
 def oidc(stack):
+    # The team of the user's Keycloak organisation, named after its alias
+    stack.api("POST", "/admin/organisations/add", stack.key, {"Organisation": {"name": "oidc-team", "local": True}})
     # Mixed auth needs ?OidcAuth=enable to start the flow; Keycloak's login form
     # takes the credentials, and the callback lands on http://caddy:8080/users/login
     _, out = stack.run("sync", "python3", "-c", OIDC_FLOW)
@@ -505,9 +511,10 @@ def test_oidc_highest_client_role_wins(oidc):
     assert oidc["user"].get("Role", {}).get("name") == "Org Admin"
 
 
-def test_oidc_organisation_from_the_claim(oidc):
-    # The group's organization attribute holds Test Org's UUID; no default organisation is set
-    assert oidc["user"].get("Organisation", {}).get("name") == "Test Org"
+def test_oidc_organisation_from_the_keycloak_organisation(oidc):
+    # The organization claim lists the alias of the user's Keycloak organisation; no default
+    # organisation is set
+    assert oidc["user"].get("Organisation", {}).get("name") == "oidc-team"
 
 
 def test_oidc_mixed_auth_keeps_the_password_form(stack, oidc):

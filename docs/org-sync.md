@@ -6,14 +6,14 @@
   groups and sync servers. It declares only the users that do not log in through the identity
   provider: sync users, service accounts and break-glass accounts.
 - People log in through Keycloak or another OpenID Connect provider. MISP creates each account
-  at the first login, in the organisation whose UUID the token sends.
+  at the first login, in the team named after the user's Keycloak organisation.
 - A run disables the local accounts and the servers that the file does not name. It leaves
   every account that the identity provider backs.
 - A run is idempotent, expands `${VAR}` in every value, and takes the configure lock.
 
 ```yaml
 teams:
-  - name: "CERT-Example"
+  - name: "cert-example"
     uuid: "2399b00e-b7f4-4fdb-aeb9-03d28e83a210"
     sector: "Government"
     users:
@@ -70,11 +70,11 @@ An account without a `password` gets a random one: it works through its API key 
 
 ## Keycloak
 
-People log in through Keycloak ([configuration.md](configuration.md#keycloak)). OidcAuth
-puts each user in the organisation whose UUID the `organization` claim sends, from the
-user's Keycloak group. Give that group the UUID of the team in `orgs.yaml`, so the org sync
-and the logins agree on the organisation. A UUID only finds an organisation: OidcAuth never
-creates or renames one, so `orgs.yaml` stays the one source of organisations.
+People log in through Keycloak ([configuration.md](configuration.md#keycloak)). OidcAuth puts
+each user in the MISP organisation named after the alias of the user's Keycloak organisation.
+So name each team in `orgs.yaml` after its Keycloak organisation's alias, such as
+`cert-example`: an alias holds no spaces. OidcAuth only finds that organisation and never
+renames it, so the org sync keeps its description, sector and the rest.
 
 Leave people out of `orgs.yaml`. OidcAuth finds an account by its OIDC subject, then by its
 email, and refuses an account that has no subject yet unless `OidcAuth.allow_email_linking`

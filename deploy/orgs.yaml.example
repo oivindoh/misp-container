@@ -36,7 +36,8 @@ tags:
 
 teams:
   - uuid: 6959402f-4acd-49bb-be1a-1f30e9064d89
-    name: Example Team
+    # With Keycloak, the alias of the team's Keycloak organisation (docs/org-sync.md)
+    name: example-team
     description: An example organisation
     sector: academic
     default_role: User
