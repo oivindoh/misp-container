@@ -205,7 +205,7 @@ def test_every_component_renders_and_the_default_renders_none():
     for component in chart.components():
         assert chart.render_text(*chart.component_sets(component)) != chart.render_text(), (
             f"{component}.enabled=true changes nothing in the render")
-    assert not any(d["kind"] in ("StatefulSet", "CronJob", "Ingress", "HTTPRoute", "PodDisruptionBudget", "NetworkPolicy")
+    assert not any(d["kind"] in ("StatefulSet", "CronJob", "Ingress", "HTTPRoute", "NetworkPolicy")
                    for d in chart.objects())
 
 

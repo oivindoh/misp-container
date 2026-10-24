@@ -150,10 +150,6 @@ networkPolicy:
   ingressNamespace: haproxy-controller
   monitoringNamespace: monitoring
 
-# PodDisruptionBudgets for web and worker (maxUnavailable: 1).
-pdb:
-  enabled: false
-
 # The periodic tasks as CronJobs: tasks maps a task to its schedule, workflows a workflow ID to
 # its schedule. API tasks need ADMIN_KEY in secrets.admin and dispatch nothing while maxQueued
 # jobs or more wait.
