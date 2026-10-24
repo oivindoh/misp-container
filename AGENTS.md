@@ -59,6 +59,7 @@ The roles, the task runner and the Jobs share this package; it is `/opt/misp_con
 | `configure.py` | One-shot MISP configuration: schema, settings, admin user, GPG, auth. |
 | `db.py` | Database access for the entrypoints, on PostgreSQL. |
 | `env.py` | Environment variable handling. |
+| `exporter.py` | The metrics exporter's HTTP server: /metrics, and /healthz and /ready for the probes. |
 | `housekeeping.py` | Nightly deletes in MISP's jobs, logs and audit_logs tables. |
 | `init.py` | Per-pod preparation: tmp directories, app/Config rendering, GPG key import. |
 | `log.py` | Logging setup for MISP container entrypoints. |

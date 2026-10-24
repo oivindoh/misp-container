@@ -80,7 +80,7 @@ Idle memory per container, after the first start:
 | Container | Idle RSS | Note |
 |-----------|----------|------|
 | web | 42 MB | Grows with the PHP-FPM children under load (`PHP_FCGI_CHILDREN`, `PHP_MEMORY_LIMIT` per request) |
-| worker | 400 MB | 21 PHP worker processes (`NUM_WORKERS_*`) |
+| worker | 380 MB | 21 PHP worker processes (`NUM_WORKERS_*`) |
 | modules | 140 MB | |
 | metrics | 28 MB | |
 | caddy | 11 MB | |

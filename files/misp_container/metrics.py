@@ -16,9 +16,8 @@ import urllib.parse
 import urllib.request
 
 from functools import lru_cache
-from http.server import BaseHTTPRequestHandler, HTTPServer
 
-from . import WORKER_QUEUES, db
+from . import WORKER_QUEUES, db, exporter
 from .env import apply_defaults
 from .log import get as getlog, setup as setup_logging
 
@@ -628,39 +627,8 @@ def collect_all() -> str:
     return "\n\n".join(parts) + "\n"
 
 
-# -- The exporter ----------------------------------------------------------------
-
-PORT = 9191
-
-
-class MetricsHandler(BaseHTTPRequestHandler):
-    """Handle /metrics, /healthz, /ready endpoints."""
-
-    def do_GET(self):
-        if self.path == "/metrics":
-            body = collect_all().encode("utf-8")
-            self.send_response(200)
-            self.send_header("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
-        elif self.path in ("/healthz", "/ready"):
-            self.send_response(200)
-            self.send_header("Content-Type", "text/plain")
-            self.end_headers()
-            self.wfile.write(b"ok\n")
-        else:
-            self.send_response(404)
-            self.send_header("Content-Type", "text/plain")
-            self.end_headers()
-            self.wfile.write(b"not found\n")
-
-    def log_message(self, format, *args):
-        """Suppress per-request access logs (noisy with Prometheus scraping)."""
-
-
 def main():
-    """The metrics role: the exporter on PORT."""
+    """The metrics role: the exporter (misp_container.exporter)."""
     setup_logging("metrics")
     log.info("MISP metrics exporter starting")
     apply_defaults()
@@ -670,19 +638,7 @@ def main():
     # server, so a scrape and the probes never wait for them
     threading.Thread(target=run_network_checks, name="partner-checks", daemon=True).start()
 
-    # Try IPv6 dual-stack first (K8s), fall back to IPv4 (Docker)
-    try:
-        HTTPServer.address_family = socket.AF_INET6
-        server = HTTPServer(("::", PORT), MetricsHandler)
-    except OSError:
-        HTTPServer.address_family = socket.AF_INET
-        server = HTTPServer(("0.0.0.0", PORT), MetricsHandler)
-    log.info("serving metrics on :%d/metrics", PORT)
-    try:
-        server.serve_forever()
-    except KeyboardInterrupt:
-        log.info("shutting down")
-        server.shutdown()
+    exporter.serve(collect_all)
 
 
 if __name__ == "__main__":
