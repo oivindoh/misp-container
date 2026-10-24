@@ -11,8 +11,9 @@ from . import admin
 from . import cake
 from . import db
 from .config import CONDITIONAL_CONFIG_PHP_GROUPS, SettingsCache, apply_settings_fast, load_settings_yaml
-from .env import env
-from .log import get as getlog
+from .env import apply_defaults, env
+from .init import prepare
+from .log import get as getlog, setup as setup_logging
 
 log = getlog("configure")
 
@@ -127,3 +128,17 @@ def run() -> None:
         record_run(False)
         raise
     record_run(True)
+
+
+def main() -> None:
+    """The configure role: runs once per rollout, before web and worker pods serve."""
+    setup_logging("configure")
+    log.info("MISP configure starting")
+    apply_defaults()
+    prepare()
+    run()
+    log.info("MISP configure complete")
+
+
+if __name__ == "__main__":
+    main()

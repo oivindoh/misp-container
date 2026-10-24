@@ -3,7 +3,7 @@
 # Non-root MISP 2.5 Docker image
 #
 # Build targets:
-#   final    PHP-FPM, workers, configure, org sync, metrics (one image, entrypoint per role)
+#   final    PHP-FPM, workers, configure, org sync, metrics (one image, a module per role)
 #   caddy    static files + FastCGI reverse proxy (scratch)
 #   modules  misp-modules (distroless)
 # Build through compose: podman compose build
@@ -288,13 +288,8 @@ RUN for dir in app/files/scripts/tmp app/files/certs app/files/terms app/files/i
         mkdir -p /var/www/MISP/$dir && chown ${MISP_UID}:${MISP_GID} /var/www/MISP/$dir && chmod 0770 /var/www/MISP/$dir; \
     done
 
-# Copy Python entrypoint package and scripts
+# The Python package: each role starts as python3 -m misp_container.<role>
 COPY --chown=${MISP_UID}:${MISP_GID} files/misp_container/ /opt/misp_container/
-COPY --chown=${MISP_UID}:${MISP_GID} --chmod=0550 files/entrypoint-configure.py /entrypoint-configure.py
-COPY --chown=${MISP_UID}:${MISP_GID} --chmod=0550 files/entrypoint-web.py /entrypoint-web.py
-COPY --chown=${MISP_UID}:${MISP_GID} --chmod=0550 files/entrypoint-worker.py /entrypoint-worker.py
-COPY --chown=${MISP_UID}:${MISP_GID} --chmod=0550 files/entrypoint-sync.py /entrypoint-sync.py
-COPY --chown=${MISP_UID}:${MISP_GID} --chmod=0550 files/entrypoint-metrics.py /entrypoint-metrics.py
 
 # Config templates and settings
 COPY --chown=${MISP_UID}:${MISP_GID} files/php-fpm-pool.conf /etc/misp-docker/php-fpm-pool.conf
@@ -315,7 +310,7 @@ USER ${MISP_UID}
 EXPOSE 9002
 
 ENTRYPOINT ["/usr/bin/tini", "--"]
-CMD ["python3", "/entrypoint-web.py"]
+CMD ["python3", "-m", "misp_container.web"]
 
 # =============================================================================
 # Stage 8: caddy - Static files + FastCGI reverse proxy (scratch image)

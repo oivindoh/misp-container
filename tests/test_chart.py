@@ -39,7 +39,7 @@ def test_every_task_has_a_cronjobs_entry_and_each_scheduled_one_a_cronjob():
     # workflow runs per workflow ID (cronjobs.workflows)
     tasks = yaml.safe_load((chart.CHART / "values.yaml").read_text())["cronjobs"]["tasks"]
     assert set(tasks) == set(task.TASKS) - {task.WORKFLOW_TASK}
-    commands = [chart.pod_spec(d)["containers"][0]["command"] for d in kinds(every_component=True)["CronJob"]]
+    commands = [chart.pod_spec(d)["containers"][0]["args"] for d in kinds(every_component=True)["CronJob"]]
     scheduled = {c[c.index("misp_container.task") + 1] for c in commands if "misp_container.task" in c}
     assert scheduled == {name for name, schedule in tasks.items() if schedule}
 
@@ -60,7 +60,7 @@ def test_the_backlog_limit_is_the_task_runners_default():
 
 def test_a_workflow_cronjob_passes_its_id():
     cronjob = chart.find("CronJob", "workflow-7", "cronjobs.enabled=true", "cronjobs.workflows.7=0 4 * * *")
-    assert chart.pod_spec(cronjob)["containers"][0]["command"][-2:] == ["workflow", "7"]
+    assert chart.pod_spec(cronjob)["containers"][0]["args"][-2:] == ["workflow", "7"]
 
 
 def test_the_app_version_is_the_image_tag_the_compose_files_default_to():

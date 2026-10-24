@@ -57,7 +57,7 @@ NOT_MISP_PARTS = {"cakephp", "Vendor"}
 
 # The modules that call MISP's HTTP API; every route-like string in them is a MISP route
 API_CALLERS = ("misp_container/api.py", "misp_container/sync.py", "misp_container/task.py",
-               "misp_container/metrics.py", "entrypoint-sync.py")
+               "misp_container/metrics.py")
 ROUTE = re.compile(r"^/([a-z][A-Za-z_]*(?:/[a-z][A-Za-z_]*){0,2})(?:[/?.{]|$)")
 
 # Files MISP writes under app/tmp/logs that the relay leaves alone, with the reason

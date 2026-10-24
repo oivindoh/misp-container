@@ -67,7 +67,7 @@ services:
   # -- One-shot configure: schema, settings, admin, GPG, sets MISP.live -----
   configure:
     <<: [*misp-admin, *misp-scratch]
-    command: ["python3", "/entrypoint-configure.py"]
+    command: ["python3", "-m", "misp_container.configure"]
     volumes:
       - misp-files-scripts-tmp:/var/www/MISP/app/files/scripts/tmp
       - misp-files-certs:/var/www/MISP/app/files/certs
@@ -86,7 +86,7 @@ services:
   # -- PHP-FPM (scale freely: podman compose up -d --scale web=2) ------------
   web:
     <<: [*misp-common, *misp-scratch]
-    command: ["python3", "/entrypoint-web.py"]
+    command: ["python3", "-m", "misp_container.web"]
     volumes:
       - misp-files-scripts-tmp:/var/www/MISP/app/files/scripts/tmp
       - misp-files-certs:/var/www/MISP/app/files/certs
@@ -122,7 +122,7 @@ services:
   # -- Background workers -------------------------------------------------
   worker:
     <<: [*misp-common, *misp-scratch]
-    command: ["python3", "/entrypoint-worker.py"]
+    command: ["python3", "-m", "misp_container.worker"]
     # The entrypoint lets a running job finish for WORKER_STOP_GRACE seconds (default 300)
     stop_grace_period: 330s
     volumes:
@@ -144,7 +144,7 @@ services:
   # -- Org sync (runs once after MISP is ready, then exits) ----------------
   sync:
     <<: *misp-admin
-    command: ["python3", "/entrypoint-sync.py"]
+    command: ["python3", "-m", "misp_container.sync"]
     environment:
       SYNC_BASE_URL: http://caddy:8080
     # volumes:
@@ -169,7 +169,7 @@ services:
   # -- Prometheus metrics exporter ------------------------------------------
   metrics:
     <<: *misp-common
-    command: ["python3", "/entrypoint-metrics.py"]
+    command: ["python3", "-m", "misp_container.metrics"]
     ports:
       - "9191:9191"
     depends_on:

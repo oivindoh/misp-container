@@ -9,7 +9,7 @@ migrate Job. See [docs/misp-3.md](docs/misp-3.md).
 
 ## TL;DR
 
-- One image, one entrypoint per role: a `configure` Job sets the database and settings up,
+- One image, one module per role: a `configure` Job sets the database and settings up,
   then web and worker pods start and scale freely. Two small extra images: caddy and modules.
 - Non-root (UID 1000), read-only root filesystem, all capabilities dropped, sessions in Redis.
 - Every MISP setting has an env var (`MISP.redis_host` -> `MISP_REDIS_HOST`). Curated defaults

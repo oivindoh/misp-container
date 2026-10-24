@@ -288,7 +288,7 @@ spec:
           containers:
             - name: {{ $module }}
               {{- include "misp.image" $root | nindent 14 }}
-              command: ["/usr/bin/tini", "--", "python3", "-m", "misp_container.{{ $module }}", {{ .task | quote }}{{ range .args }}, {{ . | quote }}{{ end }}]
+              args: ["python3", "-m", "misp_container.{{ $module }}", {{ .task | quote }}{{ range .args }}, {{ . | quote }}{{ end }}]
               {{- if eq $shape "console" }}
               {{- include "misp.appEnv" (list $root "misp-db" "misp-app") | nindent 14 }}
               volumeMounts:

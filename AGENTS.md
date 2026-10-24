@@ -34,23 +34,24 @@ The `Dockerfile` builds the images from these stages:
 | caddy | Static files + FastCGI reverse proxy (scratch image) |
 | modules | MISP enrichment/import/export/action modules |
 
-Each role of the main image starts from its own entrypoint:
+Each role of the main image is a module of the package, run under the image's tini entrypoint; the Compose services start them so:
 
-| Entrypoint | Does |
-|---|---|
-| `files/entrypoint-configure.py` | Configure entrypoint: one-shot schema, settings, admin, GPG and auth setup. |
-| `files/entrypoint-metrics.py` | MISP Prometheus metrics exporter. |
-| `files/entrypoint-sync.py` | Org sync entrypoint. |
-| `files/entrypoint-web.py` | PHP-FPM entrypoint for the misp-web container. |
-| `files/entrypoint-worker.py` | Background worker entrypoint: runs MISP's queue workers (misp_container.worker). |
+| Service | Command | Does |
+|---|---|---|
+| `configure` | `python3 -m misp_container.configure` | One-shot MISP configuration: schema, settings, admin user, GPG, auth. |
+| `web` | `python3 -m misp_container.web` | MISP's web role: prepares app/Config, waits for the configure Job, then execs PHP-FPM. |
+| `worker` | `python3 -m misp_container.worker` | Background workers: MISP's queue workers and the log relay, each restarted when it exits. |
+| `sync` | `python3 -m misp_container.sync` | Declarative org/team sync engine. |
+| `metrics` | `python3 -m misp_container.metrics` | MISP Prometheus metrics exporter. |
+| `migrate` | `python3 -m misp_container.migrate` | Copy an existing MISP database (MySQL or MariaDB) into this deployment's PostgreSQL. |
 
 ## Python library: `files/misp_container/`
 
-The entrypoints, the task runner and the Jobs share this package; it is `/opt/misp_container` in the image.
+The roles, the task runner and the Jobs share this package; it is `/opt/misp_container` in the image.
 
 | Module | Does |
 |---|---|
-| `__init__.py` | MISP container entrypoint library. |
+| `__init__.py` | MISP container library: the roles of the main image, the task runner and the Jobs. |
 | `admin.py` | Admin user, organisation and API key setup. |
 | `api.py` | Thin MISP REST API client using only urllib (stdlib). |
 | `cake.py` | Thin wrapper around the CakePHP cake CLI. |
@@ -67,6 +68,7 @@ The entrypoints, the task runner and the Jobs share this package; it is `/opt/mi
 | `s3.py` | A minimal S3 client for the migrate Job: list, get and put objects. |
 | `sync.py` | Declarative org/team sync engine. |
 | `task.py` | Periodic MISP tasks. |
+| `web.py` | MISP's web role: prepares app/Config, waits for the configure Job, then execs PHP-FPM. |
 | `worker.py` | Background workers: MISP's queue workers and the log relay, each restarted when it exits. |
 
 ## Periodic work

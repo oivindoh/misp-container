@@ -1,4 +1,4 @@
-"""MISP container entrypoint library."""
+"""MISP container library: the roles of the main image, the task runner and the Jobs."""
 
 MISP_BASE = "/var/www/MISP"
 CAKE = f"{MISP_BASE}/app/Console/cake"

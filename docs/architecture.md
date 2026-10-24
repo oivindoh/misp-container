@@ -27,19 +27,20 @@ flowchart LR
     tasks[task CronJobs] -->|API| web
 ```
 
-The `misp-container` image serves six roles. Every entrypoint first renders `app/Config`
+The `misp-container` image serves six roles, each a module that starts as `python3 -m
+misp_container.<role>`. Every role first renders `app/Config`
 from this image's MISP, `settings.yaml` and env into a scratch of its own: an emptyDir, or a
 tmpfs in Compose. It imports the GPG key and copies the server certificates from their
 Secrets, then does its own job:
 
-| Role | Entrypoint | Runs as | Does |
+| Role | Module | Runs as | Does |
 |------|------------|---------|------|
-| configure | `entrypoint-configure.py` | Job, once per release revision | Schema import or migration, settings, admin user, GPG, auth plugins. Sets `MISP.live=true` last |
-| web | `entrypoint-web.py` | Deployment, scalable | Waits for `MISP.live=true`, then runs PHP-FPM on 9002 behind caddy on 8080 |
-| worker | `entrypoint-worker.py` | Deployment, scalable | Waits for `MISP.live=true`, then runs the workers of the `default`, `prio`, `email`, `update` and `cache` queues and starts each one again when it exits |
-| org-sync | `entrypoint-sync.py` | Job, once per release revision, after web serves | Applies `orgs.yaml` through the API |
-| metrics | `entrypoint-metrics.py` | Deployment | Prometheus exporter on 9191 |
-| task | `python3 -m misp_container.task` | CronJobs (component `cronjobs`) | All periodic work, see [Periodic tasks](kubernetes.md#periodic-tasks). MISP's own scheduler never runs |
+| configure | `configure` | Job, once per release revision | Schema import or migration, settings, admin user, GPG, auth plugins. Sets `MISP.live=true` last |
+| web | `web` | Deployment, scalable | Waits for `MISP.live=true`, then runs PHP-FPM on 9002 behind caddy on 8080 |
+| worker | `worker` | Deployment, scalable | Waits for `MISP.live=true`, then runs the workers of the `default`, `prio`, `email`, `update` and `cache` queues and starts each one again when it exits |
+| org-sync | `sync` | Job, once per release revision, after web serves | Applies `orgs.yaml` through the API |
+| metrics | `metrics` | Deployment | Prometheus exporter on 9191 |
+| task | `task` | CronJobs (component `cronjobs`) | All periodic work, see [Periodic tasks](kubernetes.md#periodic-tasks). MISP's own scheduler never runs |
 
 The workers take their jobs from Redis, and nothing connects to them. MISP's worker page and
 its diagnostics expect supervisord beside the web server, so they show no workers:

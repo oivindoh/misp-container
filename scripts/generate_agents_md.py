@@ -88,16 +88,22 @@ def docs() -> str:
 def image() -> str:
     stages = [(m.group(2), m.group(3)) for m in
               re.finditer(r"^# Stage (\d+): ([\w-]+) - (.+)$", (REPO / "Dockerfile").read_text(), re.M)]
-    entrypoints = [(f"`{rel(p)}`", docstring(p)) for p in sorted((REPO / "files").glob("entrypoint-*.py"))]
+    roles = []
+    for service, spec in yaml.safe_load((REPO / "deploy/docker-compose.yml").read_text())["services"].items():
+        command = spec.get("command")
+        if isinstance(command, list) and command[:2] == ["python3", "-m"] and command[2].startswith("misp_container."):
+            module = REPO / "files" / (command[2].replace(".", "/") + ".py")
+            roles.append((f"`{service}`", f"`{' '.join(command)}`", docstring(module)))
     return ("## Image\n\nThe `Dockerfile` builds the images from these stages:\n\n"
             + table(("Stage", "What it holds"), stages)
-            + "\n\nEach role of the main image starts from its own entrypoint:\n\n"
-            + table(("Entrypoint", "Does"), entrypoints))
+            + "\n\nEach role of the main image is a module of the package, run under the image's tini "
+            "entrypoint; the Compose services start them so:\n\n"
+            + table(("Service", "Command", "Does"), roles))
 
 
 def library() -> str:
     rows = [(f"`{p.name}`", docstring(p)) for p in sorted((REPO / "files/misp_container").glob("*.py"))]
-    return ("## Python library: `files/misp_container/`\n\nThe entrypoints, the task runner and the Jobs "
+    return ("## Python library: `files/misp_container/`\n\nThe roles, the task runner and the Jobs "
             "share this package; it is `/opt/misp_container` in the image.\n\n" + table(("Module", "Does"), rows))
 
 
@@ -111,7 +117,7 @@ def periodic() -> str:
     jobs = []
     for template, doc in chart.render(every_component=True):
         if doc["kind"] == "CronJob":
-            command = " ".join(chart.pod_spec(doc)["containers"][0]["command"][-3:])
+            command = " ".join(chart.pod_spec(doc)["containers"][0]["args"][-3:])
             jobs.append((f"`{doc['metadata']['name']}`", f"`{doc['spec']['schedule']}`", f"`{command}`",
                          f"`{chart.template_component(template)}`"))
     return ("## Periodic work\n\nMISP's own scheduler never runs. The task runner "

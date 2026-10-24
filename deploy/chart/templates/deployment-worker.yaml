@@ -29,7 +29,7 @@ spec:
       containers:
         - name: worker
           {{- include "misp.image" . | nindent 10 }}
-          command: ["/usr/bin/tini", "--", "python3", "/entrypoint-worker.py"]
+          args: ["python3", "-m", "misp_container.worker"]
           {{- include "misp.appEnv" (list . "misp-db" "misp-app") | nindent 10 }}
           volumeMounts:
             {{- include "misp.appVolumeMounts" . | nindent 12 }}
