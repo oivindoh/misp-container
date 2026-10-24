@@ -86,7 +86,7 @@ values and lists the components, Secrets, storage, network policies and periodic
 | Document | Covers |
 |----------|--------|
 | [docs/architecture.md](docs/architecture.md) | The roles, the configure Job, startup and footprint, rollout order, scaling |
-| [docs/configuration.md](docs/configuration.md) | Settings and their env vars, database, HTTPS, authentication plugins, custom scripts, logging |
+| [docs/configuration.md](docs/configuration.md) | Settings and their env vars, database, HTTPS, authentication plugins and Keycloak, custom scripts, logging |
 | [docs/kubernetes.md](docs/kubernetes.md) | Install, values, components, client addresses, Secrets, storage, network policies, periodic tasks |
 | [docs/org-sync.md](docs/org-sync.md) | Organisations, users, servers, tags and taxonomies from a YAML file |
 | [docs/metrics.md](docs/metrics.md) | The Prometheus metrics and example alerts |

@@ -126,6 +126,18 @@ def has_authkey(user_id: int, authkey: str) -> bool:
     return False
 
 
+def has_password(user_id: int, password: str) -> bool:
+    """Whether the stored password hash of the user verifies this password."""
+    import bcrypt
+
+    rows = db.dict_query("SELECT password FROM users WHERE id = %s", (user_id,))
+    stored = str(rows[0]["password"]) if rows else ""
+    if not stored.startswith("$2"):
+        return False
+    # MISP writes PHP's $2y$ prefix; the bcrypt module checks $2b$
+    return bcrypt.checkpw(password.encode(), stored.replace("$2y$", "$2b$", 1).encode())
+
+
 def _set_admin_authkey(email: str, api_key: str) -> None:
     """Set the admin's API key, unless a live key of user 1 already is this one."""
     if not has_authkey(1, api_key):

@@ -65,7 +65,7 @@ ours to revisit. No stack starts, so the guard reports even when MISP no longer 
 
 The full MISP stack in Compose, checked feature by feature.
 
-**Stack:** 1 MISP instance (configure + web x2 + caddy + worker + PostgreSQL + Redis + Garage S3 + dex)
+**Stack:** 1 MISP instance (configure + web x2 + caddy + worker + PostgreSQL + Redis + Garage S3 + Keycloak)
 
 | Suite | What it verifies |
 |-------|------------------|
@@ -83,9 +83,9 @@ The full MISP stack in Compose, checked feature by feature.
 | Defaults version | The configure step records the image version the pods wait for |
 | S3 attachment storage | Garage S3 bootstrap, upload, download, bucket verification |
 | Custom auth | Header login (200), no-header redirect (302) |
-| OIDC login | Redirect to dex, its form, the callback, the user's email, role by name, default organisation, mixed auth |
+| OIDC login | Redirect to Keycloak, its login form, the callback, the user's email, the highest client role, the team of the user's Keycloak organisation, mixed auth |
 | Task runner | API tasks, the index tasks without items, the console tasks `periodic-summary` and `check-user-validity`, a missing `ADMIN_KEY` |
-| Org sync | Org/user/tag/server creation, server authkey (DB verify), sync user authkey prefix, taxonomy enable, disabled user, custom warninglist create/update, warm run idempotency |
+| Org sync | Org/user/tag/server creation, server authkey (DB verify), sync user authkey prefix, taxonomy enable, disabled user, an unnamed local user disabled and the OIDC user left enabled, a break-glass password login, custom warninglist create/update, warm run idempotency |
 | Metrics exporter | Endpoints, core metrics, no scrape errors, a waiting job in `misp_jobs_queued` and back to 0, `misp_scheduled_tasks_enabled` |
 | MISP modules | Enrichment through the modules service |
 | Logging | JSON lines from configure and none in text, MISP's own log in the web and worker output once, no CakeLog files on disk, the relay forwarding `server-sync.log`, every log file MISP wrote in web and worker relayed |
@@ -94,8 +94,8 @@ The full MISP stack in Compose, checked feature by feature.
 
 **Files:**
 - `e2e/test_integration.py` -- the suite, in the order above; later sections use the state earlier ones leave
-- `docker-compose.test.yml` -- overlay on `deploy/docker-compose.yml` (test ports, env, Garage S3, dex). `MISP_TEST_ENV` names one more env file for the MISP containers, layered last; `none.env` is its empty default
-- `dex.yaml` -- the OIDC provider's static client and user
+- `docker-compose.test.yml` -- overlay on `deploy/docker-compose.yml` (test ports, env, Garage S3, Keycloak). `MISP_TEST_ENV` names one more env file for the MISP containers, layered last; `none.env` is its empty default
+- `keycloak-realm.json` -- the Keycloak realm: the MISP client with its roles and the `roles` mapper, an organisation, and a user in it
 - `test-compose.env` -- test env overrides (BASE_URL, ADMIN_EMAIL, etc.)
 - `test-compose-secrets.env` -- test secrets (passwords, Redis key), layered over `deploy/chart/files/secrets-*.env`
 - `garage.toml` -- Garage S3 config for attachment testing
@@ -198,15 +198,20 @@ refusals (a non-empty target, an identity mismatch, `MIGRATE_FORCE` alone on the
 copy, then with `MIGRATE_REPLACE_COPY`). It runs this tree's images on the copy and checks it:
 row counts, both authkeys, the org, the server, the event, the attachment download, the fixture
 attachments under MISP's keys, `MISP.live` set by the configure step, the run record and the id
-sequences. A forced second copy uploads the attachments into an S3 bucket in garage; the same
+sequences. On that copy an org sync renames the migrated organisation, whose name holds spaces,
+to its Keycloak organisation's alias by its UUID, and disables the migrated account. That
+account's first Keycloak login links it by its email, enables it again and lands it in the
+renamed organisation. A forced second copy uploads the attachments into an S3 bucket in garage; the same
 checks run on it, plus a new attachment that MISP must write to the bucket. A last run copies
 that bucket into a second one and compares every key and byte.
 
 **Files:**
 - `e2e/test_migration.py` -- the suite; module fixtures carry each step's state to the next
 - `e2e/stack.py`, `e2e/conftest.py` -- the stack helper and the options every pytest suite shares (see below)
+- `e2e/keycloak.py` -- a Keycloak login through MISP, run in the sync container; the integration suite uses it too
 - `docker-compose.migrate.yml` -- overlay: the source's MariaDB (`mysql`) and the migrate service with the fixture files mounted
 - `migrate-source.sql` -- the rows of the source, on top of MISP's 2.5 schema
+- `migrate-keycloak.env` -- email linking and unblocking for the migrated account's first Keycloak login
 - `migrate-target-s3.env` -- puts the attachments in the bucket `misp-migrated`, after the second copy
 - `e2e/garage.py` -- layout, keys and buckets in the test stack's garage
 

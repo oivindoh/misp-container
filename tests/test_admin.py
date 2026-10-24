@@ -95,3 +95,20 @@ class TestSetAdminAuthkey:
         query.return_value = [{"authkey": self.stored("abcd" + "y" * 32 + "wxyz")}]
         admin._set_admin_authkey("admin@x", self.KEY)
         change.assert_called_once_with("admin@x", self.KEY)
+
+
+class TestHasPassword:
+    @patch("misp_container.admin.db.dict_query")
+    def test_the_stored_hash_verifies_the_password(self, query):
+        query.return_value = [{"password": TestSetAdminAuthkey.stored("Br3ak-Glass#2026")}]
+        assert admin.has_password(10, "Br3ak-Glass#2026")
+        assert query.call_args[0][1] == (10,)
+
+    @patch("misp_container.admin.db.dict_query")
+    def test_another_password_does_not_verify(self, query):
+        query.return_value = [{"password": TestSetAdminAuthkey.stored("Other-Pass#2026")}]
+        assert not admin.has_password(10, "Br3ak-Glass#2026")
+
+    @patch("misp_container.admin.db.dict_query", return_value=[{"password": "5f4dcc3b5aa765d61d8327deb882cf99"}])
+    def test_a_hash_that_is_no_bcrypt_does_not_verify(self, query):
+        assert not admin.has_password(10, "password")

@@ -1,0 +1,172 @@
+{
+  "realm": "misp",
+  "enabled": true,
+  "sslRequired": "none",
+  "roles": {
+    "client": {
+      "misp": [
+        {
+          "name": "read-only"
+        },
+        {
+          "name": "user"
+        },
+        {
+          "name": "publisher"
+        },
+        {
+          "name": "org-admin"
+        },
+        {
+          "name": "admin"
+        }
+      ]
+    }
+  },
+  "clients": [
+    {
+      "clientId": "misp",
+      "name": "MISP",
+      "enabled": true,
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "misp-oidc-test-secret",
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "redirectUris": [
+        "http://caddy:8080/users/login"
+      ],
+      "webOrigins": [
+        "+"
+      ],
+      "protocol": "openid-connect",
+      "protocolMappers": [
+        {
+          "name": "roles",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-client-role-mapper",
+          "config": {
+            "usermodel.clientRoleMapping.clientId": "misp",
+            "claim.name": "roles",
+            "multivalued": "true",
+            "jsonType.label": "String",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "true",
+            "introspection.token.claim": "true"
+          }
+        },
+        {
+          "name": "misp organisation",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-organization-membership-mapper",
+          "config": {
+            "claim.name": "misp_organisation",
+            "multivalued": "true",
+            "jsonType.label": "String",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "true",
+            "introspection.token.claim": "true"
+          }
+        }
+      ],
+      "defaultClientScopes": [
+        "web-origins",
+        "acr",
+        "roles",
+        "organization",
+        "profile",
+        "basic",
+        "email"
+      ],
+      "optionalClientScopes": [
+        "offline_access"
+      ]
+    }
+  ],
+  "users": [
+    {
+      "username": "oidc",
+      "email": "oidc@example.com",
+      "emailVerified": true,
+      "firstName": "Oidc",
+      "lastName": "Tester",
+      "enabled": true,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "oidc-test-password",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "default-roles-misp"
+      ],
+      "clientRoles": {
+        "misp": [
+          "user",
+          "org-admin"
+        ]
+      }
+    },
+    {
+      "username": "migrate-user",
+      "email": "migrate-user@example.com",
+      "emailVerified": true,
+      "firstName": "Migrate",
+      "lastName": "User",
+      "enabled": true,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "migrate-user-password",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "default-roles-misp"
+      ],
+      "clientRoles": {
+        "misp": [
+          "user"
+        ]
+      }
+    }
+  ],
+  "organizationsEnabled": true,
+  "organizations": [
+    {
+      "name": "OIDC Team",
+      "alias": "oidc-team",
+      "enabled": true,
+      "domains": [
+        {
+          "name": "example.com"
+        }
+      ],
+      "members": [
+        {
+          "username": "oidc",
+          "membershipType": "MANAGED"
+        }
+      ]
+    },
+    {
+      "name": "Migrate Test Org",
+      "alias": "migrate-test-org",
+      "enabled": true,
+      "domains": [
+        {
+          "name": "migrate.example.com"
+        }
+      ],
+      "members": [
+        {
+          "username": "migrate-user",
+          "membershipType": "MANAGED"
+        }
+      ]
+    }
+  ]
+}
