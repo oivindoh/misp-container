@@ -2,13 +2,13 @@
 
 ## TL;DR
 
-Unit tests on the Python library, an upstream guard that checks the MISP in the image against what this repository patches or depends on, and three stack suites in pytest (`tests/e2e/`): an integration suite on one Compose stack, a hub-spoke sync suite on two instances, and a migration suite that imports a seeded MISP 2.5.50 on MariaDB into PostgreSQL, converting it to MISP 3.0. A smoke test checks any live MISP through its API. Two Kubernetes checks cover the Helm chart: every render validated against the schemas, and the chart installed and upgraded on a kind cluster with the smoke test.
+Unit tests on the Python library, an upstream guard that checks the MISP in the image against what this repository patches or depends on, and three stack suites in pytest (`tests/e2e/`): an integration suite on one Compose stack, a hub-spoke sync suite on two instances, and a migration suite that imports a MISP 2.5 database on MariaDB into PostgreSQL, converting it to MISP 3.0. A smoke test checks any live MISP through its API. Two Kubernetes checks cover the Helm chart: every render validated against the schemas, and the chart installed and upgraded on a kind cluster with the smoke test.
 
 ```bash
 mise run test                # unit tests, the chart lint and every chart render validated against the schemas
 mise run test-integration    # the upstream guard, then single-instance integration tests (~2min)
 mise run test-sync           # hub-spoke sync test with 2 instances (~2min)
-mise run test-migration      # the migration: MISP 2.5.50 on MariaDB into PostgreSQL (~3min)
+mise run test-migration      # the migration: a MISP 2.5 database on MariaDB into PostgreSQL (~2min)
 mise run smoketest https://misp.example.com   # a live MISP; asks for an API key
 mise run test-all            # every suite
 mise run test-kind           # the chart on a kind cluster: install, helm test, task runs, upgrade, rollback (build the images first)
@@ -178,29 +178,28 @@ Run with: `mise run test-sync`
 
 ## Migration suite
 
-`e2e/test_migration.py` starts the integration stack with the published 2.5.50 images on
-MariaDB (`MISP_TEST_ENV=tests/migrate-source.env`), seeds it (an org with a user, a sync user
-with a known authkey, a sync server, an event with an attachment) and records the row counts.
-The mounted source files hold an attachment in each place MISP keeps one on disk: flat, under
-`bucket_<n>/` and under `shadow/`. The suite then runs the migrate Job of this tree's image
-into PostgreSQL with `MIGRATE_SOURCE_UPGRADE=true`, which converts the source to MISP 3.0
-first, and checks the refusals (a non-empty
-target, an identity mismatch, `MIGRATE_FORCE` alone on the Job's own copy, then with
-`MIGRATE_REPLACE_COPY`). It runs this tree's images on the copy and checks it: row counts,
-both authkeys, the org, the server, the event, the attachment download, the fixture
-attachments under MISP's keys, `MISP.live` set by the configure step, the run record and the
-id sequences. A forced second copy uploads the attachments into an S3 bucket in garage; the
-same checks run on it, plus a new attachment that MISP must write to the bucket. A last run
-copies that bucket into a second one and compares every key and byte.
+`e2e/test_migration.py` loads a MISP 2.5 database into MariaDB: MISP's own `INSTALL/MYSQL.sql`
+of v2.5.50, fetched from GitHub at its commit, then `migrate-source.sql` (an org with a user,
+an admin and a sync user with known authkeys, a sync server, an event with an attachment). It
+records the row counts. The mounted source files hold the event's attachment and one attachment
+in each place MISP keeps one on disk: flat, under `bucket_<n>/` and under `shadow/`. The suite
+then runs the migrate Job of this tree's image into PostgreSQL with
+`MIGRATE_SOURCE_UPGRADE=true`, which converts the source to MISP 3.0 first, and checks the
+refusals (a non-empty target, an identity mismatch, `MIGRATE_FORCE` alone on the Job's own
+copy, then with `MIGRATE_REPLACE_COPY`). It runs this tree's images on the copy and checks it:
+row counts, both authkeys, the org, the server, the event, the attachment download, the fixture
+attachments under MISP's keys, `MISP.live` set by the configure step, the run record and the id
+sequences. A forced second copy uploads the attachments into an S3 bucket in garage; the same
+checks run on it, plus a new attachment that MISP must write to the bucket. A last run copies
+that bucket into a second one and compares every key and byte.
 
 **Files:**
 - `e2e/test_migration.py` -- the suite; module fixtures carry each step's state to the next
 - `e2e/stack.py`, `e2e/conftest.py` -- the stack helper and the options every pytest suite shares (see below)
 - `docker-compose.migrate.yml` -- overlay: the source's MariaDB (`mysql`) and the migrate service with the fixture files mounted
-- `migrate-source.env` -- points the 2.5.50 containers at that MariaDB
+- `migrate-source.sql` -- the rows of the source, on top of MISP's 2.5 schema
 - `migrate-target-s3.env` -- puts the attachments in the bucket `misp-migrated`, after the second copy
 - `e2e/garage.py` -- layout, keys and buckets in the test stack's garage
-- `migrate-orgs.yaml` -- seed content for the org sync
 
 Run with: `mise run test-migration` (`-- --skip-build`, `-- --keep`)
 

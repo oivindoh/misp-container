@@ -404,7 +404,7 @@ jobs:
           TAG="${{ steps.plan.outputs.tag }}"
           for image in "${{ env.IMAGE_MISP }}" "${{ env.IMAGE_CADDY }}" "${{ env.IMAGE_MODULES }}"; do
             if out=$(docker manifest inspect "${image}:${TAG}" 2>&1); then
-              echo "ERROR: ${image}:${TAG} exists in GHCR. Tags are immutable: mise run release hotfix makes ${TAG}-r1."
+              echo "ERROR: ${image}:${TAG} exists in GHCR. Tags are immutable: mise run release makes the next tag."
               exit 1
             elif ! grep -qiE "not found|manifest unknown|name unknown|no such manifest|denied" <<<"$out"; then
               echo "ERROR: cannot tell whether ${image}:${TAG} exists in GHCR:"

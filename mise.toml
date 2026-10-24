@@ -27,7 +27,7 @@ description = "Run the hub-spoke sync suite (2 MISP instances)"
 run = "python -m pytest tests/e2e/test_sync.py -v"
 
 [tasks.test-migration]
-description = "Run the migration suite (MISP 2.5.50 on MariaDB into PostgreSQL)"
+description = "Run the migration suite (a MISP 2.5 database on MariaDB into PostgreSQL)"
 run = "python -m pytest tests/e2e/test_migration.py -v"
 
 [tasks.test-kind]
