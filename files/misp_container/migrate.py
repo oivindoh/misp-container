@@ -15,9 +15,10 @@ volume otherwise. The Job checks both buckets before it copies the database.
 
 The target gets this image's PostgreSQL baseline and MISP's updates, and the
 rows are copied into it column by column. The source must be at the same
-schema version. MIGRATE_SOURCE_UPGRADE=true runs MISP's updates on the source
-first, through cake: they write to the source, so point the Job at a restored
-copy, never at the live database.
+schema version. MIGRATE_SOURCE_UPGRADE=true upgrades the source to it first,
+with cake Admin runUpgrade: that converts a MISP 2.x database to 3.0 and
+writes to the source, so point the Job at a restored copy, never at the live
+database.
 
 Exit codes: 0 done, or the target holds a copy this Job made (it stays unless
 MIGRATE_FORCE=true and MIGRATE_REPLACE_COPY=true); 1 copy failed; 2
@@ -471,18 +472,25 @@ def copy_images(source: Path, target: Path) -> int:
 # -- The copy ------------------------------------------------------------------
 
 def upgrade_source(source: dict) -> None:
-    """Run MISP's schema updates on the source through cake, then point cake back at the target."""
+    """Upgrade the source to this image's MISP through cake, then point cake back at the target.
+
+    runUpgrade applies the numbered 2.x updates the source lacks and converts it
+    to MISP 3.0; on a source at this image's schema it does nothing. MISP 3.0's
+    runUpdates refuses a 2.x database.
+    """
     fields = {"datasource": "Database/MysqlObserverExtended", "persistent": False, "host": source["host"],
               "login": source["user"], "port": source["port"], "password": source["password"],
               "database": source["database"], "prefix": "", "encoding": "utf8mb4"}
     if source["tls"]:
         fields["ssl_ca"] = SYSTEM_CA
-    log.info("running MISP's schema updates on the source %s/%s (MIGRATE_SOURCE_UPGRADE=true)",
-             source["host"], source["database"])
+    log.info("upgrading the source %s/%s to this image's MISP (cake Admin runUpgrade, MIGRATE_SOURCE_UPGRADE=true); "
+             "on a large instance this takes hours", source["host"], source["database"])
     write_database_php(fields)
     purge_model_cache()
     try:
-        cake.run_updates()
+        # runUpgrade refuses to run unless MISP.osuser names the user it runs as
+        cake.set_setting("MISP.osuser", "misp")
+        cake.run_checked("Admin", "runUpgrade")
     finally:
         write_database_php(database_fields())
         purge_model_cache()

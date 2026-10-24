@@ -267,7 +267,7 @@ The stack suites and the smoke test, in pytest (`tests/e2e/`):
 | `garage.py` | The garage S3 store of the test stacks: layout, keys and buckets through its admin API. |
 | `stack.py` | A Compose stack under test: compose calls, container exec, SQL, HTTP and waits. |
 | `test_integration.py` | Integration suite: one MISP stack in Compose, checked feature by feature. |
-| `test_migration.py` | Migration suite: seeds MISP 2.5.50 from the published images on MariaDB, migrates it with the migrate Job of this tree's image into PostgreSQL, and checks the copy through the API and the database. The first copy takes the attachments onto the volume, a forced second copy into an S3 bucket in garage; a last run copies that bucket into another. |
+| `test_migration.py` | Migration suite: seeds MISP 2.5.50 from the published images on MariaDB, migrates it with the migrate Job of this tree's image into PostgreSQL, which converts it to MISP 3.0 on the way, and checks the copy through the API and the database. The first copy takes the attachments onto the volume, a forced second copy into an S3 bucket in garage; a last run copies that bucket into another. |
 | `test_smoke.py` | Smoke test of a live MISP through its API: reachable, authenticated, configured, working. |
 | `test_sync.py` | Hub-spoke sync suite: two MISP instances configured through the org sync container. |
 | `test_upgrade.py` | Upgrade suite: seeds MISP 2.5 from the published 2.5.50 images, converts its database to MISP 3.0 with the upgrade step of this tree's images, and checks the data through the API and the database. |

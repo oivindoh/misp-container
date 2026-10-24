@@ -1,8 +1,9 @@
 """Migration suite: seeds MISP 2.5.50 from the published images on MariaDB,
-migrates it with the migrate Job of this tree's image into PostgreSQL, and
-checks the copy through the API and the database. The first copy takes the
-attachments onto the volume, a forced second copy into an S3 bucket in garage;
-a last run copies that bucket into another.
+migrates it with the migrate Job of this tree's image into PostgreSQL, which
+converts it to MISP 3.0 on the way, and checks the copy through the API and
+the database. The first copy takes the attachments onto the volume, a forced
+second copy into an S3 bucket in garage; a last run copies that bucket into
+another.
 
     pytest tests/e2e/test_migration.py [--skip-build] [--keep]
 
@@ -293,8 +294,8 @@ def test_migrate_exits_0(first_copy):
     assert rc == 0, out[-3000:]
 
 
-def test_migrate_ran_the_updates_on_the_source(first_copy):
-    assert "running MISP's schema updates on the source" in first_copy[1]
+def test_migrate_upgraded_the_source_to_30(first_copy):
+    assert "upgrading the source" in first_copy[1] and "cake Admin runUpgrade" in first_copy[1]
 
 
 def test_rows_copied(first_copy):
