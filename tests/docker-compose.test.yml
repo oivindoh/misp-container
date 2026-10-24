@@ -78,7 +78,7 @@ services:
 
   # OIDC provider for the login test (tests/dex.yaml)
   dex:
-    image: ghcr.io/dexidp/dex:v2.45.1
+    image: ghcr.io/dexidp/dex:v2.46.1
     command: ["dex", "serve", "/etc/dex/config.yaml"]
     volumes:
       - ../tests/dex.yaml:/etc/dex/config.yaml:ro
