@@ -95,6 +95,29 @@
           "org-admin"
         ]
       }
+    },
+    {
+      "username": "migrate-user",
+      "email": "migrate-user@example.com",
+      "emailVerified": true,
+      "firstName": "Migrate",
+      "lastName": "User",
+      "enabled": true,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "migrate-user-password",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "default-roles-misp"
+      ],
+      "clientRoles": {
+        "misp": [
+          "user"
+        ]
+      }
     }
   ],
   "organizationsEnabled": true,
@@ -111,6 +134,22 @@
       "members": [
         {
           "username": "oidc",
+          "membershipType": "MANAGED"
+        }
+      ]
+    },
+    {
+      "name": "Migrate Test Org",
+      "alias": "migrate-test-org",
+      "enabled": true,
+      "domains": [
+        {
+          "name": "migrate.example.com"
+        }
+      ],
+      "members": [
+        {
+          "username": "migrate-user",
           "membershipType": "MANAGED"
         }
       ]

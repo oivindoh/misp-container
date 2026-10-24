@@ -132,7 +132,8 @@ In MISP:
 | `OIDCAUTH_OFFLINE_ACCESS` | Optional: `true` for the `userValidity` check. Users then need the realm role `offline_access`, which Keycloak's default roles hold |
 
 A user in several Keycloak organisations lands in any one of them. A user whose organisation
-has no MISP organisation of that name cannot log in. The integration suite logs in through a
+has no MISP organisation of that name cannot log in. The accounts of a migrated instance need
+two more settings ([migration.md](migration.md#keycloak)). The integration suite logs in through a
 Keycloak with this setup (`tests/keycloak-realm.json`), then checks that an org sync run
 leaves the account enabled.
 

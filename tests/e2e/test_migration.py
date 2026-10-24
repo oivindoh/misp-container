@@ -2,8 +2,11 @@
 INSTALL/MYSQL.sql of 2.5 with the rows of tests/migrate-source.sql, migrates
 it with the migrate Job of this tree's image into PostgreSQL, which converts it
 to MISP 3.0 on the way, and checks the copy through the API and the database.
-The first copy takes the attachments onto the volume, a forced second copy
-into an S3 bucket in garage; a last run copies that bucket into another.
+The first copy takes the attachments onto the volume; on it, an org sync
+renames the migrated organisation to its Keycloak organisation's alias, and a
+migrated account logs in through Keycloak. A forced second copy takes the
+attachments into an S3 bucket in garage; a last run copies that bucket into
+another.
 
     pytest tests/e2e/test_migration.py [--skip-build] [--keep]
 
@@ -13,6 +16,7 @@ stack; module fixtures carry each step's state to the next.
 """
 
 import base64
+import http.client
 import os
 import shutil
 import subprocess
@@ -22,6 +26,7 @@ from functools import partial
 import pytest
 
 import garage
+import keycloak
 from misp_container.s3 import Bucket
 from stack import DEPLOY, TESTS, Stack, env_file, scratch_dir
 
@@ -50,6 +55,22 @@ FIXTURE_FILES = {"1/1": ("1/1", "migration attachment content"),
                  "998/1": ("bucket_0/998/1", "bucketed attachment"),
                  "shadow/999/2": ("shadow/999/2", "proposal attachment")}
 ATTACHMENTS = "/var/www/MISP/app/attachments"
+# Email linking and unblocking for the migrated accounts' first Keycloak login
+KEYCLOAK_ENV = TESTS / "migrate-keycloak.env"
+# The team of the migrated organisation: its UUID, and the alias of its Keycloak organisation
+# (tests/keycloak-realm.json) as the name. The sync user stays named, so the run keeps it
+KEYCLOAK_ORGS = f"""teams:
+  - uuid: "{ORG_UUID}"
+    name: "migrate-test-org"
+    description: "Created by the migration suite"
+    sector: "government"
+    users:
+      - email: migrate-inbound@example.com
+        role: Sync user
+        authkey: "{INBOUND_KEY}"
+"""
+# The migrated person's account in tests/migrate-source.sql
+MIGRATED_USER_ID = "2"
 # The second copy keeps its attachments in this bucket
 S3_ENV = TESTS / "migrate-target-s3.env"
 S3_TARGET = env_file(S3_ENV)
@@ -69,6 +90,17 @@ def mariadb(stack, sql):
     if result.returncode != 0:
         raise RuntimeError(f"mariadb exited {result.returncode}: {result.stderr}")
     return result.stdout.strip()
+
+
+def fetch(url, attempts=3):
+    """A text file over HTTPS; a connection that breaks off part way gets another try."""
+    for attempt in range(attempts):
+        try:
+            with urllib.request.urlopen(url, timeout=60) as response:
+                return response.read().decode()
+        except (OSError, http.client.HTTPException):
+            if attempt == attempts - 1:
+                raise
 
 
 def migrate(stack, **env):
@@ -122,10 +154,9 @@ def stack(options, failed_in_module):
         (FIXTURE_DIR / where).write_text(content)
     if not options["skip_build"]:
         s.compose("build", check=True, timeout=3600)
-    s.compose("up", "-d", "mysql", "postgres", "redis", "garage", profiles=(), check=True)
+    s.compose("up", "-d", "mysql", "postgres", "redis", "garage", "keycloak", profiles=(), check=True)
     s.wait_for("mysql", "healthcheck.sh --connect --innodb_initialized", timeout=180)
-    with urllib.request.urlopen(SOURCE_SCHEMA, timeout=60) as response:
-        mariadb(s, response.read().decode() + SOURCE_ROWS.read_text())
+    mariadb(s, fetch(SOURCE_SCHEMA) + SOURCE_ROWS.read_text())
     garage.layout()
     access, _ = garage.key("migrate", S3_TARGET["PLUGIN_S3_AWS_ACCESS_KEY"], S3_TARGET["PLUGIN_S3_AWS_SECRET_KEY"])
     for name in (S3_TARGET["PLUGIN_S3_BUCKET_NAME"], COPY_BUCKET):
@@ -169,8 +200,27 @@ def forced_copy(stack, force_alone):
 
 @pytest.fixture(scope="module")
 def volume_copy(stack, forced_copy):
-    switch(stack)
+    switch(stack, KEYCLOAK_ENV)
     return "volume"
+
+
+@pytest.fixture(scope="module")
+def keycloak_team(stack, volume_copy):
+    """An org sync that renames the migrated organisation to its Keycloak organisation's alias."""
+    before = (stack.api("GET", f"/organisations/view/{ORG_UUID}", ADMIN_KEY) or {}).get("Organisation", {})
+    path = scratch_dir() / "migrate-keycloak-orgs.yaml"
+    path.write_text(KEYCLOAK_ORGS)
+    rc, out = stack.run("sync", env={"ADMIN_KEY": ADMIN_KEY, "SYNC_BASE_URL": "http://caddy:8080"},
+                        volumes=[f"{path}:/etc/misp-docker/orgs.yaml:ro"])
+    path.unlink()
+    after = (stack.api("GET", f"/organisations/view/{ORG_UUID}", ADMIN_KEY) or {}).get("Organisation", {})
+    user = (stack.api("GET", f"/admin/users/view/{MIGRATED_USER_ID}", ADMIN_KEY) or {}).get("User", {})
+    return {"rc": rc, "out": out, "before": before, "after": after, "user": user}
+
+
+@pytest.fixture(scope="module")
+def keycloak_login(stack, keycloak_team):
+    return keycloak.login(stack, "migrate-user", "migrate-user-password")
 
 
 @pytest.fixture(scope="module")
@@ -324,6 +374,41 @@ def test_volume_copy(stack, counts, volume_copy, check):
 
 def test_new_rows_get_ids_past_the_copied_ones(stack, volume_copy):
     assert stack.sql("SELECT COUNT(*) FROM tags WHERE id = (SELECT last_value FROM tags_id_seq)") == "1"
+
+
+# -- Keycloak on the copy --------------------------------------------------------------
+
+def test_keycloak_team_sync_exits_0(keycloak_team):
+    assert keycloak_team["rc"] == 0, keycloak_team["out"][-3000:]
+
+
+def test_org_sync_renames_the_migrated_org_by_its_uuid(keycloak_team):
+    names = (keycloak_team["before"].get("name"), keycloak_team["after"].get("name"))
+    assert names == ("Migrate Test Org", "migrate-test-org")
+
+
+def test_org_sync_keeps_the_migrated_org_id(keycloak_team):
+    assert keycloak_team["after"].get("id") == keycloak_team["before"].get("id")
+
+
+def test_org_sync_disables_the_unlinked_migrated_account(keycloak_team):
+    # No OIDC subject yet and not named in orgs.yaml: a local account to the org sync
+    assert keycloak_team["user"].get("disabled") in (True, 1, "1")
+
+
+def test_migrated_account_logs_in_through_keycloak(keycloak_login):
+    user = keycloak_login["user"].get("User", {})
+    assert (user.get("id"), user.get("email")) == (MIGRATED_USER_ID, "migrate-user@example.com"), \
+        keycloak_login["out"][-2000:]
+
+
+def test_migrated_account_lands_in_the_renamed_org(keycloak_login):
+    assert keycloak_login["user"].get("Organisation", {}).get("name") == "migrate-test-org"
+
+
+def test_migrated_account_is_linked_and_enabled(stack, keycloak_login):
+    assert stack.sql(f"SELECT sub IS NOT NULL FROM users WHERE id = {MIGRATED_USER_ID}") == "1"
+    assert stack.sql(f"SELECT disabled FROM users WHERE id = {MIGRATED_USER_ID}") == "0"
 
 
 # -- attachments into S3 -------------------------------------------------------------

@@ -21,6 +21,7 @@ import urllib.request
 import pytest
 
 import garage
+import keycloak
 from misp_container import WORKER_QUEUES
 from misp_container.logrelay import FILES as RELAYED
 from stack import DEPLOY, REPO, TESTS, Stack, env_file, scratch_dir
@@ -443,51 +444,11 @@ def test_custom_auth_without_header_redirects(custom_auth):
 
 # -- OIDC login through Keycloak -----------------------------------------------------
 
-# The browser side of the login, in the compose network. The sync container is
-# read-only like the Kubernetes Jobs, so the cookies stay in memory.
-OIDC_FLOW = """
-import html, http.cookiejar, json, re, urllib.error, urllib.parse, urllib.request
-jar = urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar())
-class Stay(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, *args, **kwargs):
-        return None
-follow = urllib.request.build_opener(jar)
-stay = urllib.request.build_opener(jar, Stay)
-def open_(opener, url, data=None, accept=None):
-    request = urllib.request.Request(url, data=data, headers={"Accept": accept} if accept else {})
-    try:
-        return opener.open(request, timeout=30)
-    except urllib.error.HTTPError as e:
-        return e
-auth = open_(stay, "http://caddy:8080/users/login?OidcAuth=enable").headers.get("Location", "")
-print("auth=" + auth)
-login = urllib.parse.urlencode({"username": "oidc", "password": "oidc-test-password"}).encode()
-# With organisations on, Keycloak asks for the username first and the password on a second page
-final = open_(follow, auth)
-for _ in range(3):
-    form = re.search(r'<form id="kc-form-login"[^>]*action="([^"]+)"', final.read().decode())
-    if not form:
-        break
-    print("form=" + html.unescape(form.group(1)))
-    final = open_(follow, html.unescape(form.group(1)), data=login)
-print(f"final={final.geturl()} {final.status}")
-me = open_(follow, "http://caddy:8080/users/view/me.json", accept="application/json").read()
-try:
-    print(json.dumps(json.loads(me)))
-except ValueError:
-    print("{}")
-"""
-
-
 @pytest.fixture(scope="module")
 def oidc(stack):
     # The team of the user's Keycloak organisation, named after its alias
     stack.api("POST", "/admin/organisations/add", stack.key, {"Organisation": {"name": "oidc-team", "local": True}})
-    # Mixed auth needs ?OidcAuth=enable to start the flow; Keycloak's login form
-    # takes the credentials, and the callback lands on http://caddy:8080/users/login
-    _, out = stack.run("sync", "python3", "-c", OIDC_FLOW)
-    user = next((json.loads(line) for line in reversed(out.splitlines()) if line.startswith("{")), {})
-    return {"out": out, "user": user}
+    return keycloak.login(stack, "oidc", "oidc-test-password")
 
 
 def test_oidc_login_redirects_to_keycloak(oidc):

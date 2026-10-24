@@ -23,6 +23,8 @@ then configures the copy as on any release upgrade.
    holds anything else (see [The target](#the-target)).
 4. Switch the component (or profile) off once the copy has succeeded. Users log in again;
    terms and the GPG keyring are copied by hand.
+5. With Keycloak, name each migrated organisation's team after its Keycloak organisation's
+   alias, and turn on email linking and unblocking (see [Keycloak](#keycloak)).
 
 ```mermaid
 flowchart LR
@@ -208,6 +210,24 @@ index it builds. On a large instance the conversion takes hours.
   env (`MISP.baseurl`, Redis, workers, the attachments directory, ...), which the configure
   Job enforces.
 - **A new GPG key** must be re-exported to sync partners.
+
+### Keycloak
+
+A migrated account has no OIDC subject yet, so OidcAuth and the org sync treat it as a local
+account until its first Keycloak login ([configuration.md](configuration.md#keycloak)):
+
+1. In `orgs.yaml`, give each migrated organisation a team with its old UUID and, as its name,
+   the alias of its Keycloak organisation. The org sync renames the organisation and keeps its
+   id, its events and its users.
+2. Set `OIDCAUTH_ALLOW_EMAIL_LINKING=true` and `OIDCAUTH_UNBLOCK=true`. The org sync
+   disables each migrated account that `orgs.yaml` does not name. At the first Keycloak login,
+   OidcAuth links the account by its email, which Keycloak must hold as verified, enables it
+   again and moves it to the team of the user's Keycloak organisation.
+
+With `OIDCAUTH_UNBLOCK=true` Keycloak decides who logs in: a Keycloak login also enables an
+account that an admin disabled in MISP. An account that used header authentication in the old
+instance keeps its external auth, and the org sync leaves it enabled. The migration suite runs
+both steps on its copy.
 
 ## Migrating from official misp-docker
 

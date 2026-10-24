@@ -198,15 +198,20 @@ refusals (a non-empty target, an identity mismatch, `MIGRATE_FORCE` alone on the
 copy, then with `MIGRATE_REPLACE_COPY`). It runs this tree's images on the copy and checks it:
 row counts, both authkeys, the org, the server, the event, the attachment download, the fixture
 attachments under MISP's keys, `MISP.live` set by the configure step, the run record and the id
-sequences. A forced second copy uploads the attachments into an S3 bucket in garage; the same
+sequences. On that copy an org sync renames the migrated organisation, whose name holds spaces,
+to its Keycloak organisation's alias by its UUID, and disables the migrated account. That
+account's first Keycloak login links it by its email, enables it again and lands it in the
+renamed organisation. A forced second copy uploads the attachments into an S3 bucket in garage; the same
 checks run on it, plus a new attachment that MISP must write to the bucket. A last run copies
 that bucket into a second one and compares every key and byte.
 
 **Files:**
 - `e2e/test_migration.py` -- the suite; module fixtures carry each step's state to the next
 - `e2e/stack.py`, `e2e/conftest.py` -- the stack helper and the options every pytest suite shares (see below)
+- `e2e/keycloak.py` -- a Keycloak login through MISP, run in the sync container; the integration suite uses it too
 - `docker-compose.migrate.yml` -- overlay: the source's MariaDB (`mysql`) and the migrate service with the fixture files mounted
 - `migrate-source.sql` -- the rows of the source, on top of MISP's 2.5 schema
+- `migrate-keycloak.env` -- email linking and unblocking for the migrated account's first Keycloak login
 - `migrate-target-s3.env` -- puts the attachments in the bucket `misp-migrated`, after the second copy
 - `e2e/garage.py` -- layout, keys and buckets in the test stack's garage
 
