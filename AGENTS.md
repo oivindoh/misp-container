@@ -314,11 +314,12 @@ Values and manifests of the stack suites:
 | `suite` | `gate`, `build` | Load the images; Install helm and kubectl; Run the suite; Upload the test report and the cluster logs |
 | `scan` | `gate`, `build` | Build ${{ matrix.target }} image (from cache); Trivy vulnerability scan (${{ matrix.target }}); Upload scan results; Fail on a fixable CRITICAL finding (${{ matrix.target }}) |
 | `ci-ok` | `gate`, `build`, `unit`, `suite`, `scan` | Check the jobs |
-| `publish` | `gate`, `build`, `unit`, `suite`, `scan` | Install helm; Plan the publication; Log in to GHCR; Check tag immutability; Build and push misp (from cache); Build and push caddy (from cache); Build and push modules (from cache); Push the chart; Create GitHub Release |
+| `publish-arm64` | `gate`, `build`, `unit`, `suite`, `scan` | Log in to GHCR; Build and push misp for arm64; Build and push caddy for arm64; Build and push modules for arm64 |
+| `publish` | `gate`, `build`, `unit`, `suite`, `scan`, `publish-arm64` | Install helm; Plan the publication; Log in to GHCR; Check tag immutability; Build and push misp for amd64 (from cache); Build and push caddy for amd64 (from cache); Build and push modules for amd64 (from cache); Tag the images for amd64 and arm64; Push the chart; Create GitHub Release |
 
 ## Workflows: `.github/workflows/`
 
 | Workflow | Runs on | Does |
 |---|---|---|
-| `.github/workflows/ci.yaml` | push (master, tag v*), pull_request (master) | Tests, scans and releases the images and the Helm chart: unit tests, the chart renders, the stack suites on k3s and Trivy; on a tag, pushes the images and the chart and creates the release (tests/README.md, CI). |
+| `.github/workflows/ci.yaml` | push (master, tag v*), pull_request (master) | Tests, scans and releases the images and the Helm chart: unit tests, the chart renders, the stack suites on k3s and Trivy; on a tag, pushes the images for amd64 and arm64 and the chart and creates the release (tests/README.md, CI). |
 | `.github/workflows/track-misp-releases.yaml` | schedule, workflow_dispatch | Opens a pull request for each new MISP release of the major version the Dockerfile pins: bumps CORE_TAG, clears a CORE_COMMIT pin, resolves files/composer.lock and files/requirements-misp.txt, and regenerates the settings catalogue (DEVELOPING.md, New MISP releases). While the pin is a work-in-progress branch such as 3.0_wip, the first release of that major version replaces it. |
