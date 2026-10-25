@@ -62,11 +62,11 @@ spec:
             - name: POSTGRES_USER
               valueFrom:
                 secretKeyRef:
-                  {{- include "misp.dbSecretKeyRef" (list . "user") | nindent 18 }}
+                  {{- include "misp.secretKeyRef" (list . "DB_USER") | nindent 18 }}
             - name: POSTGRES_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  {{- include "misp.dbSecretKeyRef" (list . "password") | nindent 18 }}
+                  {{- include "misp.secretKeyRef" (list . "DB_PASSWORD") | nindent 18 }}
             - name: POSTGRES_INITDB_ARGS
               value: "--encoding=UTF8"
           volumeMounts:

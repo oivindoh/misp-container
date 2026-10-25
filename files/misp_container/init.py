@@ -11,6 +11,7 @@ import subprocess
 from pathlib import Path
 
 from . import MISP_BASE, CONFIG_DEFAULTS
+from .db import settings as db_settings
 from .env import env
 from .log import get as getlog
 
@@ -222,6 +223,11 @@ def _generate_config_php(config_dst):
 
 def database_fields() -> dict:
     """MISP's connection to this deployment's PostgreSQL, from env."""
+    tls = db_settings()
+    sslmode = tls["sslmode"]
+    if sslmode.startswith("verify-"):
+        # CakePHP puts only sslmode into the PDO DSN, so the root certificate rides on it
+        sslmode += f";sslrootcert={tls['sslrootcert'] or 'system'}"
     return {
         "datasource": "Database/PostgresObserverExtended",
         "persistent": False,
@@ -233,6 +239,7 @@ def database_fields() -> dict:
         "schema": env("DB_SCHEMA", "public"),
         "prefix": "",
         "encoding": "utf8",
+        "sslmode": sslmode,
     }
 
 

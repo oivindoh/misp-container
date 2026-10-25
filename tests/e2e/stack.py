@@ -70,6 +70,33 @@ def gnupg_key(email: str, passphrase: str) -> dict:
             "stringData": {"private.asc": result.stdout}}
 
 
+def server_certificate(*names: str) -> dict[str, str]:
+    """A CA and a server certificate for these DNS names, by openssl in the test PostgreSQL's image.
+
+    Returns the keys of a TLS Secret: ca.crt, tls.crt and tls.key.
+    """
+    script = ('cd "$(mktemp -d)" && '
+              'openssl req -x509 -newkey rsa:2048 -nodes -days 7 -subj /CN=misp-test-ca '
+              '-addext keyUsage=critical,keyCertSign,cRLSign -keyout ca.key -out ca.crt 2>/dev/null && '
+              'openssl req -newkey rsa:2048 -nodes -subj "/CN=$CN" -keyout tls.key -out tls.csr 2>/dev/null && '
+              'printf "subjectAltName=%s\nbasicConstraints=CA:FALSE\nkeyUsage=critical,digitalSignature,'
+              'keyEncipherment\nextendedKeyUsage=serverAuth\nsubjectKeyIdentifier=hash\n'
+              'authorityKeyIdentifier=keyid\n" "$SAN" > ext && '
+              'openssl x509 -req -in tls.csr -CA ca.crt -CAkey ca.key -CAcreateserial -days 7 -extfile ext '
+              '-out tls.crt 2>/dev/null && cat ca.crt tls.crt tls.key')
+    san = ",".join(f"DNS:{name}" for name in names)
+    result = subprocess.run([*image_engine(), "run", "--rm", "-e", f"CN={names[0]}", "-e", f"SAN={san}",
+                             "--entrypoint", "sh", manifests.image("postgres-tls"), "-c", script],
+                            capture_output=True, text=True, timeout=300)
+    blocks = [(m.group(1), m.group(0)) for m in
+              re.finditer(r"-----BEGIN ([A-Z ]+)-----\n.*?\n-----END \1-----\n", result.stdout, re.S)]
+    certificates = [block for kind, block in blocks if kind == "CERTIFICATE"]
+    keys = [block for kind, block in blocks if kind.endswith("PRIVATE KEY")]
+    if result.returncode != 0 or len(certificates) != 2 or len(keys) != 1:
+        raise RuntimeError(f"openssl made no certificate: {result.stderr}")
+    return {"ca.crt": certificates[0], "tls.crt": certificates[1], "tls.key": keys[0]}
+
+
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, *args, **kwargs):
         return None

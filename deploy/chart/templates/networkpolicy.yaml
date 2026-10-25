@@ -17,6 +17,9 @@
 #   metrics               --> postgres :5432, redis :6379, HTTPS out (partner probes)
 #   all pods              --> kube-dns :53
 #
+# postgres and redis are the components; while one is off, the rules of
+# networkPolicy.databaseEgress or redisEgress take its place.
+#
 # Task CronJob pods carry app.kubernetes.io/component: misp-task or
 # misp-housekeeping, and the helm test pod misp-test; the rules select on that
 # label.
@@ -34,13 +37,22 @@
       protocol: TCP
 {{- end }}
 
-{{/* The database: the postgres component; an external PostgreSQL needs a rule of its own */}}
+{{/* The database: the postgres component, else the rules of networkPolicy.databaseEgress */}}
 {{- define "misp.np.db" -}}
+{{- if .Values.postgres.enabled -}}
 {{ include "misp.np.toPod" (dict "name" "postgres" "port" 5432) }}
+{{- else -}}
+{{ toYaml .Values.networkPolicy.databaseEgress }}
+{{- end }}
 {{- end }}
 
+{{/* Redis: the redis component, else the rules of networkPolicy.redisEgress */}}
 {{- define "misp.np.redis" -}}
+{{- if .Values.redis.enabled -}}
 {{ include "misp.np.toPod" (dict "name" "redis" "port" 6379) }}
+{{- else -}}
+{{ toYaml .Values.networkPolicy.redisEgress }}
+{{- end }}
 {{- end }}
 
 {{- define "misp.np.dns" -}}
@@ -306,6 +318,7 @@ spec:
     # External HTTPS (server reachability + TLS cert checks)
     {{- include "misp.np.httpsOut" $ | nindent 4 }}
     {{- include "misp.np.dns" $ | nindent 4 }}
+{{- if .Values.postgres.enabled }}
 ---
 # -- PostgreSQL --
 apiVersion: networking.k8s.io/v1
@@ -327,6 +340,8 @@ spec:
           (dict "app.kubernetes.io/name" "metrics"))) | nindent 4 }}
   egress:
     {{- include "misp.np.dns" $ | nindent 4 }}
+{{- end }}
+{{- if .Values.redis.enabled }}
 ---
 # -- Redis --
 apiVersion: networking.k8s.io/v1
@@ -347,4 +362,5 @@ spec:
           (dict "app.kubernetes.io/name" "metrics"))) | nindent 4 }}
   egress:
     {{- include "misp.np.dns" $ | nindent 4 }}
+{{- end }}
 {{- end }}

@@ -37,19 +37,25 @@ spec:
           # The database credentials and the Redis password only: the exporter
           # never needs the admin secrets or the other application secrets
           env:
+            {{- with include "misp.connectionEnv" (list . "misp-env") }}
+            {{- . | nindent 12 }}
+            {{- end }}
             - name: DB_USER
               valueFrom:
                 secretKeyRef:
-                  {{- include "misp.dbSecretKeyRef" (list . "user") | nindent 18 }}
+                  {{- include "misp.secretKeyRef" (list . "DB_USER") | nindent 18 }}
             - name: DB_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  {{- include "misp.dbSecretKeyRef" (list . "password") | nindent 18 }}
+                  {{- include "misp.secretKeyRef" (list . "DB_PASSWORD") | nindent 18 }}
             - name: MISP_REDIS_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: misp-app
-                  key: MISP_REDIS_PASSWORD
+                  {{- include "misp.secretKeyRef" (list . "MISP_REDIS_PASSWORD") | nindent 18 }}
+          {{- with include "misp.dbCAVolumeMount" . }}
+          volumeMounts:
+            {{- . | nindent 12 }}
+          {{- end }}
           resources:
             {{- toYaml .Values.metrics.resources | nindent 12 }}
           startupProbe:
@@ -69,3 +75,7 @@ spec:
               port: 9191
             periodSeconds: 60
           {{- include "misp.containerSecurityContext" . | nindent 10 }}
+      {{- with include "misp.dbCAVolume" . }}
+      volumes:
+        {{- . | nindent 8 }}
+      {{- end }}

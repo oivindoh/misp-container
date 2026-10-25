@@ -1,6 +1,7 @@
 """Unit tests for the database layer and housekeeping (no PostgreSQL needed)."""
 
 import os
+import ssl
 import sys
 import types
 from unittest.mock import patch
@@ -114,6 +115,54 @@ class TestSplitSqlStatements:
 def test_an_empty_port_takes_postgres_default():
     with patch.dict(os.environ, {"DB_HOST": "h", "DB_PORT": ""}):
         assert db.settings()["port"] == 5432
+
+
+class TestTls:
+    """DB_SSLMODE and DB_SSLROOTCERT, in libpq's terms."""
+
+    @staticmethod
+    def settings(**env):
+        with patch.dict(os.environ, {"DB_HOST": "h", "DB_SSLMODE": "", "DB_SSLROOTCERT": "", **env}):
+            return db.settings()
+
+    def test_prefer_is_the_default(self):
+        assert self.settings()["sslmode"] == "prefer"
+
+    def test_an_unknown_mode_is_refused(self):
+        with pytest.raises(ValueError, match="DB_SSLMODE=true: use one of disable, prefer"):
+            self.settings(DB_SSLMODE="true")
+
+    def test_verify_ca_needs_a_root_certificate(self):
+        with pytest.raises(ValueError, match="needs DB_SSLROOTCERT"):
+            self.settings(DB_SSLMODE="verify-ca")
+        assert self.settings(DB_SSLMODE="verify-ca", DB_SSLROOTCERT="/ca.crt")["sslrootcert"] == "/ca.crt"
+
+    @pytest.mark.parametrize("mode, value", [("disable", False), ("prefer", None), ("require", True)])
+    def test_the_modes_without_a_check_take_pg8000s_own_values(self, mode, value):
+        assert db.ssl_context(mode) is value
+
+    def test_verify_full_checks_the_name_against_the_system_cas(self):
+        context = db.ssl_context("verify-full")
+        assert context.verify_mode == ssl.CERT_REQUIRED and context.check_hostname
+
+    def test_verify_ca_checks_the_chain_against_the_root_certificate(self):
+        with patch("ssl.create_default_context", return_value=ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)) as create:
+            context = db.ssl_context("verify-ca", "/ca.crt")
+        create.assert_called_once_with(cafile="/ca.crt")
+        assert context.verify_mode == ssl.CERT_REQUIRED and not context.check_hostname
+
+    def test_the_connection_takes_the_mode(self, fake_pg8000):
+        dbapi = sys.modules["pg8000.dbapi"]
+        fake_connect, contexts = dbapi.connect, []
+
+        def connect(**kwargs):
+            contexts.append(kwargs.pop("ssl_context"))
+            return fake_connect(**kwargs)
+
+        dbapi.connect = connect
+        with patch.dict(os.environ, {"DB_SSLMODE": "disable"}):
+            db._connect()
+        assert contexts == [False]
 
 
 class TestHousekeeping:

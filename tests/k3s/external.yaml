@@ -1,0 +1,16 @@
+# Values of the integration suite: PostgreSQL and Redis outside the chart, as a database
+# operator runs them (tests/k3s/postgres-tls.yaml, tests/k3s/external-redis.yaml). The
+# connection comes from their Secrets, and every pod checks the server's certificate.
+postgres:
+  enabled: false
+redis:
+  enabled: false
+connectionSecrets:
+  - name: pg-pguser-misp
+    keys: {DB_HOST: host, DB_PORT: port, DB_NAME: dbname, DB_USER: user, DB_PASSWORD: password}
+  - name: external-redis
+    keys: {MISP_REDIS_PASSWORD: password}
+databaseCA: {name: pg-cluster-cert, key: ca.crt}
+env:
+  DB_SSLMODE: verify-full
+  MISP_REDIS_HOST: external-redis

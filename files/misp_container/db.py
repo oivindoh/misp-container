@@ -1,7 +1,7 @@
 """Database access for the entrypoints, on PostgreSQL.
 
-DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD and DB_TLS describe the
-connection.
+DB_HOST, DB_PORT, DB_NAME, DB_USER and DB_PASSWORD describe the connection;
+DB_SSLMODE and DB_SSLROOTCERT its TLS, in libpq's terms.
 """
 
 from __future__ import annotations
@@ -21,33 +21,53 @@ NOW_EPOCH = "EXTRACT(EPOCH FROM NOW())::bigint"
 SCHEMA_FILE = "/var/www/MISP/INSTALL/POSTGRESQL.sql"
 # The prefix of the rows that count the runs of each container job (record_run)
 RUNS_PREFIX = "misp_docker.runs."
+# libpq's sslmode values; allow, which tries plain text first, is left out
+SSLMODES = ("disable", "prefer", "require", "verify-ca", "verify-full")
 
 
 def settings() -> dict:
     """Connection settings from env."""
     e = envmod.env
+    sslmode = e("DB_SSLMODE") or "prefer"
+    if sslmode not in SSLMODES:
+        raise ValueError(f"DB_SSLMODE={sslmode}: use one of {', '.join(SSLMODES)}")
+    # libpq checks against the system's CAs only in verify-full (sslrootcert=system)
+    if sslmode == "verify-ca" and not e("DB_SSLROOTCERT"):
+        raise ValueError("DB_SSLMODE=verify-ca needs DB_SSLROOTCERT, the CA certificate of the server")
     return {
         "host": e("DB_HOST"),
         "port": int(e("DB_PORT") or "5432"),
         "user": e("DB_USER"),
         "password": e("DB_PASSWORD"),
         "database": e("DB_NAME"),
-        "tls": e("DB_TLS") == "true",
+        "sslmode": sslmode,
+        "sslrootcert": e("DB_SSLROOTCERT"),
     }
+
+
+def ssl_context(sslmode: str, sslrootcert: str = ""):
+    """pg8000's ssl_context for an sslmode.
+
+    pg8000 takes False for no TLS, None for TLS when the server offers it and True
+    for TLS or nothing, both without a check of the certificate.
+    """
+    if sslmode in ("disable", "prefer", "require"):
+        return {"disable": False, "prefer": None, "require": True}[sslmode]
+    import ssl
+    context = ssl.create_default_context(cafile=sslrootcert or None)
+    context.check_hostname = sslmode == "verify-full"
+    return context
 
 
 # -- Connections and queries -------------------------------------------------
 
 def _connect(autocommit: bool = True):
-    """A DB-API connection from the environment."""
+    """A DB-API connection from the environment, over TLS as DB_SSLMODE says."""
     import pg8000.dbapi
     s = settings()
     kwargs = {"user": s["user"], "password": s["password"], "host": s["host"],
               "port": s["port"], "database": s["database"]}
-    if s["tls"]:
-        import ssl
-        kwargs["ssl_context"] = ssl.create_default_context()
-    conn = pg8000.dbapi.connect(**kwargs)
+    conn = pg8000.dbapi.connect(**kwargs, ssl_context=ssl_context(s["sslmode"], s["sslrootcert"]))
     conn.autocommit = autocommit
     return conn
 

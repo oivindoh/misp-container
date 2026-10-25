@@ -49,8 +49,7 @@ spec:
             - name: MISP_REDIS_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: misp-app
-                  key: MISP_REDIS_PASSWORD
+                  {{- include "misp.secretKeyRef" (list . "MISP_REDIS_PASSWORD") | nindent 18 }}
           ports:
             - name: redis
               containerPort: 6379

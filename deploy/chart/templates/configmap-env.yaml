@@ -1,6 +1,10 @@
 # misp-env: files/base.env, then the env value. Every MISP pod reads it; its
-# checksum rolls the Deployments.
+# checksum rolls the Deployments. With databaseCA, DB_SSLROOTCERT names the
+# certificate's mount.
 {{- $env := include "misp.envFile" (list . "files/base.env") | fromJson }}
+{{- if .Values.databaseCA }}
+{{- $_ := set $env "DB_SSLROOTCERT" "/etc/misp-docker/db-ca/ca.crt" }}
+{{- end }}
 {{- range $key, $value := .Values.env }}
 {{- $_ := set $env $key (toString $value) }}
 {{- end }}

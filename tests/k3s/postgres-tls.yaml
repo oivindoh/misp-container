@@ -1,0 +1,108 @@
+# A PostgreSQL outside the chart for the integration suite, run as a database operator runs
+# it: password logins only over TLS, and the database owned by a user that is no superuser.
+# The suite makes the Secrets pg-cluster-cert (ca.crt, tls.crt, tls.key) and pg-pguser-misp
+# (host, port, dbname, user, password), in the shape the Percona operator gives them.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pg-primary
+data:
+  pg_hba.conf: |
+    local all all trust
+    hostssl all all all scram-sha-256
+  # Runs once, on the empty data directory, as the superuser over the socket
+  misp-user.sh: |
+    psql -v ON_ERROR_STOP=1 --username postgres --set user="$MISP_USER" \
+      --set password="$MISP_PASSWORD" --set dbname="$MISP_DB" <<'SQL'
+    CREATE ROLE :"user" LOGIN PASSWORD :'password';
+    CREATE DATABASE :"dbname" OWNER :"user" ENCODING 'UTF8';
+    SQL
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pg-primary
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: pg-primary
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: pg-primary
+    spec:
+      enableServiceLinks: false
+      # PostgreSQL reads a key file owned by root only when its group alone may read it
+      securityContext:
+        fsGroup: 999
+      containers:
+        - name: postgres
+          image: docker.io/library/postgres:18.6-trixie@sha256:edb0c08dc33befd0262ab3b5cf1c4f3f8cfd8b09e88c05b45adee29d6761ddb6
+          args:
+            - -c
+            - ssl=on
+            - -c
+            - ssl_cert_file=/etc/pg-tls/tls.crt
+            - -c
+            - ssl_key_file=/etc/pg-tls/tls.key
+            - -c
+            - hba_file=/etc/pg-config/pg_hba.conf
+          env:
+            - name: POSTGRES_PASSWORD
+              value: superuser-test-pw
+            - name: MISP_USER
+              valueFrom:
+                secretKeyRef: {name: pg-pguser-misp, key: user}
+            - name: MISP_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: pg-pguser-misp, key: password}
+            - name: MISP_DB
+              valueFrom:
+                secretKeyRef: {name: pg-pguser-misp, key: dbname}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql
+            - name: tls
+              mountPath: /etc/pg-tls
+              readOnly: true
+            - name: config
+              mountPath: /etc/pg-config
+              readOnly: true
+            - name: init
+              mountPath: /docker-entrypoint-initdb.d
+              readOnly: true
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "--host", "/var/run/postgresql", "--username", "postgres"]
+            periodSeconds: 5
+      volumes:
+        - name: data
+          emptyDir: {}
+        - name: tls
+          secret:
+            secretName: pg-cluster-cert
+            defaultMode: 0640
+            items:
+              - {key: tls.crt, path: tls.crt}
+              - {key: tls.key, path: tls.key}
+        - name: config
+          configMap:
+            name: pg-primary
+            items:
+              - {key: pg_hba.conf, path: pg_hba.conf}
+        - name: init
+          configMap:
+            name: pg-primary
+            items:
+              - {key: misp-user.sh, path: misp-user.sh}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pg-primary
+spec:
+  selector:
+    app.kubernetes.io/name: pg-primary
+  ports:
+    - name: postgres
+      port: 5432

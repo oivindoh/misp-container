@@ -1,0 +1,39 @@
+# A Redis outside the chart for the integration suite. Its password is in the Secret
+# external-redis (password), which the suite makes.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: external-redis
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: external-redis
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: external-redis
+    spec:
+      enableServiceLinks: false
+      containers:
+        - name: redis
+          image: docker.io/library/redis:8.10.1-trixie@sha256:8a1efc5f479551822b47424ccae982026b633f28818eab0387348120a61e10e2
+          args: ["--requirepass", "$(REDIS_PASSWORD)", "--save", "", "--appendonly", "no"]
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: external-redis, key: password}
+          readinessProbe:
+            tcpSocket:
+              port: 6379
+            periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: external-redis
+spec:
+  selector:
+    app.kubernetes.io/name: external-redis
+  ports:
+    - name: redis
+      port: 6379

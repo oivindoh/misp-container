@@ -8,6 +8,9 @@
 - Set real values in `secrets.db`, `secrets.app` and `secrets.admin`, or set
   `secrets.create: false` and supply the Secrets. The placeholders make the configure Job
   refuse to run.
+- PostgreSQL and Redis are the `postgres` and `redis` components or external servers.
+  `connectionSecrets` takes the connection from an operator's Secrets (CloudNativePG, Percona,
+  StackGres).
 - Attachments need a ReadWriteMany claim or S3. The task runner in CronJobs does all
   periodic work.
 
@@ -65,7 +68,8 @@ below come from them.
 | `affinity` | Affinity for every pod of the release. |
 | `env` | The misp-env ConfigMap: these entries on top of files/base.env. Every MISP pod reads it. |
 | `secrets` | The misp-db, misp-app and misp-admin Secrets: these entries on top of files/secrets-*.env, whose placeholders the configure Job refuses. With create: false the chart renders none of them: supply Secrets with the same names and keys (SOPS, External Secrets, Sealed Secrets). |
-| `database` | DB_USER and DB_PASSWORD from a Secret the release does not make, such as the one a database operator (StackGres, CloudNativePG) keeps: a name and a key for each. They replace the same keys of misp-db in every pod, the postgres component included. |
+| `connectionSecrets` | The connection to PostgreSQL and Redis from Secrets the release does not make, such as the ones a database operator keeps (docs/kubernetes.md, External PostgreSQL and Redis): each Secret by name, with the env var that each of its keys fills. They replace the same entries of misp-env, misp-db and misp-app in every pod, the postgres and redis components included. |
+| `databaseCA` | The CA certificate of the PostgreSQL server, from a Secret: a name and a key. Every pod that connects mounts it at DB_SSLROOTCERT, for DB_SSLMODE verify-ca or verify-full in env. |
 | `configure` | The configure Job: schema, settings, admin user, GPG and auth, on every install and upgrade. |
 | `web` | MISP's web tier: PHP-FPM and the caddy sidecar in each pod. Replicas scale freely. |
 | `worker` | The background workers, which take their jobs from Redis. Replicas scale freely. |
@@ -82,11 +86,11 @@ Each component is off by default:
 <!-- generated: components -->
 | Component | Adds |
 |---|---|
-| `postgres` | Single-node PostgreSQL on a ReadWriteOnce claim. Leave it off for an external PostgreSQL (DB_HOST in env; StackGres and the like). |
-| `redis` | Single Redis without persistence: sessions and queued jobs do not survive a restart. Leave it off for an external Redis (MISP_REDIS_HOST in env). |
+| `postgres` | Single-node PostgreSQL on a ReadWriteOnce claim. Leave it off for an external PostgreSQL (DB_HOST in env or connectionSecrets; CloudNativePG, StackGres, Percona and the like). |
+| `redis` | Single Redis without persistence: sessions and queued jobs do not survive a restart. Leave it off for an external Redis (MISP_REDIS_HOST in env or connectionSecrets). |
 | `ingress` | An Ingress to the web Service. The default annotation makes the haproxy ingress replace X-Forwarded-For with the address it sees (docs/kubernetes.md, Client addresses). |
 | `httpRoute` | An HTTPRoute for a Gateway API implementation, in place of the ingress. The Gateway must allow routes from this namespace; set TRUSTED_PROXY_CIDR in env to its proxy pods. |
-| `networkPolicy` | NetworkPolicies for every pod: the paths MISP needs, DNS, HTTPS out and SMTP out, for any CNI that enforces the NetworkPolicy API, Cilium included. ingressNamespace holds the ingress or Gateway proxies, monitoringNamespace Prometheus. |
+| `networkPolicy` | NetworkPolicies for every pod: the paths MISP needs, DNS, HTTPS out and SMTP out, for any CNI that enforces the NetworkPolicy API, Cilium included. ingressNamespace holds the ingress or Gateway proxies, monitoringNamespace Prometheus; databaseEgress and redisEgress reach an external PostgreSQL and Redis. |
 | `cronjobs` | The periodic tasks as CronJobs, each running MISP's console in its pod: tasks maps a task to its schedule, workflows a workflow ID to its schedule. The pod's PHP process has the workers' memory ceiling (WORKER_MEMORY_LIMIT, else PHP_MEMORY_LIMIT), which resources must hold. |
 | `housekeeping` | Nightly deletes of old rows in jobs, logs and audit_logs (HOUSEKEEPING_<TABLE>_DAYS in env, defaults 2, 30 and 90). |
 | `migrate` | A copy of an existing MySQL or MariaDB MISP into the database, before the configure Job runs (docs/migration.md). secret: entries on top of files/secrets-migrate.env for the misp-migrate Secret. volumes and volumeMounts: the source's attachments directory. |
@@ -132,24 +136,6 @@ The files hold placeholders that the configure Job refuses. Set the real values 
 keys, for example through SOPS, External Secrets or Sealed Secrets. The pods roll when a
 Secret the chart makes changes; after a change to a Secret you supply, restart them.
 
-### Database credentials from a Secret of their own
-
-A database operator such as StackGres or CloudNativePG keeps the credentials of its database in
-a Secret. Name that Secret and its keys in `database`, and point `env` at the server:
-
-```yaml
-database:
-  user: {name: misp-pg, key: username}
-  password: {name: misp-pg, key: password}
-env:
-  DB_HOST: misp-pg
-```
-
-Every pod then reads `DB_USER` and `DB_PASSWORD` from that Secret, and the same keys of
-`misp-db` go unused. The Secret must be in the release's namespace. Set `database.user` or
-`database.password` alone to take only that one from it. A change in the Secret does not roll
-the pods: restart them.
-
 These Secrets are optional and copied into every pod at start:
 
 | Secret | Content | Command |
@@ -161,6 +147,44 @@ These Secrets are optional and copied into every pod at start:
 gpg --batch --passphrase "$GNUPG_PASSWORD" --quick-generate-key "MISP Admin <misp@example.com>" rsa3072 sign never
 gpg --armor --export-secret-keys misp@example.com > private.asc
 ```
+
+## External PostgreSQL and Redis
+
+With the `postgres` and `redis` components off, MISP connects to the servers that `DB_HOST`
+and `MISP_REDIS_HOST` name. A database operator keeps the connection to its database in a
+Secret. `connectionSecrets` names each such Secret and the env var that each of its keys fills:
+
+```yaml
+connectionSecrets:
+  - name: misp-pguser-misp
+    keys: {DB_HOST: host, DB_PORT: port, DB_NAME: dbname, DB_USER: user, DB_PASSWORD: password}
+  - name: misp-redis
+    keys: {MISP_REDIS_PASSWORD: password}
+databaseCA: {name: misp-cluster-cert, key: ca.crt}
+env:
+  DB_SSLMODE: verify-full
+  MISP_REDIS_HOST: misp-redis
+```
+
+The keys can fill `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`,
+`MISP_REDIS_HOST`, `MISP_REDIS_PORT` and `MISP_REDIS_PASSWORD`. Each replaces the same entry of
+`misp-env`, `misp-db` or `misp-app` in every pod. A var that no Secret fills keeps its value
+from `env` or `secrets`. The Secrets must be in the release's namespace. A change in a Secret
+does not roll the pods: restart them.
+
+`databaseCA` names the Secret and key of the CA certificate that signed the server's
+certificate. Every pod that connects mounts it, and `DB_SSLROOTCERT` names the file. Set
+`DB_SSLMODE` in `env` ([configuration.md](configuration.md#database)): `verify-full` checks
+the certificate and the host name, `require` only encrypts.
+
+| Operator | Secret and keys | CA for `databaseCA` | Notes |
+|---|---|---|---|
+| CloudNativePG | `<cluster>-app`: `host`, `port`, `dbname`, `username`, `password` | `<cluster>-ca`, key `ca.crt` | `host` is `<cluster>-rw`, a short name: in another namespace, set `DB_HOST` in `env` to `<cluster>-rw.<namespace>.svc` |
+| Percona Operator for PostgreSQL | `<cluster>-pguser-<user>`: `host`, `port`, `dbname`, `user`, `password` | `<cluster>-cluster-cert`, key `ca.crt` | Accepts password logins only over TLS: `DB_SSLMODE` `require` or `verify-full` |
+| StackGres | A Secret of your own with the password of MISP's user | None: the server certificate is self-signed | The SGCluster's own Secret holds only the operator's users. Create MISP's user and database with an SGScript, and set `DB_HOST` in `env` to `<cluster>`, the Service to the leader: port 5432 through PgBouncer, 5433 direct |
+
+The database must be owned by `DB_USER`, and a connection pooler in front of it must run in
+session mode ([configuration.md](configuration.md#database)).
 
 ## Storage
 
@@ -186,6 +210,10 @@ needs a change to the template. `networkPolicy.ingressNamespace` (default `hapro
 `networkPolicy.monitoringNamespace` (default `monitoring`) name the namespaces of the
 ingress and of Prometheus. The header of `deploy/chart/templates/networkpolicy.yaml`
 lists every flow. Any CNI that enforces the NetworkPolicy API applies them, Cilium included.
+While the `postgres` or `redis` component is off, the rules in `networkPolicy.databaseEgress`
+or `networkPolicy.redisEgress` reach the external server: by default any destination on port
+5432 or 6379. Narrow a rule to the server's pods with `to`, and name the port the pods listen
+on, which can differ from the port of their Service.
 A cluster whose CNI enforces none leaves every pod open to the namespace and, without a
 default-deny elsewhere, to the cluster.
 

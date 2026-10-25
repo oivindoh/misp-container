@@ -52,7 +52,9 @@
       "properties": {
         "enabled": {"type": "boolean"},
         "ingressNamespace": {"type": "string"},
-        "monitoringNamespace": {"type": "string"}
+        "monitoringNamespace": {"type": "string"},
+        "databaseEgress": {"type": "array", "items": {"type": "object"}},
+        "redisEgress": {"type": "array", "items": {"type": "object"}}
       }
     }
   },
@@ -83,14 +85,25 @@
         "admin": {"$ref": "#/definitions/scalars"}
       }
     },
-    "database": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "user": {"$ref": "#/definitions/secretKeyRef"},
-        "password": {"$ref": "#/definitions/secretKeyRef"}
+    "connectionSecrets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "keys"],
+        "properties": {
+          "name": {"type": "string", "minLength": 1},
+          "keys": {
+            "type": "object",
+            "minProperties": 1,
+            "propertyNames": {"enum": ["DB_HOST", "DB_PORT", "DB_NAME", "DB_USER", "DB_PASSWORD",
+                                       "MISP_REDIS_HOST", "MISP_REDIS_PORT", "MISP_REDIS_PASSWORD"]},
+            "additionalProperties": {"type": "string", "minLength": 1}
+          }
+        }
       }
     },
+    "databaseCA": {"$ref": "#/definitions/secretKeyRef"},
     "configure": {
       "type": "object",
       "additionalProperties": false,

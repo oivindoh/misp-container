@@ -80,7 +80,7 @@ flowchart LR
         api
         np --> web[release: web, worker, postgres, redis, ...]
         toolbox[toolbox pod] --> web
-        services[test services: Keycloak, garage, MariaDB, MISP 2.5] --- web
+        services[test services: Keycloak, garage, MariaDB, MISP 2.5, PostgreSQL, Redis] --- web
     end
 ```
 
@@ -115,8 +115,9 @@ teardown writes `$TMPDIR/<suite>-cluster-logs.txt`. CI uploads them with the JUn
 
 ## Integration suite
 
-One release of the chart, checked feature by feature, with Keycloak for the OIDC login and
-garage for the attachments in S3.
+One release of the chart, checked feature by feature, with Keycloak for the OIDC login, garage
+for the attachments in S3, and PostgreSQL and Redis outside the chart, as a database operator
+runs them (`k3s/external.yaml`).
 
 | Section | What it verifies |
 |-------|------------------|
@@ -128,7 +129,8 @@ garage for the attachments in S3.
 | Background jobs | Event publish triggers job, worker completes it (status=4) |
 | MISP's Python scripts | STIX 2 and STIX 1 exports |
 | PHP-FPM | Listening on port 9002, its php.ini, the built extensions |
-| Distribution files and app/Config | taxonomies in the image, bootstrap.php is MISP's default plus the logging block, database.php on PostgreSQL, config.php content |
+| Distribution files and app/Config | taxonomies in the image, bootstrap.php is MISP's default plus the logging block, database.php on the external PostgreSQL with `verify-full`, config.php content and the external Redis |
+| External PostgreSQL | The database user is no superuser, a connection without TLS is refused, the server certificate is checked against the CA of `databaseCA` |
 | GPG | The key of the `misp-gnupg` Secret, which the suite makes with the image's `gpg`, imported into the web pod's homedir |
 | MISP API | Version endpoint, event create via API |
 | Warm restart | A second run over the database groups loads the settings and changes none |
@@ -149,6 +151,7 @@ garage for the attachments in S3.
 - `k3s/keycloak.yaml`, `keycloak-realm.json` -- Keycloak and its realm: the MISP client with its roles and the `roles` mapper, an organisation, and a user in it
 - `k3s/garage.yaml`, `e2e/garage.py` -- garage, and its layout, keys and buckets through the admin API
 - `e2e/keycloak.py` -- a Keycloak login through MISP, run in the toolbox; the migration suite uses it too
+- `k3s/external.yaml`, `k3s/postgres-tls.yaml`, `k3s/external-redis.yaml` -- PostgreSQL that takes password logins over TLS only, with its Secrets in the shape of the Percona operator's and a certificate that openssl in its image makes, and Redis with a password
 
 Run with: `mise run test-integration`
 

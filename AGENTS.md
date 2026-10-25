@@ -103,7 +103,7 @@ Values of the misp chart. The comment above each top-level key describes it; doc
 
 | Template | Renders, every component on | Note |
 |---|---|---|
-| `configmap-env.yaml` | ConfigMap `misp-env` | misp-env: files/base.env, then the env value. Every MISP pod reads it; its checksum rolls the Deployments. |
+| `configmap-env.yaml` | ConfigMap `misp-env` | misp-env: files/base.env, then the env value. Every MISP pod reads it; its checksum rolls the Deployments. With databaseCA, DB_SSLROOTCERT names the certificate's mount. |
 | `configmap-orgs.yaml` | ConfigMap `misp-orgs` | Declarative org config for the org-sync Job (orgSync.orgs; format: deploy/orgs.yaml.example). |
 | `cronjobs-housekeeping.yaml` | CronJob `housekeeping-audit-logs`, CronJob `housekeeping-jobs`, CronJob `housekeeping-logs` | The housekeeping component: nightly batched deletes of old rows in jobs, logs and audit_logs (python3 -m misp_container.housekeeping). Autovacuum reclaims the space. Retention is a policy choice: HOUSEKEEPING_<TABLE>_DAYS in env. |
 | `cronjobs.yaml` | CronJob `cache-feeds`, CronJob `cache-servers`, CronJob `fetch-feeds`, CronJob `periodic-summary`, CronJob `pull-servers`, CronJob `push-servers`, CronJob `push-taxii`, CronJob `sharing-group-blueprints`, CronJob `update-galaxies`, CronJob `update-noticelists`, CronJob `update-object-templates`, CronJob `update-taxonomies`, CronJob `update-warninglists` | The cronjobs component: the periodic tasks, run by the task runner in the main image (python3 -m misp_container.task <task>), one CronJob per entry of cronjobs.tasks with a schedule and one per workflow ID in cronjobs.workflows. Each runs MISP's console in its pod, so the periodic work never waits in the workers' queues. |
@@ -137,7 +137,8 @@ Values:
 | `affinity` | Affinity for every pod of the release. |
 | `env` | The misp-env ConfigMap: these entries on top of files/base.env. Every MISP pod reads it. |
 | `secrets` | The misp-db, misp-app and misp-admin Secrets: these entries on top of files/secrets-*.env, whose placeholders the configure Job refuses. With create: false the chart renders none of them: supply Secrets with the same names and keys (SOPS, External Secrets, Sealed Secrets). |
-| `database` | DB_USER and DB_PASSWORD from a Secret the release does not make, such as the one a database operator (StackGres, CloudNativePG) keeps: a name and a key for each. They replace the same keys of misp-db in every pod, the postgres component included. |
+| `connectionSecrets` | The connection to PostgreSQL and Redis from Secrets the release does not make, such as the ones a database operator keeps (docs/kubernetes.md, External PostgreSQL and Redis): each Secret by name, with the env var that each of its keys fills. They replace the same entries of misp-env, misp-db and misp-app in every pod, the postgres and redis components included. |
+| `databaseCA` | The CA certificate of the PostgreSQL server, from a Secret: a name and a key. Every pod that connects mounts it at DB_SSLROOTCERT, for DB_SSLMODE verify-ca or verify-full in env. |
 | `configure` | The configure Job: schema, settings, admin user, GPG and auth, on every install and upgrade. |
 | `web` | MISP's web tier: PHP-FPM and the caddy sidecar in each pod. Replicas scale freely. |
 | `worker` | The background workers, which take their jobs from Redis. Replicas scale freely. |
@@ -150,11 +151,11 @@ Components, each off by default:
 
 | Component | Adds |
 |---|---|
-| `postgres` | Single-node PostgreSQL on a ReadWriteOnce claim. Leave it off for an external PostgreSQL (DB_HOST in env; StackGres and the like). |
-| `redis` | Single Redis without persistence: sessions and queued jobs do not survive a restart. Leave it off for an external Redis (MISP_REDIS_HOST in env). |
+| `postgres` | Single-node PostgreSQL on a ReadWriteOnce claim. Leave it off for an external PostgreSQL (DB_HOST in env or connectionSecrets; CloudNativePG, StackGres, Percona and the like). |
+| `redis` | Single Redis without persistence: sessions and queued jobs do not survive a restart. Leave it off for an external Redis (MISP_REDIS_HOST in env or connectionSecrets). |
 | `ingress` | An Ingress to the web Service. The default annotation makes the haproxy ingress replace X-Forwarded-For with the address it sees (docs/kubernetes.md, Client addresses). |
 | `httpRoute` | An HTTPRoute for a Gateway API implementation, in place of the ingress. The Gateway must allow routes from this namespace; set TRUSTED_PROXY_CIDR in env to its proxy pods. |
-| `networkPolicy` | NetworkPolicies for every pod: the paths MISP needs, DNS, HTTPS out and SMTP out, for any CNI that enforces the NetworkPolicy API, Cilium included. ingressNamespace holds the ingress or Gateway proxies, monitoringNamespace Prometheus. |
+| `networkPolicy` | NetworkPolicies for every pod: the paths MISP needs, DNS, HTTPS out and SMTP out, for any CNI that enforces the NetworkPolicy API, Cilium included. ingressNamespace holds the ingress or Gateway proxies, monitoringNamespace Prometheus; databaseEgress and redisEgress reach an external PostgreSQL and Redis. |
 | `cronjobs` | The periodic tasks as CronJobs, each running MISP's console in its pod: tasks maps a task to its schedule, workflows a workflow ID to its schedule. The pod's PHP process has the workers' memory ceiling (WORKER_MEMORY_LIMIT, else PHP_MEMORY_LIMIT), which resources must hold. |
 | `housekeeping` | Nightly deletes of old rows in jobs, logs and audit_logs (HOUSEKEEPING_<TABLE>_DAYS in env, defaults 2, 30 and 90). |
 | `migrate` | A copy of an existing MySQL or MariaDB MISP into the database, before the configure Job runs (docs/migration.md). secret: entries on top of files/secrets-migrate.env for the misp-migrate Secret. volumes and volumeMounts: the source's attachments directory. |
@@ -274,11 +275,14 @@ Values and manifests of the stack suites:
 
 | File | Is |
 |---|---|
+| `tests/k3s/external-redis.yaml` | A Redis outside the chart for the integration suite. Its password is in the Secret external-redis (password), which the suite makes. |
+| `tests/k3s/external.yaml` | Values of the integration suite: PostgreSQL and Redis outside the chart, as a database operator runs them (tests/k3s/postgres-tls.yaml, tests/k3s/external-redis.yaml). The connection comes from their Secrets, and every pod checks the server's certificate. |
 | `tests/k3s/garage.yaml` | garage: S3 on 3900 and its admin API on 3903 (tests/e2e/garage.py), single-node and ephemeral, for the attachments in S3 |
 | `tests/k3s/keycloak.yaml` | Keycloak with the realm of tests/keycloak-realm.json, which the suite puts in the ConfigMap keycloak-realm. MISP and the toolbox reach it under one name, so the issuer matches |
 | `tests/k3s/mariadb.yaml` | A MariaDB with one database, ephemeral: the migration suite's source, and the database of the hub-spoke suite's MISP 2.5. The suite puts MARIADB_DATABASE, MARIADB_USER and MARIADB_PASSWORD in the ConfigMap mariadb-env. MariaDB stays on its LTS line, 11.8 (.github/dependabot.yml) |
 | `tests/k3s/misp-25.yaml` | MISP 2.5.50 from the MISP project's images (github.com/MISP/misp-docker): the hub-spoke suite's partner C, on the MariaDB of tests/k3s/mariadb.yaml and a Redis of its own. The suite puts the settings, in the names of those images, in the ConfigMap misp-25-env. A rebuild moves a tag, so the digests pin the images. No pod gets service links: misp-docker reads REDIS_PORT, which a link sets to tcp://<address> |
 | `tests/k3s/oidc.yaml` | OIDC through the Keycloak of tests/k3s/keycloak.yaml (realm tests/keycloak-realm.json), on top of values.yaml for the integration and migration suites. Mixed auth keeps the password form for the other tests. The client roles, highest first, so the highest role a user holds wins. No default organisation: the user lands in its Keycloak organisation's team or nowhere. |
+| `tests/k3s/postgres-tls.yaml` | A PostgreSQL outside the chart for the integration suite, run as a database operator runs it: password logins only over TLS, and the database owned by a user that is no superuser. The suite makes the Secrets pg-cluster-cert (ca.crt, tls.crt, tls.key) and pg-pguser-misp (host, port, dbname, user, password), in the shape the Percona operator gives them. |
 | `tests/k3s/values.yaml` | The values every stack suite starts from (tests/e2e/stack.py), on k3s: the postgres and redis components, test secrets, a ReadWriteOnce attachments claim, because k3s's local-path storage offers no ReadWriteMany, and the images under the tag under test, which the suite sets. A suite adds its own values on top. |
 
 ## Commands

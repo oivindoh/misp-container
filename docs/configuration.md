@@ -46,13 +46,15 @@ MISP runs on PostgreSQL.
 | Variable | Description |
 |----------|-------------|
 | `DB_HOST`, `DB_PORT` | The server: `postgres` and 5432, the Service of the postgres component |
-| `DB_NAME`, `DB_USER`, `DB_PASSWORD` | The database and its owner (`misp-db` holds the credentials, or the Secret that the chart's `database` value names) |
-| `DB_TLS` | `true` for a TLS connection |
+| `DB_NAME`, `DB_USER`, `DB_PASSWORD` | The database and its owner (`misp-db` holds the credentials, or the Secrets that the chart's `connectionSecrets` value names) |
+| `DB_SSLMODE` | TLS in libpq's terms: `disable`, `prefer` (the default: TLS when the server offers it), `require`, `verify-ca` or `verify-full`. Only the two verify modes check the server's certificate |
+| `DB_SSLROOTCERT` | The CA certificate of the verify modes; the chart's `databaseCA` value mounts it and sets this. `verify-ca` needs it; without it, `verify-full` checks against the system's CAs |
 
 The database must exist with UTF8 encoding and be owned by the user; the configure Job loads
-MISP's baseline into it. An external PostgreSQL such as StackGres needs only the `DB_*`
-values. Keep a connection pooler in front of it in session mode, as StackGres's is by
-default: the configure Job holds an advisory lock for its whole run. The migrate Job copies a
+MISP's baseline into it. An external PostgreSQL such as CloudNativePG, Percona or StackGres
+needs only the `DB_*` values ([kubernetes.md](kubernetes.md#external-postgresql-and-redis)).
+Keep a connection pooler in front of it in session mode, as StackGres's is by default: the
+configure Job holds an advisory lock for its whole run. The migrate Job copies a
 MySQL or MariaDB MISP into it ([migration.md](migration.md)). The On Demand correlation
 engine needs MySQL, so it is not available.
 

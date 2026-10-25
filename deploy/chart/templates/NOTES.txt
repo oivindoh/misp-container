@@ -6,8 +6,8 @@ Then check the release from inside the cluster:
   helm test {{ .Release.Name }} --namespace {{ .Release.Namespace }} --logs
 {{- if not .Values.postgres.enabled }}
 
-No postgres component is on: MISP connects to DB_HOST from the env value.
+No postgres component is on: MISP connects to DB_HOST from the env value or connectionSecrets.
 {{- end }}
 {{- if not .Values.redis.enabled }}
-No redis component is on: MISP connects to MISP_REDIS_HOST from the env value.
+No redis component is on: MISP connects to MISP_REDIS_HOST from the env value or connectionSecrets.
 {{- end }}
