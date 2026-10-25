@@ -29,7 +29,9 @@ spec:
           env:
             - name: SYNC_BASE_URL
               value: http://web:8080
-            {{- include "misp.dbEnv" . | nindent 12 }}
+            {{- with include "misp.connectionEnv" (list . "misp-env" "misp-db") }}
+            {{- . | nindent 12 }}
+            {{- end }}
           envFrom:
             - configMapRef:
                 name: misp-env
@@ -42,6 +44,9 @@ spec:
               mountPath: /etc/misp-docker/orgs.yaml
               subPath: orgs.yaml
               readOnly: true
+            {{- with include "misp.dbCAVolumeMount" . }}
+            {{- . | nindent 12 }}
+            {{- end }}
           resources:
             {{- toYaml .Values.orgSync.resources | nindent 12 }}
           {{- include "misp.containerSecurityContext" . | nindent 10 }}
@@ -49,3 +54,6 @@ spec:
         - name: orgs
           configMap:
             name: misp-orgs
+        {{- with include "misp.dbCAVolume" . }}
+        {{- . | nindent 8 }}
+        {{- end }}

@@ -26,6 +26,10 @@ def config_map(name: str, data: dict[str, str]) -> dict:
     return {"apiVersion": "v1", "kind": "ConfigMap", "metadata": {"name": name}, "data": data}
 
 
+def secret(name: str, data: dict[str, str]) -> dict:
+    return {"apiVersion": "v1", "kind": "Secret", "metadata": {"name": name}, "stringData": data}
+
+
 def nodeport(name: str, selector: str, ports: dict[int, int]) -> dict:
     """A NodePort Service to the pods named selector: {port: node port}. The cluster publishes each node port."""
     return {"apiVersion": "v1", "kind": "Service", "metadata": {"name": f"test-{name}"},
@@ -41,6 +45,24 @@ def garage() -> list[dict]:
 def keycloak() -> list[dict]:
     return [config_map("keycloak-realm", {"misp-realm.json": (TESTS / "keycloak-realm.json").read_text()}),
             *load("keycloak")]
+
+
+def image(name: str) -> str:
+    """The image of the first container in tests/k3s/<name>.yaml."""
+    workload = next(doc for doc in load(name) if doc["kind"] == "Deployment")
+    return workload["spec"]["template"]["spec"]["containers"][0]["image"]
+
+
+def postgres_tls(certificate: dict[str, str], user: dict[str, str]) -> list[dict]:
+    """PostgreSQL that takes password logins over TLS only, with its Secrets as the Percona operator makes them.
+
+    certificate holds ca.crt, tls.crt and tls.key; user holds host, port, dbname, user and password.
+    """
+    return [secret("pg-cluster-cert", certificate), secret("pg-pguser-misp", user), *load("postgres-tls")]
+
+
+def external_redis(password: str) -> list[dict]:
+    return [secret("external-redis", {"password": password}), *load("external-redis")]
 
 
 def mariadb(user: str, password: str, database: str = "misp") -> list[dict]:

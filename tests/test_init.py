@@ -133,7 +133,7 @@ class TestPrepareConfig:
         monkeypatch.setattr("misp_container.config.CONFIG_DIR", str(tmp_path))
         monkeypatch.setattr(init_mod, "CONFIG_DEFAULTS", str(defaults))
         env_vars = {"DB_HOST": "db", "DB_USER": "u",
-                    "DB_PORT": "3306", "DB_PASSWORD": "p", "DB_NAME": "misp", "DB_TLS": "false",
+                    "DB_PORT": "3306", "DB_PASSWORD": "p", "DB_NAME": "misp", "DB_SSLMODE": "prefer",
                     "MISP_EMAIL": "m@x", "SMTP_FQDN": "smtp", "SMTP_PORT": "25"}
         with patch.dict(os.environ, env_vars):
             os.environ.pop("MISP_REDIS_HOST", None)

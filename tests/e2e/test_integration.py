@@ -2,8 +2,9 @@
 
     pytest tests/e2e/test_integration.py [--skip-build] [--keep]
 
-Beside the release run Keycloak for the OIDC login and garage for the
-attachments in S3. The tests run in file order on one release. Later sections
+Beside the release run Keycloak for the OIDC login, garage for the
+attachments in S3, and PostgreSQL and Redis outside the chart, as a database
+operator runs them (tests/k3s/external.yaml). The tests run in file order on one release. Later sections
 depend on the state earlier ones leave: custom auth creates a user that the org
 sync warm run disables, the metrics section scales the workers to none and back,
 and the multi-replica section scales web to two replicas and back.
@@ -27,7 +28,7 @@ import manifests
 from cluster import IMAGES, Cluster, build_images, image_engine, image_tag
 from misp_container import WORKER_QUEUES
 from misp_container.logrelay import FILES as RELAYED
-from stack import K3S, REPO, VALUES, Release, gnupg_key, scratch_dir, values_file
+from stack import K3S, REPO, VALUES, Release, gnupg_key, merge, scratch_dir, server_certificate, values_file
 
 sys.path.insert(0, str(REPO / "scripts"))
 from check_upstream import NOT_RELAYED  # noqa: E402
@@ -39,6 +40,10 @@ PORTS = {28080: 30080, 19191: 30191, 16666: 30666, 3900: 30900, 3903: 30903}
 METRICS = "http://localhost:19191"
 MODULES = "http://localhost:16666"
 SYNC_ORG_UUID = "4f1ed2b2-1821-49da-bf2c-b7ab639d9b19"
+# The external PostgreSQL in the release's namespace, misp, and the keys of its user Secret
+PG_HOST = "pg-primary.misp.svc"
+PG_USER = {"host": PG_HOST, "port": "5432", "dbname": "misp", "user": "misp", "password": "pg-test-pw"}
+DB_CA = "/etc/misp-docker/db-ca/ca.crt"
 
 
 def bootstrap_garage():
@@ -54,9 +59,10 @@ def stack(options, failed_in_module):
     cluster = Cluster("misp-integration", PORTS)
     cluster.start()
     cluster.load_images_under_test()
-    s = Release(cluster, values=values_file(K3S / "oidc.yaml"))
+    s = Release(cluster, values=merge(values_file(K3S / "oidc.yaml"), values_file(K3S / "external.yaml")))
     s.apply(gnupg_key(ADMIN_EMAIL, s.values["secrets"]["app"]["GNUPG_PASSWORD"]), *manifests.garage(),
-            *manifests.keycloak(),
+            *manifests.keycloak(), *manifests.postgres_tls(server_certificate("pg-primary", PG_HOST), PG_USER),
+            *manifests.external_redis("external-redis-pw"),
             manifests.nodeport("web", "web", {8080: 30080}), manifests.nodeport("metrics", "metrics", {9191: 30191}),
             manifests.nodeport("modules", "modules", {6666: 30666}),
             manifests.nodeport("garage", "garage", {3900: 30900, 3903: 30903}))
@@ -289,9 +295,34 @@ print((rendered[:start] + rendered[end:]).strip() == default.strip())
     assert out == "True", f"bootstrap.php differs from MISP's bootstrap.default.php beyond the logging block: {out}"
 
 
-def test_database_php_points_at_postgres(stack):
-    config = stack.exec("web", "grep -E 'datasource|host' /var/www/MISP/app/Config/database.php")
-    assert "Database/PostgresObserverExtended" in config and "'postgres'" in config
+def test_database_php_points_at_the_external_postgresql(stack):
+    config = stack.exec("web", "cat /var/www/MISP/app/Config/database.php")
+    assert "Database/PostgresObserverExtended" in config and f"'host' => '{PG_HOST}'," in config
+    assert f"'sslmode' => 'verify-full;sslrootcert={DB_CA}'," in config
+
+
+def test_config_php_points_at_the_external_redis(stack):
+    assert "'redis_host' => 'external-redis'" in stack.exec("web", "cat /var/www/MISP/app/Config/config.php")
+
+
+# -- external PostgreSQL ---------------------------------------------------------------
+
+def test_the_database_user_is_no_superuser(stack):
+    assert stack.sql("SELECT CASE WHEN rolsuper THEN 'yes' ELSE 'no' END FROM pg_roles "
+                     "WHERE rolname = current_user") == "no"
+
+
+def test_the_database_refuses_plain_text(stack):
+    rc, out = stack.python("from misp_container import db\ndb.query('SELECT 1', check=True)",
+                           env={"DB_SSLMODE": "disable"})
+    assert rc != 0 and "no encryption" in out, out
+
+
+def test_the_connection_checks_the_server_certificate(stack):
+    # The system's CAs never signed the test CA's certificate
+    rc, out = stack.python("from misp_container import db\ndb.query('SELECT 1', check=True)",
+                           env={"DB_SSLROOTCERT": ""})
+    assert rc != 0 and "CERTIFICATE_VERIFY_FAILED" in out, out
 
 
 @pytest.mark.parametrize("needle", ["redis_host", "redis_password", "SimpleBackgroundJobs"])

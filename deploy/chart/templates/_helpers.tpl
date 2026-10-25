@@ -95,6 +95,9 @@ worker and the task CronJobs. Each pod renders its own app/Config.
   readOnly: true
 - name: tmp
   mountPath: /tmp
+{{- with include "misp.dbCAVolumeMount" . }}
+{{ . }}
+{{- end }}
 {{- end }}
 
 {{- define "misp.appVolumes" -}}
@@ -128,6 +131,29 @@ worker and the task CronJobs. Each pod renders its own app/Config.
   secret:
     secretName: misp-certs
     optional: true
+{{- with include "misp.dbCAVolume" . }}
+{{ . }}
+{{- end }}
+{{- end }}
+
+{{/* The databaseCA certificate at DB_SSLROOTCERT, in every pod that connects to the database */}}
+{{- define "misp.dbCAVolumeMount" -}}
+{{- if .Values.databaseCA -}}
+- name: db-ca
+  mountPath: /etc/misp-docker/db-ca
+  readOnly: true
+{{- end }}
+{{- end }}
+
+{{- define "misp.dbCAVolume" -}}
+{{- with .Values.databaseCA -}}
+- name: db-ca
+  secret:
+    secretName: {{ .name }}
+    items:
+      - key: {{ .key }}
+        path: ca.crt
+{{- end }}
 {{- end }}
 
 {{/* LOG_FORMAT and TZ from misp-env, for a pod that does not read the whole ConfigMap */}}
@@ -167,16 +193,11 @@ checksum/secrets: {{ printf "%s%s%s%s" (.Files.Get "files/secrets-db.env") (toJs
 {{- end }}
 
 {{/*
-DB_USER and DB_PASSWORD from the Secrets that database.user and database.password name, as
-env entries of a container that reads misp-db through envFrom: env wins over envFrom.
-*/}}
-{{/*
-The env of a container of the misp image: DB_USER and DB_PASSWORD from the
-database value (misp.dbEnv), the misp-env ConfigMap, and the Secrets named.
-Call it with (list $root "misp-db" ...).
+The env of a container of the misp image: the connection Secrets (misp.connectionEnv), the
+misp-env ConfigMap, and the Secrets named. Call it with (list $root "misp-db" ...).
 */}}
 {{- define "misp.appEnv" -}}
-{{- with include "misp.dbEnv" (first .) -}}
+{{- with include "misp.connectionEnv" (concat (list (first .) "misp-env") (rest .)) -}}
 env:
   {{- . | nindent 2 }}
 {{ end -}}
@@ -189,32 +210,53 @@ envFrom:
 {{- end }}
 {{- end }}
 
-{{- define "misp.dbEnv" -}}
-{{- range $var, $ref := dict "DB_USER" .Values.database.user "DB_PASSWORD" .Values.database.password }}
-{{- if $ref }}
-- name: {{ $var }}
-  valueFrom:
-    secretKeyRef:
-      name: {{ $ref.name }}
-      key: {{ $ref.key }}
-{{- end }}
-{{- end }}
+{{/*
+The env vars a connection Secret may fill, each with the source it replaces.
+*/}}
+{{- define "misp.connectionVars" -}}
+{{- toJson (dict
+      "DB_HOST" "misp-env" "DB_PORT" "misp-env" "DB_NAME" "misp-env"
+      "DB_USER" "misp-db" "DB_PASSWORD" "misp-db"
+      "MISP_REDIS_HOST" "misp-env" "MISP_REDIS_PORT" "misp-env" "MISP_REDIS_PASSWORD" "misp-app") }}
 {{- end }}
 
 {{/*
-The secretKeyRef of the database user or password: database.user or database.password when
-set, else the key of misp-db. Takes (list root "user"|"password").
+The secretKeyRef of each env var that connectionSecrets fills, as JSON. A later entry wins.
 */}}
-{{- define "misp.dbSecretKeyRef" -}}
-{{- $root := index . 0 }}
-{{- $ref := index $root.Values.database (index . 1) }}
-{{- if $ref }}
-name: {{ $ref.name }}
-key: {{ $ref.key }}
-{{- else }}
-name: misp-db
-key: {{ ternary "DB_USER" "DB_PASSWORD" (eq (index . 1) "user") }}
+{{- define "misp.connectionRefs" -}}
+{{- $refs := dict }}
+{{- range $secret := .Values.connectionSecrets }}
+{{- range $var, $key := $secret.keys }}
+{{- $_ := set $refs $var (dict "name" $secret.name "key" $key) }}
 {{- end }}
+{{- end }}
+{{- toJson $refs }}
+{{- end }}
+
+{{/*
+env entries from connectionSecrets for a container that reads these sources through envFrom:
+an entry replaces the var of a source the container reads, and env wins over envFrom. Takes
+(list root source ...).
+*/}}
+{{- define "misp.connectionEnv" -}}
+{{- $vars := include "misp.connectionVars" . | fromJson }}
+{{- $env := list }}
+{{- range $var, $ref := include "misp.connectionRefs" (first .) | fromJson }}
+{{- if has (get $vars $var) (rest $) }}
+{{- $env = append $env (dict "name" $var "valueFrom" (dict "secretKeyRef" $ref)) }}
+{{- end }}
+{{- end }}
+{{- with $env }}{{ toYaml . }}{{ end }}
+{{- end }}
+
+{{/*
+The secretKeyRef of one secret env var: its connectionSecrets entry, else the key of the same
+name in misp-db (DB_USER, DB_PASSWORD) or misp-app (MISP_REDIS_PASSWORD). Takes (list root var).
+*/}}
+{{- define "misp.secretKeyRef" -}}
+{{- $var := index . 1 }}
+{{- $ref := get (include "misp.connectionRefs" (index . 0) | fromJson) $var }}
+{{- toYaml (default (dict "name" (get (include "misp.connectionVars" . | fromJson) $var) "key" $var) $ref) }}
 {{- end }}
 
 {{/*
@@ -285,6 +327,10 @@ spec:
                 {{- toYaml $root.Values.cronjobs.resources | nindent 16 }}
               {{- else }}
               {{- include "misp.appEnv" (list $root "misp-db") | nindent 14 }}
+              {{- with include "misp.dbCAVolumeMount" $root }}
+              volumeMounts:
+                {{- . | nindent 16 }}
+              {{- end }}
               resources:
                 {{- toYaml $root.Values.housekeeping.resources | nindent 16 }}
               {{- end }}
@@ -293,5 +339,8 @@ spec:
           volumes:
             {{- include "misp.appVolumes" $root | nindent 12 }}
             {{- include "misp.attachmentsVolume" $root | nindent 12 }}
+          {{- else if $root.Values.databaseCA }}
+          volumes:
+            {{- include "misp.dbCAVolume" $root | nindent 12 }}
           {{- end }}
 {{- end }}

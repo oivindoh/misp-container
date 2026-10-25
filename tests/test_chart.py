@@ -120,35 +120,92 @@ def test_the_postgres_pod_refuses_a_claim_from_chart_1(tmp_path):
     assert "PostgreSQL 17 data in" in refused.stderr and "runs PostgreSQL 18" in refused.stderr
 
 
-DATABASE_SECRET = ("database.user.name=pg-app", "database.user.key=username",
-                   "database.password.name=pg-app", "database.password.key=password")
+PG_SECRET = "pg-pguser-misp"
+# A user Secret as the Percona and Crunchy operators make it, and a Secret with the Redis password
+CONNECTION_SECRETS = (
+    f"connectionSecrets[0].name={PG_SECRET}", "connectionSecrets[0].keys.DB_HOST=host",
+    "connectionSecrets[0].keys.DB_PORT=port", "connectionSecrets[0].keys.DB_NAME=dbname",
+    "connectionSecrets[0].keys.DB_USER=user", "connectionSecrets[0].keys.DB_PASSWORD=password",
+    "connectionSecrets[1].name=redis-auth", "connectionSecrets[1].keys.MISP_REDIS_PASSWORD=password")
+CONNECTION_REFS = {"DB_HOST": {"name": PG_SECRET, "key": "host"}, "DB_PORT": {"name": PG_SECRET, "key": "port"},
+                   "DB_NAME": {"name": PG_SECRET, "key": "dbname"}, "DB_USER": {"name": PG_SECRET, "key": "user"},
+                   "DB_PASSWORD": {"name": PG_SECRET, "key": "password"},
+                   "MISP_REDIS_PASSWORD": {"name": "redis-auth", "key": "password"}}
+# The source each connection var comes from without connectionSecrets
+CONNECTION_SOURCES = {"DB_HOST": "misp-env", "DB_PORT": "misp-env", "DB_NAME": "misp-env",
+                      "DB_USER": "misp-db", "DB_PASSWORD": "misp-db", "MISP_REDIS_PASSWORD": "misp-app"}
+DATABASE_CA = ("databaseCA.name=pg-cluster-cert", "databaseCA.key=ca.crt")
 
 
-def test_every_pod_takes_the_database_credentials_from_the_database_secret():
-    """env wins over envFrom: a container that reads misp-db gets DB_USER and DB_PASSWORD from database.*."""
-    pods = set()
-    for doc in chart.objects("migrate.enabled=true", *DATABASE_SECRET, every_component=True):
+def containers(*sets: str):
+    """(where, container, pod spec) of every container, every component on."""
+    for doc in chart.objects("migrate.enabled=true", *sets, every_component=True):
         spec = chart.pod_spec(doc)
-        if not spec:
-            continue
-        for container in spec.get("initContainers", []) + spec.get("containers", []):
-            where = f"{doc['kind']} {doc['metadata']['name']}: {container['name']}"
-            refs = {e["name"]: e["valueFrom"]["secretKeyRef"] for e in container.get("env", [])
-                    if "secretKeyRef" in e.get("valueFrom", {})}
-            assert not [v for v, r in refs.items() if r == {"name": "misp-db", "key": "DB_USER"}
-                        or r == {"name": "misp-db", "key": "DB_PASSWORD"}], f"{where} reads the credentials of misp-db"
-            if any(e.get("secretRef", {}).get("name") == "misp-db" for e in container.get("envFrom", [])):
-                assert refs.get("DB_USER") == {"name": "pg-app", "key": "username"}, where
-                assert refs.get("DB_PASSWORD") == {"name": "pg-app", "key": "password"}, where
-            if any(r["name"] == "pg-app" for r in refs.values()):
-                pods.add(doc["metadata"]["name"])
-    assert {"web", "worker", "metrics", "postgres", "housekeeping-logs", "periodic-summary"} <= pods
+        for container in (spec or {}).get("initContainers", []) + (spec or {}).get("containers", []):
+            yield f"{doc['kind']} {doc['metadata']['name']}: {container['name']}", container, spec
 
 
-def test_a_database_secret_needs_a_name_and_a_key():
+def test_every_pod_takes_the_connection_from_the_connection_secrets():
+    """env wins over envFrom: a container gets each var that a source it reads holds, from connectionSecrets."""
+    pods = set()
+    for where, container, _ in containers(*CONNECTION_SECRETS):
+        refs = {e["name"]: e["valueFrom"]["secretKeyRef"] for e in container.get("env", [])
+                if "secretKeyRef" in e.get("valueFrom", {})}
+        sources = {s.get("name") for e in container.get("envFrom", []) for s in e.values()}
+        assert not [r for r in refs.values() if r["name"] in ("misp-db", "misp-app")
+                    and r["key"] in CONNECTION_SOURCES], f"{where} reads a connection var of misp-db or misp-app"
+        for var, source in CONNECTION_SOURCES.items():
+            if source in sources:
+                assert refs.get(var) == CONNECTION_REFS[var], f"{where}: {var}"
+            elif not where.startswith(("Deployment metrics", "Deployment redis")):
+                assert var not in refs, f"{where} takes {var}, which no source of it holds"
+        if any(r["name"] == PG_SECRET for r in refs.values()):
+            pods.add(where.split(":")[0].split()[1])
+    assert {"web", "worker", "metrics", "postgres", "configure-1", "org-sync-1", "housekeeping-logs",
+            "periodic-summary"} <= pods
+    redis = chart.pod_spec(chart.find("Deployment", "redis", *CONNECTION_SECRETS, every_component=True))
+    assert redis["containers"][0]["env"][0]["valueFrom"]["secretKeyRef"] == CONNECTION_REFS["MISP_REDIS_PASSWORD"]
+
+
+def test_a_connection_secret_fills_only_connection_vars():
     import pytest
-    with pytest.raises(RuntimeError, match="missing property 'key'"):
-        chart.objects("database.password.name=pg-app")
+    with pytest.raises(RuntimeError, match="ADMIN_KEY"):
+        chart.objects("connectionSecrets[0].name=x", "connectionSecrets[0].keys.ADMIN_KEY=key")
+    with pytest.raises(RuntimeError, match="missing property 'keys'"):
+        chart.objects("connectionSecrets[0].name=x")
+
+
+def test_the_database_ca_reaches_every_container_that_connects():
+    assert "DB_SSLROOTCERT" not in env_data()
+    assert env_data(*DATABASE_CA)["DB_SSLROOTCERT"] == "/etc/misp-docker/db-ca/ca.crt"
+    seen = set()
+    for where, container, spec in containers(*DATABASE_CA):
+        reads_db = (any(e.get("secretRef", {}).get("name") == "misp-db" for e in container.get("envFrom", []))
+                    or any(e["name"] == "DB_USER" for e in container.get("env", [])))
+        if not reads_db:
+            continue
+        assert {"name": "db-ca", "mountPath": "/etc/misp-docker/db-ca", "readOnly": True} in container["volumeMounts"], where
+        assert {"name": "db-ca", "secret": {"secretName": "pg-cluster-cert",
+                "items": [{"key": "ca.crt", "path": "ca.crt"}]}} in spec["volumes"], where
+        seen.add(where)
+    assert len(seen) >= 8
+
+
+def test_the_policies_reach_an_external_database_and_redis_through_the_egress_values():
+    def egress(name: str, *sets: str) -> list:
+        return chart.find("NetworkPolicy", name, "networkPolicy.enabled=true", *sets)["spec"]["egress"]
+
+    on = ("postgres.enabled=true", "redis.enabled=true")
+    assert {"ports": [{"port": 5432, "protocol": "TCP"}]} in egress("web")
+    assert {"ports": [{"port": 6379, "protocol": "TCP"}]} in egress("web")
+    assert {"ports": [{"port": 5432, "protocol": "TCP"}]} not in egress("web", *on)
+    assert {"ports": [{"port": 7432, "protocol": "TCP"}]} in egress(
+        "housekeeping", "networkPolicy.databaseEgress[0].ports[0].port=7432",
+        "networkPolicy.databaseEgress[0].ports[0].protocol=TCP")
+    names = {d["metadata"]["name"] for d in chart.objects("networkPolicy.enabled=true") if d["kind"] == "NetworkPolicy"}
+    assert not names & {"postgres", "cache"}
+    assert {"postgres", "cache"} <= {d["metadata"]["name"] for d in chart.objects("networkPolicy.enabled=true", *on)
+                                     if d["kind"] == "NetworkPolicy"}
 
 
 def test_supplied_secrets_render_no_secret():

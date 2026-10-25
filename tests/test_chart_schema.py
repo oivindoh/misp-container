@@ -32,9 +32,12 @@ def renders() -> dict[str, list[str]]:
     cases = {"default": [], **{c: chart.component_sets(c) for c in parts},
              "all": every,
              "secrets-supplied": ["secrets.create=false"],
-             "database-secret": every + [
-                 "database.user.name=pg-app", "database.user.key=username",
-                 "database.password.name=pg-app", "database.password.key=password"],
+             "connection-secrets": every + [
+                 "connectionSecrets[0].name=pg-app", "connectionSecrets[0].keys.DB_HOST=host",
+                 "connectionSecrets[0].keys.DB_USER=user", "connectionSecrets[0].keys.DB_PASSWORD=password",
+                 "databaseCA.name=pg-cluster-cert", "databaseCA.key=ca.crt"],
+             "external-database-and-redis": ["networkPolicy.enabled=true", "cronjobs.enabled=true",
+                                             "housekeeping.enabled=true"],
              "attachments-in-s3": ["attachments.claim=false", "env.PLUGIN_S3_BUCKET_NAME=misp"],
              "workflow-cronjob": ["cronjobs.enabled=true", "cronjobs.workflows.7=0 4 * * *"]}
     return cases

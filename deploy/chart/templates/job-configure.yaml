@@ -47,6 +47,9 @@ spec:
               mountPath: /var/www/MISP/app/Config
             - name: misp-tmp
               mountPath: /var/www/MISP/app/tmp
+            {{- with include "misp.dbCAVolumeMount" . }}
+            {{- . | nindent 12 }}
+            {{- end }}
             {{- with .Values.migrate.volumeMounts }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
