@@ -142,8 +142,8 @@ git push --atomic origin master <tag>
 The push starts two runs of the release commit. The `gate` job stops the master run, and the
 tag run tests the commit and releases it.
 
-CI runs the tests and the scans, then pushes the images and the chart, and creates a GitHub
-Release that names the MISP commit. The `publish` job refuses a tag whose image tag differs
+CI runs the tests and the scans, then pushes the images for amd64 and arm64 and the chart,
+and creates a GitHub Release that names the MISP commit. The `publish` job refuses a tag whose image tag differs
 from `appVersion`, an image tag that GHCR already holds, and a chart version that GHCR
 already holds.
 

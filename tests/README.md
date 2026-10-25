@@ -157,7 +157,8 @@ Run with: `mise run test-integration`
 `e2e/test_lifecycle.py` takes the chart from its install to a rollback. Each step must pass:
 
 1. The newest release of this major version, other than HEAD's own tag, installs from GHCR
-   with its own images, and the smoke test passes. Without such a release the step skips.
+   with its own images, and the smoke test passes. The step skips without such a release, and
+   when the release has no image for the node's architecture.
 2. This tree's chart and images upgrade it, or install fresh. The smoke test and `helm test`
    pass.
 3. Two tasks (`update-noticelists`, `periodic-summary`) and a housekeeping run
@@ -262,7 +263,8 @@ GitHub Actions on every push to master, every tag and every pull request:
 | `suite` | The stack suites, one job each, in parallel, each on k3s in docker against the images from `build` (`MISP_IMAGE_TAG=ci`): `integration` (the upstream guard, then the integration suite), `hub-spoke`, `migration` and `lifecycle`. Each uploads its JUnit report and, after a failure, the cluster's logs |
 | `scan` | Trivy on the three images, one scan each: CRITICAL and HIGH findings with a fix go to the Security tab, and a CRITICAL one fails the job, which blocks `publish` |
 | `ci-ok` | The one required check: fails when a job failed or was cancelled, and on a draft |
-| `publish` | After every other job, on a tag: the images, the chart and the GitHub Release |
+| `publish-arm64` | After every other job, on a tag: the arm64 images, on an arm64 runner without the layer cache, to GHCR by digest |
+| `publish` | After every other job, on a tag: the amd64 images, one tag per image over both architectures, the chart and the GitHub Release |
 
 ## Environment
 

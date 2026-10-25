@@ -4,7 +4,8 @@
 
 The release starts as the newest published release of this major version
 (chart from GHCR, its own images) and upgrades to this tree's chart and images;
-without such a release it installs this tree. Then the chart's helm test runs,
+without such a release, or without its images for the node's architecture, it
+installs this tree. Then the chart's helm test runs,
 two tasks and a housekeeping run start from their CronJobs, an upgrade changes
 a value, and a rollback returns to the revision before it. The smoke test
 (tests/e2e/test_smoke.py) runs after each install, upgrade and rollback.
@@ -15,12 +16,13 @@ import os
 import re
 import subprocess
 import sys
+import urllib.request
 
 import pytest
 import yaml
 
 import manifests
-from cluster import CHART, REPO, Cluster, build_images
+from cluster import CHART, IMAGES, REPO, Cluster, build_images
 from stack import Release
 
 PORTS = {28080: 30080}
@@ -60,6 +62,21 @@ def newest_release() -> str:
     return max(versions, key=version_key, default="")
 
 
+def architectures(image: str, tag: str) -> set[str]:
+    """The Linux architectures of a public image in GHCR, from its image index."""
+    repository = image.removeprefix("ghcr.io/")
+    with urllib.request.urlopen(f"https://ghcr.io/token?scope=repository:{repository}:pull", timeout=30) as r:
+        token = json.load(r)["token"]
+    request = urllib.request.Request(f"https://ghcr.io/v2/{repository}/manifests/{tag}", headers={
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.oci.image.index.v1+json, application/vnd.oci.image.manifest.v1+json"})
+    with urllib.request.urlopen(request, timeout=30) as r:
+        manifest = json.load(r)
+    if "manifests" not in manifest:
+        pytest.fail(f"{image}:{tag} is no image index: the publish job of CI pushes one per image")
+    return {m["platform"]["architecture"] for m in manifest["manifests"] if m.get("platform", {}).get("os") == "linux"}
+
+
 def smoke(release):
     """tests/e2e/test_smoke.py against the release: its exit code and output."""
     result = subprocess.run([sys.executable, "-m", "pytest", str(REPO / "tests/e2e/test_smoke.py"), "-q",
@@ -88,14 +105,20 @@ def stack(options, failed_in_module):
 
 @pytest.fixture(scope="module")
 def published(stack):
-    """The newest release, installed from GHCR: its version and the smoke test's result, or None."""
+    """The newest release, installed from GHCR: its version and the smoke test's result, else why not."""
     version = newest_release()
     if not version:
-        return None
+        return {"skip": "no release of this major version yet: the suite starts from this tree"}
     chart = subprocess.run(["helm", "show", "chart", REGISTRY_CHART, "--version", version],
                            capture_output=True, text=True, timeout=120)
     if chart.returncode != 0:
         pytest.fail(f"release v{version} has no chart {version} in GHCR: {chart.stderr}")
+    node = stack.kubectl("get", "nodes", "-o", "jsonpath={.items[0].status.nodeInfo.architecture}").stdout.strip()
+    for image in IMAGES:
+        published_for = architectures(image, version)
+        if node not in published_for:
+            return {"skip": f"v{version} has no {node} image of {image} ({', '.join(sorted(published_for))} only): "
+                            "the suite starts from this tree"}
     stack.install({"secrets": {"admin": {"ADMIN_KEY": ADMIN_KEY}}}, chart=REGISTRY_CHART, version=version, tag="")
     stack.wait_for_misp()
     return {"version": version, "smoke": smoke(stack)}
@@ -142,8 +165,8 @@ def job_from_cronjob(stack, cronjob):
 # -- from the newest release -------------------------------------------------------
 
 def test_the_newest_release_serves(published):
-    if published is None:
-        pytest.skip("no release of this major version yet: the suite starts from this tree")
+    if "skip" in published:
+        pytest.skip(published["skip"])
     rc, out = published["smoke"]
     assert rc == 0, f"v{published['version']}:\n{out[-3000:]}"
 
