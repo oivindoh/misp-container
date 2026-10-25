@@ -427,6 +427,13 @@ cake.set_setting('MISP.attachments_dir', 's3://', force=True)
 """)
     # Earlier sections may have rotated the key
     stack.key = stack.admin_key(ADMIN_EMAIL)
+    # cake writes attachments_dir into config.php, and PHP-FPM's opcache serves the old file for up
+    # to 2 s, so an upload stays local. getSetting drops that copy: the next request reads the file
+    deadline = time.monotonic() + 30
+    while (stack.api("GET", "/servers/getSetting/MISP.attachments_dir", stack.key) or {}).get("value") != "s3://":
+        if time.monotonic() > deadline:
+            pytest.fail("PHP-FPM did not serve MISP.attachments_dir s3:// in 30 s")
+        time.sleep(1)
     event = stack.api("POST", "/events/add", stack.key, {"Event": {"info": "S3 test event", "distribution": 0}}) or {}
     eid = event.get("Event", {}).get("id")
     attribute = stack.api("POST", f"/attributes/add/{eid}", stack.key, {
@@ -451,7 +458,6 @@ def test_s3_attachment_downloads(stack, s3_event):
 
 
 def test_s3_objects_in_the_bucket(stack, s3_event):
-    time.sleep(2)
     info = garage.call("GET", f"/v2/GetBucketInfo?id={stack.s3[2]}")
     assert (info.get("objects") or 0) > 0 or (info.get("bytes") or 0) > 0
 
