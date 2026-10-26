@@ -109,7 +109,7 @@ class Cluster:
                 raise RuntimeError(f"cannot load {image} into {self.name}: {loaded.stderr}")
 
     def load_images_under_test(self) -> str:
-        """The three images under the tag under test; returns that tag."""
+        """The two images under the tag under test; returns that tag."""
         tag = image_tag()
         self.load([f"{repo}:{tag}" for repo in IMAGES])
         return tag

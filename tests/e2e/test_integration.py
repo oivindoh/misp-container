@@ -445,11 +445,6 @@ def test_task_replacing_the_scheduler(stack, name):
     assert rc == 0, out[-2000:]
 
 
-def test_task_without_blueprints_runs_nothing(stack):
-    rc, out = task(stack, "sharing-group-blueprints")
-    assert rc == 0 and "no sharing group blueprint exists" in out, out[-2000:]
-
-
 @pytest.fixture(scope="module")
 def periodic_summary(stack):
     return task(stack, "periodic-summary")

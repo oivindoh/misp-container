@@ -38,13 +38,9 @@ run = "python -m pytest tests/e2e/test_migration.py -v ${@}"
 description = "Run the lifecycle suite: upgrade from the newest release, helm test, CronJobs, upgrade and rollback"
 run = "python -m pytest tests/e2e/test_lifecycle.py -v ${@}"
 
-[tasks.agents-md]
-description = "Regenerate AGENTS.md from the tree"
-run = "python scripts/generate_agents_md.py"
-
 [tasks.docs]
 description = "Regenerate the generated regions of the docs and AGENTS.md from the code"
-run = ["python scripts/generate_docs.py", "python scripts/generate_agents_md.py"]
+run = "python scripts/generate_docs.py"
 
 [tasks.test-all]
 description = "Run the unit tests, then every stack suite"

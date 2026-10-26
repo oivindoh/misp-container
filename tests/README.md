@@ -6,11 +6,11 @@ Unit tests on the Python library and the chart's renders, an upstream guard that
 
 ```bash
 mise run test                # unit tests, the chart lint and every chart render validated against the schemas
-mise run build               # the three images under the chart's appVersion, or MISP_IMAGE_TAG
-mise run test-integration    # the upstream guard, then the integration suite (~4min)
-mise run test-sync           # hub-spoke sync with 2 releases and a MISP 2.5 partner (~6min)
-mise run test-migration      # a MISP 2.5 database on MariaDB into PostgreSQL (~4min)
-mise run test-lifecycle      # upgrade from the newest release, helm test, CronJobs, upgrade, rollback (~6min)
+mise run build               # the two images under the chart's appVersion, or MISP_IMAGE_TAG
+mise run test-integration    # the upstream guard, then the integration suite
+mise run test-sync           # hub-spoke sync with 2 releases and a MISP 2.5 partner
+mise run test-migration      # a MISP 2.5 database on MariaDB into PostgreSQL
+mise run test-lifecycle      # upgrade from the newest release, helm test, CronJobs, upgrade, rollback
 mise run smoketest https://misp.example.com   # a live MISP; asks for an API key
 mise run test-all            # the unit tests and every stack suite
 ```
@@ -25,7 +25,6 @@ Tests of the Python entrypoint library (`files/misp_container/`), the scripts an
 | Module | Tests |
 |---|---|
 | `test_admin.py` | Unit tests for admin helpers: every value reaches SQL as a parameter. |
-| `test_agents_md.py` | AGENTS.md is what scripts/generate_agents_md.py makes of the tree. |
 | `test_apply_patches.py` | The patches of patches/ and their applier (scripts/apply_patches.py), on real git trees. |
 | `test_chart.py` | The Helm chart renders what the code and the release expect (helm template, no cluster). |
 | `test_chart_schema.py` | helm lint, and every render of the chart validated against the Kubernetes and CRD schemas. |
@@ -86,7 +85,7 @@ flowchart LR
 ```
 
 1. The suite builds the images (`scripts/build.py`) unless `--skip-build`, starts a k3s cluster
-   (`e2e/cluster.py`) and copies the three images into its containerd.
+   (`e2e/cluster.py`) and copies the two images into its containerd.
 2. It applies the test services of `k3s/*.yaml` and NodePorts for the ports the host reaches,
    then installs the chart with `k3s/values.yaml` and the suite's own values (`e2e/stack.py`).
 3. Tests call MISP over HTTP through the NodePorts, and run commands in the pods with
@@ -136,7 +135,7 @@ auth on, and PostgreSQL and Redis outside the chart, as a database operator runs
 | MISP API | Version endpoint, event create via API |
 | Custom auth | Header login (200), no-header redirect (302) |
 | OIDC login | Redirect to Keycloak, its login form, the callback, the user's email, the highest client role, the team of the user's Keycloak organisation, mixed auth |
-| Task runner | Every scheduled task through MISP's console in the toolbox; `sharing-group-blueprints` without blueprints; `periodic-summary` and `check-user-validity` |
+| Task runner | Every scheduled task through MISP's console in the toolbox; `periodic-summary` and `check-user-validity` |
 | Org sync | Exit code 0, org/user/tag/server creation, server authkey (DB verify), sync user authkey prefix, taxonomy enable, disabled user, an unnamed local user disabled and the OIDC user left enabled, a break-glass password login, a sharing group with its organisation, custom warninglist create/update, a warm run that changes nothing and keeps one sharing group |
 | Metrics exporter | Endpoints, core metrics, the instance UUID and base URL, no scrape errors, a setting changed through the API in `misp_setting_manual`, a job that waits in `misp_jobs_queued` while the workers are scaled to none, `misp_scheduled_tasks_enabled` |
 | MISP modules | Enrichment through the modules Service |
@@ -258,13 +257,13 @@ GitHub Actions on every push to master, every tag and every pull request:
 | Job | Runs |
 |-----|------|
 | `gate` | Decides what the run does: nothing on a master push whose commit carries a release tag, since the tag run tests and releases that commit; the unit tests only on a draft; no unit tests and no suites on a push to master that merges a pull request, which ran them on the same tree |
-| `build` | The three images into the layer cache. The misp image's final stage is built fresh each run, so it carries the current Debian packages |
+| `build` | The two images into the layer cache, then Trivy on each: CRITICAL and HIGH findings with a fix go to the Security tab, and a CRITICAL one fails the job. The misp image's final stage is built fresh each run, so it carries the current Debian packages |
 | `unit` | The unit tests, the chart lint and every chart render validated against the schemas |
 | `suite` | The stack suites, one job each, in parallel, each on k3s in docker against the images from `build` (`MISP_IMAGE_TAG=ci`): `integration` (the upstream guard, then the integration suite), `hub-spoke`, `migration` and `lifecycle`. Each uploads its JUnit report and, after a failure, the cluster's logs |
-| `scan` | Trivy on the three images, one scan each: CRITICAL and HIGH findings with a fix go to the Security tab, and a CRITICAL one fails the job, which blocks `publish` |
 | `ci-ok` | The one required check: fails when a job failed or was cancelled, and on a draft |
-| `publish-arm64` | After every other job, on a tag: the arm64 images, on an arm64 runner without the layer cache, to GHCR by digest |
-| `publish` | After every other job, on a tag: the amd64 images, one tag per image over both architectures, the chart and the GitHub Release |
+| `publish-plan` | On a tag, once every other job passed: the image tag and chart version of the release, refused when GHCR has either already |
+| `publish-arm64` | After `publish-plan`: the arm64 images, on an arm64 runner without the layer cache, to GHCR by digest, through the same CRITICAL gate as `build` |
+| `publish` | After `publish-arm64`: the amd64 images, one tag per image over both architectures, the chart and the GitHub Release |
 
 ## Environment
 

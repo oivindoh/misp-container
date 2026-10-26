@@ -16,10 +16,11 @@
 
 ## Install
 
-Each release publishes the chart to GHCR; Helm takes the newest one:
+Each release publishes the chart to GHCR. With `--devel`, Helm takes the newest one, a
+pre-release included:
 
 ```bash
-helm install misp oci://ghcr.io/oivindoh/charts/misp \
+helm install misp oci://ghcr.io/oivindoh/charts/misp --devel \
     --namespace misp --create-namespace -f values.yaml
 ```
 
@@ -128,8 +129,7 @@ workload gets a whole Secret, or only the keys the table names:
 | `misp-migrate` | `deploy/chart/files/secrets-migrate.env` | `MIGRATE_SOURCE_HOST`, `MIGRATE_SOURCE_USER`, `MIGRATE_SOURCE_PASSWORD`, `MIGRATE_FORCE`, `MIGRATE_REPLACE_COPY`, `MIGRATE_SOURCE_FILES`, `MIGRATE_SOURCE_S3_BUCKET`, `MIGRATE_SOURCE_S3_ENDPOINT`, `MIGRATE_SOURCE_S3_REGION`, `MIGRATE_SOURCE_S3_ACCESS_KEY`, `MIGRATE_SOURCE_S3_SECRET_KEY` | migrate |
 <!-- end generated -->
 
-With `ADMIN_KEY` empty, MISP generates a key, org-sync exits without changes, and the API
-task CronJobs fail with a clear message.
+With `ADMIN_KEY` empty, MISP generates a key, and org-sync exits without changes.
 
 The files hold placeholders that the configure Job refuses. Set the real values in the
 `secrets` value, or set `secrets.create: false` and supply Secrets with the same names and
@@ -183,8 +183,9 @@ the certificate and the host name, `require` only encrypts.
 | Percona Operator for PostgreSQL | `<cluster>-pguser-<user>`: `host`, `port`, `dbname`, `user`, `password` | `<cluster>-cluster-cert`, key `ca.crt` | Accepts password logins only over TLS: `DB_SSLMODE` `require` or `verify-full` |
 | StackGres | A Secret of your own with the password of MISP's user | None: the server certificate is self-signed | The SGCluster's own Secret holds only the operator's users. Create MISP's user and database with an SGScript, and set `DB_HOST` in `env` to `<cluster>`, the Service to the leader: port 5432 through PgBouncer, 5433 direct |
 
-The database must be owned by `DB_USER`, and a connection pooler in front of it must run in
-session mode ([configuration.md](configuration.md#database)).
+MISP needs PostgreSQL 16 or later. The database must be owned by `DB_USER`: the configure Job
+runs `CREATE EXTENSION pg_trgm` on a new database. A connection pooler in front of it must run
+in session mode ([configuration.md](configuration.md#database)).
 
 ## Storage
 

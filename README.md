@@ -5,7 +5,7 @@ chart that runs it on Kubernetes.
 
 MISP has not released 3.0 yet: the image runs MISP's `3.0_wip` branch, pinned to a commit,
 and its releases are the pre-releases `3.0.0-wip.N`. A MISP 2.x database comes in through the
-migrate Job. See [docs/misp-3.md](docs/misp-3.md).
+migrate Job ([docs/migration.md](docs/migration.md)).
 
 ## TL;DR
 
@@ -70,7 +70,7 @@ the images; [DEVELOPING.md](DEVELOPING.md) shows how a test suite runs them on k
 |----------|-------------|
 | `MISP_BASEURL` | Public URL of the instance |
 | `ADMIN_EMAIL` | Admin email and username |
-| `ADMIN_PASSWORD` | Admin password, 12 characters or more |
+| `ADMIN_PASSWORD` | Admin password; MISP's password policy applies |
 | `SECURITY_SALT` | Password hashing salt: 32 characters or more, identical on every replica, stable across restarts |
 | `MISP_UUID` | Instance UUID for server sync: unique and stable |
 
@@ -97,11 +97,10 @@ values and lists the components, Secrets, storage, network policies and periodic
 | [docs/architecture.md](docs/architecture.md) | The roles, the configure Job, startup and footprint, rollout order, scaling |
 | [docs/configuration.md](docs/configuration.md) | Settings and their env vars, database, HTTPS, authentication plugins and Keycloak, logging |
 | [docs/kubernetes.md](docs/kubernetes.md) | Install, values, components, client addresses, Secrets, storage, network policies, periodic tasks |
-| [docs/org-sync.md](docs/org-sync.md) | Organisations, users, servers, tags and taxonomies from a YAML file |
+| [docs/org-sync.md](docs/org-sync.md) | Organisations, users, servers, tags, taxonomies, warninglists and sharing groups from a YAML file |
 | [docs/metrics.md](docs/metrics.md) | The Prometheus metrics and example alerts |
-| [docs/migration.md](docs/migration.md) | Copying an existing MISP database and its attachments into a deployment |
+| [docs/migration.md](docs/migration.md) | Copying an existing MISP database and its attachments into a deployment, and what MISP 3.0 no longer has |
 | [docs/operations.md](docs/operations.md) | Backup and restore, keys and secrets, upgrades |
-| [docs/misp-3.md](docs/misp-3.md) | The MISP 3.0 pin, its versions, a 2.x database, and how 3.0 differs from 2.5 |
-| [DEVELOPING.md](DEVELOPING.md) | The settings engine, the tests, new MISP releases, the release process |
+| [DEVELOPING.md](DEVELOPING.md) | The settings, the tests, new MISP releases, patches to MISP, the release process |
 | [tests/README.md](tests/README.md) | The test suites |
-| [AGENTS.md](AGENTS.md) | A map of the tree for agents, generated from the tree (`mise run agents-md`) |
+| [AGENTS.md](AGENTS.md) | A map of the tree for agents, its tables generated from the tree (`mise run docs`) |

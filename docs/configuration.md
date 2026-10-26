@@ -90,7 +90,7 @@ terminates TLS.
 ## Authentication plugins
 
 MISP's auth plugins read their configuration from `config.php`, so their settings are groups
-in `settings.yaml` that every pod renders when the plugin's switch is on. The documented
+in `settings.yaml` that every MISP pod renders into `config.php` when the plugin's switch is on. The documented
 short names below are aliases of the derived ones (the `aliases` of `settings.yaml`:
 `OidcAuth.provider_url` is `OIDCAUTH_PROVIDER_URL` as well).
 

@@ -12,8 +12,8 @@
 
 ```mermaid
 flowchart LR
-    cfg[configure Job<br/>sync wave 1] -->|MISP.live = true| web[web Deployment<br/>caddy + php-fpm, wave 2]
-    cfg -->|MISP.live = true| worker[worker Deployment<br/>PHP workers, wave 2]
+    cfg[configure Job<br/>sync wave 1] -->|version and checksum| web[web Deployment<br/>caddy + php-fpm, wave 2]
+    cfg -->|version and checksum| worker[worker Deployment<br/>PHP workers, wave 2]
     web --> sync[org-sync Job<br/>wave 3]
     cfg --> db[(PostgreSQL)]
     cfg --> redis[(Redis)]
@@ -22,24 +22,28 @@ flowchart LR
     worker --> db
     worker --> redis
     web -->|:6666| modules[modules]
+    worker -->|:6666| modules
     metrics[metrics] --> db
     metrics --> redis
-    tasks[task CronJobs] -->|API| web
+    tasks[task CronJobs] --> db
+    tasks --> redis
 ```
 
-The `misp-container` image serves six roles, each a module that starts as `python3 -m
-misp_container.<role>`. Every role first renders `app/Config` from this image's MISP,
-`settings.yaml` and env into an emptyDir of its own. It imports the GPG key and copies the
-server certificates from their Secrets, then does its own job:
+The `misp-container` image serves these roles, each a module that starts as `python3 -m
+misp_container.<module>`. The configure, web, worker and task roles first render `app/Config`
+from this image's MISP and the env the chart renders, into an emptyDir of their own. They
+import the GPG key and copy the server certificates from their Secrets, then do their own job:
 
 | Role | Module | Runs as | Does |
 |------|------------|---------|------|
-| configure | `configure` | Job, once per release revision | Schema import or migration, settings, admin user, GPG, auth plugins. Sets `MISP.live=true` last |
-| web | `web` | Deployment, scalable | Waits for `MISP.live=true`, then runs PHP-FPM on 9002 behind caddy on 8080 |
-| worker | `worker` | Deployment, scalable | Waits for `MISP.live=true`, then runs the workers of the `default`, `prio`, `email`, `update` and `cache` queues and starts each one again when it exits |
+| configure | `configure` | Job, once per release revision | Schema import, MISP's updates, admin user and organisation. Records the image version and the configuration checksum it ran for |
+| migrate | `migrate` | Init container of the configure Job (component `migrate`) | Copies an existing MySQL or MariaDB MISP into PostgreSQL ([migration.md](migration.md)) |
+| web | `web` | Deployment, scalable | Waits for the configure run of its image and configuration, then runs PHP-FPM on 9002 behind caddy on 8080 |
+| worker | `worker` | Deployment, scalable | Waits as web does, then runs the workers of the `default`, `prio`, `email`, `update` and `cache` queues and starts each one again when it exits |
 | org-sync | `sync` | Job, once per release revision, after web serves | Applies `orgs.yaml` through the API |
 | metrics | `metrics` | Deployment | Prometheus exporter on 9191 |
 | task | `task` | CronJobs (component `cronjobs`) | All periodic work, through MISP's console in the CronJob's pod, see [Periodic tasks](kubernetes.md#periodic-tasks). MISP's own scheduler never runs |
+| housekeeping | `housekeeping` | CronJobs (component `housekeeping`) | Deletes old rows of `jobs`, `logs` and `audit_logs` |
 
 The workers take their jobs from Redis, and nothing connects to them. MISP's worker page and
 its diagnostics expect supervisord beside the web server, so they show no workers:
@@ -55,11 +59,12 @@ never do, so they start in seconds and any number of them can run.
 2. Takes the database advisory lock `misp_configure` (a concurrent org sync waits on it).
 3. Imports MISP's PostgreSQL baseline (`POSTGRESQL.sql`) on an empty database, then runs
    `cake Admin runUpdates`.
-4. Reads every current setting once, compares with `settings.yaml`, and calls `cake` only for
-   the differences: env-driven settings are enforced, and defaults are written once.
-5. Creates or updates the admin user, organisation, password and API key; configures GPG and
-   the auth plugins.
-6. Sets `MISP.live=true`.
+4. Creates or updates the admin user, organisation, password and API key.
+5. Deletes the database rows of the settings that the repository carries: MISP takes those
+   from its environment layer ([configuration.md](configuration.md#settings)). Logs each
+   setting that someone changed outside the repository.
+6. Sets `MISP.live=true` on a new instance, then records the image version and the
+   configuration checksum that the pods wait for.
 
 The Job is idempotent: run it as often as you like.
 
@@ -69,7 +74,7 @@ Measured on MISP `3.0_wip` at commit 8888b98 on a podman machine (arm64, six cor
 
 | What | Time |
 |------|------|
-| Configure Job on an empty database: schema import, `runUpdates`, about 150 settings, admin user, GPG | 22 s |
+| Configure Job on an empty database: schema import, `runUpdates`, admin user | 22 s |
 | Configure Job on a configured instance | 1 to 3 s |
 | Web or worker pod, from start to serving, once the Job has run | 1 s |
 
@@ -83,7 +88,7 @@ Idle memory per container, after the first start:
 | metrics | 28 MB | |
 | caddy | 11 MB | |
 | PostgreSQL | 79 MB | Default `shared_buffers` (128 MB); the chart's component sets 512 MB |
-| Redis | 5 MB | `maxmemory` 128 MB |
+| Redis | 5 MB | |
 
 The chart's pods request 256 MiB for PHP-FPM in a web pod, 512 MiB for a worker pod and
 256 MiB for modules, with limits of 4 GiB, 2 GiB and 1 GiB: the requests cover the idle use above, the
@@ -92,8 +97,8 @@ limits one large event import or enrichment.
 ## Rollout order
 
 Ordering does not depend on the tool that applies the chart. The Job records the image
-version it configured next to `MISP.live`, and a web or worker pod waits until both match its
-own image, so a pod of a new version never serves before its migrations ran. Each release
+version and the configuration checksum it ran for, and a web or worker pod waits until both
+match its own, so a pod of a new version never serves before its migrations ran. Each release
 revision has its own Job, `configure-<revision>`, because the pod template of a Job cannot
 change; the upgrade removes the Job of the previous revision.
 
@@ -103,7 +108,7 @@ change; the upgrade removes the Job of the previous revision.
 | Later rollouts | Pods of the old version keep serving while the Job runs MISP's schema updates, as MISP's own updater does on a live instance. Pods of the new version wait for the new Job to record their version, then serve. |
 | The Job fails | New pods keep waiting and restarting; old pods keep serving. Read the Job's log, fix the cause, upgrade again. |
 | Nothing changed | The Job runs, finds nothing to do, and exits 0 in seconds. |
-| Rollback | `helm rollback` runs the Job of the previous revision again: it records its version and the pods of that version serve. A `kubectl rollout undo` alone leaves the pods waiting. |
+| Rollback | `helm rollback` runs the Job of the previous revision again: it records its version and the pods of that version serve. A `kubectl rollout undo` alone leaves the pods waiting. MISP's schema changes are one-way: a rollback to an older MISP pin needs a restore of the database ([operations.md](operations.md#restore)). |
 
 | Tool | Notes |
 |------|-------|

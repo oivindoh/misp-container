@@ -83,9 +83,8 @@ that moves the pin to `v3.0.0` once it does. The pin shapes the image in these p
 
 | Where | What | Because |
 |-------|------|---------|
-| `Dockerfile` | No `cake-resque` patch in `composer-prep`; submodules without recursion | MISP 3.0 requires no `iglocska/cake-resque`, and only `misp-iconify` nests submodules, over SSH URLs |
+| `Dockerfile` | Submodules without recursion | Only `misp-iconify` nests submodules, over SSH URLs |
 | The version marker | `3.0_wip+<CORE_COMMIT>` | It changes with each pin, so the pods wait for the configure run of their own build |
-| `settings.yaml` | No switch for background jobs, and four other settings fewer | MISP 3.0 defines none of them; an `s3://` attachments directory turns S3 on |
 | The configure step | Refuses a database whose `attributes` table has the text column `value1` | That is MISP 2.x's layout; the migrate Job imports such a database (docs/migration.md) |
 
 ### Moving to a newer 3.0_wip commit
@@ -182,7 +181,7 @@ sets one. `derived` and `aliases` at the end of the file map one env var onto ot
 
 | Group | Reaches MISP through |
 |-------|----------------------|
-| `minimum_config`, `db_enable` | `MISP_SETTING_*` and `config.php`, which every pod renders from `MISP_CONFIG_*` on start |
+| `minimum_config`, `db_enable` | `MISP_SETTING_*` and `config.php`, which every MISP pod renders from `MISP_CONFIG_*` on start |
 | `s3` | the same, while `PLUGIN_S3_BUCKET_NAME` is set |
 | `oidc`, `ldap` | `config.php` only, while the plugin's switch is on: MISP takes no auth plugin key from its environment layer |
 | every other group | `MISP_SETTING_*` |
@@ -213,16 +212,15 @@ tests fail while either is out of step:
 
 | Mechanism | Covers |
 | --- | --- |
-| Generated regions, between `<!-- generated: <name> -->` and `<!-- end generated -->`, filled by `scripts/generate_docs.py` | The periodic tasks table, the Secrets table, the value and component tables of the chart, the upstream guard's checks, the unit test modules |
+| Generated regions, between `<!-- generated: <name> -->` and `<!-- end generated -->`, filled by `scripts/generate_docs.py` | The periodic tasks table, the Secrets table, the value and component tables of the chart, the upstream guard's checks, the unit test modules, and every table of `AGENTS.md` |
 | `tests/test_docs.py` | Every env var, setting, repository path, file name and mise task a doc names exists; the component, task, upstream check, metric, exit code and OIDC tables are complete; the sizes, requests, sync waves, defaults and ports quoted in sentences match the manifests and the code |
 
 Change the source, not the doc: a task description lives in `misp_container/task.py`
-(`DESCRIPTIONS`), a Secret's readers in the manifests. Then run `mise run docs`, which also
-regenerates `AGENTS.md`. Measured figures (image sizes, startup times, memory, benchmark
+(`DESCRIPTIONS`), a Secret's readers in the manifests. Then run `mise run docs`. Measured
+figures (image sizes, startup times, memory, benchmark
 times) have no source in the code; they carry the version they were measured on.
 
 ## Project Structure
 
-`AGENTS.md` holds the full map, generated from the docstrings, header comments, manifests,
-tasks and CI jobs by `scripts/generate_agents_md.py`. After a change to one of them, run
-`mise run agents-md`; a unit test fails while the file is stale.
+`AGENTS.md` maps the tree. Its tables are generated regions, filled from the docstrings,
+header comments, manifests, tasks and CI jobs.

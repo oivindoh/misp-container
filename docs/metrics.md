@@ -125,7 +125,7 @@ job at `unfinished` while it waits and runs; a job whose worker died stays `unfi
 
 ## Consuming in Kubernetes
 
-Add a `ServiceMonitor` (if using prometheus-operator) or scrape annotations:
+With the Prometheus Operator, add a `ServiceMonitor`:
 
 ```yaml
 # ServiceMonitor
@@ -142,7 +142,7 @@ spec:
       interval: 30s
 ```
 
-Or use pod annotations for annotation-based discovery:
+The metrics pod also carries the annotations that annotation-based discovery reads:
 
 ```yaml
 annotations:

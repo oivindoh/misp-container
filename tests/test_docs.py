@@ -79,7 +79,7 @@ def test_every_env_var_a_doc_names_exists():
 # -- settings ------------------------------------------------------------------------
 
 SETTING_TOKEN = re.compile(r"((?:MISP|Plugin|Security|GnuPG|SimpleBackgroundJobs|OidcAuth|LdapAuth|"
-                           r"ApacheSecureAuth|Session|Proxy|SMIME|CustomAuth)\.[A-Za-z0-9_]+)(?:=\S*)?")
+                           r"Session|Proxy|SMIME|CustomAuth)\.[A-Za-z0-9_]+)(?:=\S*)?")
 
 
 def known_settings() -> set[str]:
@@ -219,6 +219,10 @@ def test_the_migration_exit_codes_match_the_job():
 
 
 # -- generated regions ---------------------------------------------------------------
+
+def test_agents_md_is_ascii():
+    assert (REPO / "AGENTS.md").read_text().isascii()
+
 
 def test_the_generated_regions_match_the_code():
     import generate_docs
