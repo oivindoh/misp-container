@@ -188,7 +188,7 @@ or `text` (coloured on a terminal).
 |--------|-----------------------|--------|
 | The entrypoints, the configure Job, org sync, tasks, metrics | `time`, `level`, `context`, `message` (and `exception`) | `LOG_FORMAT` |
 | MISP's own log (CakeLog: job starts and ends, exceptions, warnings) | the same fields, `context` `misp` | `LOG_FORMAT` |
-| Files MISP appends to directly (`server-sync.log`, `workflow-execution.log`, `exec-errors.log`, `kafka.error.log`) | one line per file line, `context` `misp:<file>`; a file is emptied past 10 MB | `LOG_FORMAT` |
+| Files MISP appends to directly (`server-sync.log`, `workflow-execution.log`, `exec-errors.log`, `kafka.error.log`, `fatal_error.log`, `mispzmq.log`, `mispzmq.error.log`) | one line per file line, `context` `misp:<file>`; a file is emptied past 10 MB | `LOG_FORMAT` |
 | PHP errors and warnings in web pods | PHP's own line, through PHP-FPM | text |
 | PHP-FPM itself | FPM's own line | text |
 | Caddy access log | Caddy's own JSON | JSON |

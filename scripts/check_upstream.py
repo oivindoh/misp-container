@@ -52,7 +52,7 @@ ORG_IMG_HELPER = "app/View/Helper/OrgImgHelper.php"
 # chart mounts the attachments claim at these paths
 IMAGE_DIRS = {"orgs": "files/img/orgs", "img": "files/img/custom"}
 # The directories of MISP's own PHP code, and the parts in them that are not MISP's
-MISP_PHP = ("app/Model", "app/Lib", "app/Controller", "app/Console", "app/Plugin")
+MISP_PHP = ("app/Model", "app/Lib", "app/Controller", "app/Console", "app/Plugin", "app/Error")
 NOT_MISP_PARTS = {"cakephp", "Vendor"}
 
 # The modules that call MISP's HTTP API; every route-like string in them is a MISP route
@@ -284,11 +284,17 @@ def relayed_files(root: Path) -> list[str]:
         if path.name != "JsonLogTool.php" and "JsonLogTool" in source:
             callers.append(str(path.relative_to(root)))
         names = re.findall(r"tmp/logs/([\w.-]+)", source)
-        names += re.findall(r"'logs'\s*\.\s*DS\s*\.\s*'([\w.-]+)'", source)
+        # 'logs' . DS . 'kafka.error.log', also inside a shell redirect ('mispzmq.log 2>> ')
+        names += re.findall(r"'logs'\s*\.\s*DS\s*\.\s*'([\w.-]+)", source)
+        # CakePHP's LOGS is app/tmp/logs/
+        names += re.findall(r"\bLOGS\s*\.\s*'([\w.-]+)'", source)
         for name in names:
             written.setdefault(name.rstrip("."), []).append(str(path.relative_to(root)))
-    for file in file_streams(strip_php_comments(bootstrap_default(root).read_text())).values():
-        written.setdefault(file, []).append("app/Config/bootstrap.default.php")
+    # The FileLog streams that the logging block does not drop
+    dropped = set(re.findall(r"CakeLog::drop\('(\w+)'\)", LOG_BLOCK))
+    for stream, file in file_streams(strip_php_comments(bootstrap_default(root).read_text())).items():
+        if stream not in dropped:
+            written.setdefault(file, []).append(BOOTSTRAP)
     problems = [f"MISP writes app/tmp/logs/{name} directly ({', '.join(sorted(set(where)))}); the relay does not "
                 f"forward it, and the file grows until the volume fills" for name, where in sorted(written.items())
                 if name not in RELAYED and name not in NOT_RELAYED]
@@ -411,7 +417,7 @@ CHECKS = [
           fails_when="configures a CakeLog file stream that the logging block does not drop"),
     Check("shell-streams", CONSOLE_SHELL, "files/misp_container/init.py LOG_BLOCK", shell_streams,
           fails_when="checks other stream names before it adds its console streams"),
-    Check("relayed-files", "app/Model, app/Lib, app/Controller, app/Console, app/Plugin",
+    Check("relayed-files", ", ".join(MISP_PHP),
           "files/misp_container/logrelay.py FILES", relayed_files,
           fails_when="writes a new file under app/tmp/logs, or stops writing one the relay follows"),
     Check("env-settings", f"{ENV_SETTING}, {SYSTEM_SETTING}",

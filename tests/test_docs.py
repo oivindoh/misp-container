@@ -299,8 +299,7 @@ def test_the_logging_doc_names_every_relayed_file():
     text = (REPO / "docs/configuration.md").read_text()
     row = next(line for line in text.splitlines() if line.startswith("| Files MISP appends to directly"))
     named = set(re.findall(r"`([\w.-]+\.log)`", row))
-    # debug.log and error.log are CakeLog's files, which the logging block drops
-    assert named == set(FILES) - {"debug.log", "error.log"}, f"the row names {sorted(named)}; logrelay.FILES has {FILES}"
+    assert named == set(FILES), f"the row names {sorted(named)}; logrelay.FILES has {FILES}"
 
 
 def test_the_log_format_default():

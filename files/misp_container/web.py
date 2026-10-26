@@ -51,8 +51,12 @@ def render_fpm_pool() -> None:
 
 
 def start_log_relay():
-    """Relay the log files MISP writes directly to stdout; it outlives the exec of PHP-FPM."""
-    subprocess.Popen([sys.executable, "-m", "misp_container.logrelay"], stdout=sys.stdout, stderr=sys.stderr)
+    """Relay the log files MISP writes directly to stdout; it outlives the exec of PHP-FPM.
+
+    PHP-FPM restarts no child of its own, so a shell loop starts the relay again when it exits.
+    """
+    subprocess.Popen(["sh", "-c", 'while :; do "$0" -m misp_container.logrelay; sleep 1; done', sys.executable],
+                     stdout=sys.stdout, stderr=sys.stderr)
 
 
 def main():

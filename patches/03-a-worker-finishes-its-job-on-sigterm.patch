@@ -1,0 +1,42 @@
+A worker finishes its running job on SIGTERM
+
+Why: StartWorkerShell installs no signal handler, so SIGTERM ends the worker at once and its running job stays at status 0. With the handler the worker takes no new job and exits once the running one ends; the supervisor (files/misp_container/worker.py) waits WORKER_STOP_GRACE for it.
+Upstream: not filed yet
+
+diff --git a/app/Console/Command/StartWorkerShell.php b/app/Console/Command/StartWorkerShell.php
+--- a/app/Console/Command/StartWorkerShell.php
++++ b/app/Console/Command/StartWorkerShell.php
+@@ -15,6 +15,9 @@ class StartWorkerShell extends AppShell
+     /** @var int */
+     private $maxExecutionTime;
+ 
++    /** @var bool */
++    private $stopRequested = false;
++
+     const DEFAULT_MAX_EXECUTION_TIME = 86400; // 1 day
+ 
+     public function getOptionParser(): ConsoleOptionParser
+@@ -59,7 +62,14 @@ class StartWorkerShell extends AppShell
+ 
+         CakeLog::info("[WORKER PID: {$this->worker->pid()}][{$queue}] - starting to process background jobs...");
+ 
+-        while (true) {
++        // SIGTERM stops the worker once its running job ends; the job runs on, since it
++        // is a child of its own that receives no signal
++        pcntl_async_signals(true);
++        pcntl_signal(SIGTERM, function () {
++            $this->stopRequested = true;
++        });
++
++        while (!$this->stopRequested) {
+             $this->checkMaxExecutionTime();
+ 
+             $job = $backgroundJobTool->dequeue($queue);
+@@ -68,6 +78,7 @@ class StartWorkerShell extends AppShell
+                 $backgroundJobTool->removeFromRunning($this->worker, $job);
+             }
+         }
++        CakeLog::info("[WORKER PID: {$this->worker->pid()}][{$queue}] - stopping on SIGTERM.");
+     }
+ 
+     /**

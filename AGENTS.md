@@ -194,7 +194,7 @@ Fail when MISP no longer matches what this image patches or depends on. A failur
 | `attachment-keys` | app/Lib/Tools/AttachmentTool.php, app/Lib/Tools/AWSS3Client.php | files/misp_container/migrate.py attachment_key(), files/misp_container/s3.py |
 | `cakelog-streams` | app/Config/bootstrap.default.php | files/misp_container/init.py LOG_BLOCK |
 | `shell-streams` | app/Lib/cakephp/lib/Cake/Console/Shell.php | files/misp_container/init.py LOG_BLOCK |
-| `relayed-files` | app/Model, app/Lib, app/Controller, app/Console, app/Plugin | files/misp_container/logrelay.py FILES |
+| `relayed-files` | app/Model, app/Lib, app/Controller, app/Console, app/Plugin, app/Error | files/misp_container/logrelay.py FILES |
 | `env-settings` | app/Lib/Tools/EnvSetting.php, app/Model/SystemSetting.php | deploy/chart/templates/_settings.tpl, deploy/chart/files/settings.yaml |
 | `image-paths` | app/Model/Server.php, app/View/Helper/OrgImgHelper.php | deploy/chart/templates/_helpers.tpl misp.appVolumeMounts |
 | `log-block-php` | php | files/misp_container/init.py LOG_BLOCK |
@@ -206,6 +206,8 @@ Apply this repository's patches to a MISP tree, and fail when one no longer fits
 | Patch | MISP file | Why | Upstream |
 |---|---|---|---|
 | `01-event-index-stats-quotes-the-alias.patch` | app/Model/Behavior/EventIndexStatsBehavior.php | EventIndexStatsBehavior::aggregate() names the alias Event unquoted. PostgreSQL folds it to event while the FROM clause quotes it as "Event", so the events index answers 500 for a user on the Overmind theme, MISP 3.0's default. | not filed yet |
+| `02-a-job-keeps-the-workers-environment.patch` | app/Lib/Tools/BackgroundJobs/BackgroundJob.php | BackgroundJob::run() hands proc_open an environment array, which replaces the whole environment: a job sees BACKGROUND_JOB_ID and nothing else. It then misses every MISP_SETTING_* setting that EnvSetting reads, so it runs with other settings than the worker and the web tier, and it misses PHP_INI_SCAN_DIR with the worker's memory limit. | not filed yet |
+| `03-a-worker-finishes-its-job-on-sigterm.patch` | app/Console/Command/StartWorkerShell.php | StartWorkerShell installs no signal handler, so SIGTERM ends the worker at once and its running job stays at status 0. With the handler the worker takes no new job and exits once the running one ends; the supervisor (files/misp_container/worker.py) waits WORKER_STOP_GRACE for it. | not filed yet |
 
 ## Scripts: `scripts/`
 

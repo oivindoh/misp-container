@@ -1,0 +1,19 @@
+A background job keeps the worker's environment
+
+Why: BackgroundJob::run() hands proc_open an environment array, which replaces the whole environment: a job sees BACKGROUND_JOB_ID and nothing else. It then misses every MISP_SETTING_* setting that EnvSetting reads, so it runs with other settings than the worker and the web tier, and it misses PHP_INI_SCAN_DIR with the worker's memory limit.
+Upstream: not filed yet
+
+diff --git a/app/Lib/Tools/BackgroundJobs/BackgroundJob.php b/app/Lib/Tools/BackgroundJobs/BackgroundJob.php
+--- a/app/Lib/Tools/BackgroundJobs/BackgroundJob.php
++++ b/app/Lib/Tools/BackgroundJobs/BackgroundJob.php
+@@ -86,7 +86,9 @@ class BackgroundJob implements JsonSerializable
+             $descriptorSpec,
+             $pipes,
+             null,
+-            ['BACKGROUND_JOB_ID' => $this->id]
++            // An array replaces the whole environment: the job keeps the worker's, so it
++            // reads the MISP_SETTING_* settings (EnvSetting) and the worker's PHP settings
++            ['BACKGROUND_JOB_ID' => $this->id] + getenv()
+         );
+ 
+         $this->pool($process, $pipes, $runningCallback);

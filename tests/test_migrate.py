@@ -137,7 +137,7 @@ class TestCopyAttachments:
         assert (target / "shadow/12/35").read_bytes() == b"proposal"
 
     def test_bucket_to_bucket(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(migrate.tempfile, "gettempdir", lambda: str(tmp_path))
+        monkeypatch.setattr(migrate, "SPOOL_DIR", str(tmp_path))
         target = FakeBucket("target")
         assert migrate.copy_attachments(FakeBucket("source", {**self.KEYS, "notes.txt": b"x"}), target) == 3
         assert target.objects == self.KEYS

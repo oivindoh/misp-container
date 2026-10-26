@@ -77,28 +77,34 @@ class TestRestarts:
 
 
 class TestStop:
-    def test_each_group_gets_sigterm_and_the_stragglers_sigkill(self):
-        polite, stubborn = FakeProc(21), FakeProc(22, ignores_term=True)
+    def test_each_worker_gets_sigterm_and_the_groups_of_stragglers_sigkill(self):
+        # SIGTERM goes to the worker alone: its running job, in its group, runs on
+        polite, busy = FakeProc(21), FakeProc(22, ignores_term=True)
+        procs = {21: polite, 22: busy}
         sent = []
 
+        def kill(pid, signum):
+            sent.append(("kill", pid, signum))
+            if not procs[pid].ignores_term:
+                procs[pid].returncode = -signum
+
         def killpg(pid, signum):
-            sent.append((pid, signum))
-            proc = {21: polite, 22: stubborn}[pid]
-            if signum == signal.SIGKILL or not proc.ignores_term:
-                proc.returncode = -signum
+            sent.append(("killpg", pid, signum))
+            procs[pid].returncode = -signum
 
-        sup = worker.Supervisor([program("a", polite), program("b", stubborn)], grace=0.2)
-        with patch.object(worker.os, "killpg", side_effect=killpg), patch.object(worker, "POLL", 0.05):
+        sup = worker.Supervisor([program("a", polite), program("b", busy)], grace=0.2)
+        with patch.object(worker.os, "kill", side_effect=kill), patch.object(worker.os, "killpg", side_effect=killpg), \
+                patch.object(worker, "POLL", 0.05):
             assert sup.shutdown() == 0
-        assert sent == [(21, signal.SIGTERM), (22, signal.SIGTERM), (22, signal.SIGKILL)]
+        assert sent == [("kill", 21, signal.SIGTERM), ("kill", 22, signal.SIGTERM), ("killpg", 22, signal.SIGKILL)]
 
-    def test_a_group_that_is_already_gone_is_no_error(self):
+    def test_a_process_that_is_already_gone_is_no_error(self):
         proc = FakeProc(31)
         sup = worker.Supervisor([program("a", proc)], grace=0.1)
 
-        def killpg(pid, signum):
+        def kill(pid, signum):
             proc.returncode = 0
             raise ProcessLookupError
 
-        with patch.object(worker.os, "killpg", side_effect=killpg):
+        with patch.object(worker.os, "kill", side_effect=kill):
             assert sup.shutdown() == 0

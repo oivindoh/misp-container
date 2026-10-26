@@ -116,4 +116,4 @@ change; the upgrade removes the Job of the previous revision.
 | Deployment | Replicas | Notes |
 |------------|----------|-------|
 | web | any | Sessions live in Redis; org logos and attachments are on a shared claim |
-| worker | any | Redis `BRPOP` gives each job to one worker. A stopping worker gets `WORKER_STOP_GRACE` seconds (default 300) to finish, and the pod's termination grace period is 30 s more; a job on a worker that dies is lost |
+| worker | any | Redis `BLPOP` gives each job to one worker. A stopping worker takes no new job and gets `WORKER_STOP_GRACE` seconds (default 300) to finish its running one; the pod's termination grace period is 30 s more. A job on a worker that dies is lost |

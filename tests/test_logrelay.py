@@ -11,7 +11,7 @@ from misp_container.logrelay import Relay
 def _relay(tmp_path, max_bytes=1000):
     seen = []
     relay = Relay(directory=tmp_path, files=("server-sync.log",), max_bytes=max_bytes,
-                  emit=lambda name, line: seen.append((name, line)))
+                  emit=lambda name, line: seen.append((name, line)), offsets_file=tmp_path / "offsets.json")
     return relay, seen
 
 
@@ -55,6 +55,27 @@ class TestRelay:
         log.write_text("new\n")
         relay.poll()
         assert [line for _, line in seen] == ["first line", "new"]
+
+    def test_a_restart_relays_no_line_twice(self, tmp_path):
+        relay, seen = _relay(tmp_path)
+        log = tmp_path / "server-sync.log"
+        log.write_text("before the restart\n")
+        relay.poll()
+        with open(log, "a") as f:
+            f.write("after the restart\n")
+        again, seen_again = _relay(tmp_path)
+        again.poll()
+        assert seen_again == [("server-sync.log", "after the restart")]
+
+    def test_a_file_emptied_during_a_restart_starts_over(self, tmp_path):
+        relay, _ = _relay(tmp_path)
+        log = tmp_path / "server-sync.log"
+        log.write_text("a line before the restart\n")
+        relay.poll()
+        log.write_text("new\n")
+        again, seen_again = _relay(tmp_path)
+        again.poll()
+        assert seen_again == [("server-sync.log", "new")]
 
     def test_missing_file_is_skipped(self, tmp_path):
         relay, seen = _relay(tmp_path)

@@ -33,7 +33,6 @@ import os
 import re
 import shutil
 import sys
-import tempfile
 import time
 from pathlib import Path
 from typing import Iterator
@@ -77,6 +76,9 @@ SYSTEM_CA = "/etc/ssl/certs/ca-certificates.crt"
 # Org logos and custom images under the old app/files, which every pod reads from the
 # attachments volume (the image-paths check of scripts/check_upstream.py)
 IMAGE_DIRS = ("img/orgs", "img/custom")
+# An emptyDir of the migrate container without a size limit (job-configure.yaml): a
+# bucket-to-bucket copy holds one object here at a time, of any size
+SPOOL_DIR = "/var/tmp"
 
 
 # -- Configuration -------------------------------------------------------------
@@ -440,7 +442,7 @@ def source_attachments(source: Path | Bucket) -> Iterator[tuple[str, str]]:
 def copy_attachments(source: Path | Bucket, target: Path | Bucket) -> int:
     """Copy every attachment from source to target under MISP's key; returns the count."""
     copied = 0
-    spool = Path(tempfile.gettempdir()) / "migrate-attachment"
+    spool = Path(SPOOL_DIR) / "migrate-attachment"
     for key, where in source_attachments(source):
         if isinstance(source, Bucket) and isinstance(target, Bucket):
             source.download(where, spool)

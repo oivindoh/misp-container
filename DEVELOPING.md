@@ -52,7 +52,7 @@ revisit.
 | `attachment-keys` | app/Lib/Tools/AttachmentTool.php, app/Lib/Tools/AWSS3Client.php | files/misp_container/migrate.py attachment_key(), files/misp_container/s3.py | keys attachments another way, or stops sending path-style S3 requests |
 | `cakelog-streams` | app/Config/bootstrap.default.php | files/misp_container/init.py LOG_BLOCK | configures a CakeLog file stream that the logging block does not drop |
 | `shell-streams` | app/Lib/cakephp/lib/Cake/Console/Shell.php | files/misp_container/init.py LOG_BLOCK | checks other stream names before it adds its console streams |
-| `relayed-files` | app/Model, app/Lib, app/Controller, app/Console, app/Plugin | files/misp_container/logrelay.py FILES | writes a new file under app/tmp/logs, or stops writing one the relay follows |
+| `relayed-files` | app/Model, app/Lib, app/Controller, app/Console, app/Plugin, app/Error | files/misp_container/logrelay.py FILES | writes a new file under app/tmp/logs, or stops writing one the relay follows |
 | `env-settings` | app/Lib/Tools/EnvSetting.php, app/Model/SystemSetting.php | deploy/chart/templates/_settings.tpl, deploy/chart/files/settings.yaml | stops reading MISP_SETTING_* settings, or a category the repository's settings use |
 | `image-paths` | app/Model/Server.php, app/View/Helper/OrgImgHelper.php | deploy/chart/templates/_helpers.tpl misp.appVolumeMounts | uploads org logos or custom images to, or reads them from, a directory the volumes do not mount |
 | `log-block-php` | php | files/misp_container/init.py LOG_BLOCK | cannot run the logging block, in either format |

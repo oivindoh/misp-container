@@ -221,6 +221,12 @@ LOG_WRITERS = {
     "app/Model/Organisation.php": "<?php $dir = APP . 'tmp/logs/merges/';",
     "app/Controller/AttributesController.php":
         "<?php file_put_contents(APP . '/tmp/logs/missing_attachments.log', json_encode($results));",
+    "app/Error/AppExceptionRenderer.php":
+        "<?php file_put_contents(LOGS . 'fatal_error.log', $logMessage . PHP_EOL, FILE_APPEND);",
+    "app/Lib/Tools/PubSubTool.php":
+        "<?php shell_exec(ProcessTool::pythonBin() . ' ' . APP . 'files' . DS . 'scripts' . DS . 'mispzmq' . DS . "
+        "'mispzmq.py >> ' . APP . 'tmp' . DS . 'logs' . DS . 'mispzmq.log 2>> ' . APP . 'tmp' . DS . 'logs' . DS . "
+        "'mispzmq.error.log &');",
 }
 
 
@@ -459,6 +465,10 @@ class TestRelayedFiles:
     def test_json_log_tool_called(self, misp):
         write(misp, "app/Model/Server.php", "<?php $tool = new JsonLogTool();")
         assert "calls JsonLogTool now (app/Model/Server.php)" in problems(misp, "relayed-files")[0]
+
+    def test_a_stream_the_logging_block_drops_is_no_file_misp_writes(self, misp, monkeypatch):
+        monkeypatch.setattr(cu, "RELAYED", cu.RELAYED + ("debug.log",))
+        assert "forwards debug.log, which MISP no longer writes" in problems(misp, "relayed-files")[0]
 
     def test_framework_files_are_not_misp(self, misp):
         write(misp, "app/Lib/cakephp/lib/Cake/Log/Engine/FileLog.php", "<?php $f = 'tmp/logs/cake.log';")

@@ -21,6 +21,7 @@ from asn1crypto import x509
 from . import WORKER_QUEUES, db, exporter
 from .config import SETTING_PREFIX, repository_settings
 from .env import env
+from .init import CERTS_DIR
 from .log import get as getlog, setup as setup_logging
 
 log = getlog("metrics")
@@ -30,7 +31,7 @@ log = getlog("metrics")
 NET_INTERVAL = 300
 # The misp-certs Secret: the sync servers' pinned and client certificates, by the
 # file names MISP keeps in servers.cert_file and servers.client_cert_file
-CERTS = Path("/etc/misp-docker/certs")
+CERTS = Path(CERTS_DIR)
 
 
 # ---------------------------------------------------------------------------
