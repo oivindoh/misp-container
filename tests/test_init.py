@@ -2,7 +2,6 @@
 
 import os
 from unittest.mock import patch
-from pathlib import Path
 
 import pytest
 import sys
@@ -34,6 +33,19 @@ class TestGenerateDatabaseConfig:
     def test_an_empty_port_takes_postgres_default(self, tmp_path):
         assert "'port' => 5432," in self.render(tmp_path, {"DB_PORT": ""})
 
+    def test_a_password_with_a_quote(self, tmp_path):
+        assert "'password' => 'pa\\'ss\\\\word'," in self.render(tmp_path, {"DB_PASSWORD": "pa'ss\\word"})
+
+    @pytest.mark.parametrize("tls, sslmode", [
+        ({}, "prefer"),
+        ({"DB_SSLMODE": "verify-full"}, "verify-full;sslrootcert=system"),
+        ({"DB_SSLMODE": "verify-ca", "DB_SSLROOTCERT": "/etc/misp-docker/db-ca/ca.crt"},
+         "verify-ca;sslrootcert=/etc/misp-docker/db-ca/ca.crt"),
+    ])
+    def test_sslmode_follows_db_sslmode(self, tmp_path, tls, sslmode):
+        content = self.render(tmp_path, {"DB_SSLMODE": "", "DB_SSLROOTCERT": "", **tls})
+        assert f"'sslmode' => '{sslmode}'," in content
+
 
 class TestGenerateEmailConfig:
     """Generate email.php from environment variables."""
@@ -51,6 +63,11 @@ class TestGenerateEmailConfig:
         assert "smtp.example.com" in content
         assert "587" in content
         assert "misp@example.com" in content
+
+    def test_a_port_that_is_no_number_falls_back(self, tmp_path):
+        with patch.dict(os.environ, {"MISP_EMAIL": "m@x", "SMTP_FQDN": "smtp", "SMTP_PORT": ""}):
+            _generate_email_config(tmp_path)
+        assert "'port'          => 25," in (tmp_path / "email.php").read_text()
 
 
 class TestCheckWritable:
@@ -115,7 +132,7 @@ class TestPopulateGnupg:
 
 
 class TestPrepareConfig:
-    """app/Config rendering from the image defaults, settings.yaml and env."""
+    """app/Config rendering from the image defaults and env."""
 
     def test_renders_all_files_and_adds_the_log_block_to_bootstrap(self, tmp_path, monkeypatch):
         from misp_container import init as init_mod
@@ -126,17 +143,14 @@ class TestPrepareConfig:
         upstream = ("<?php\nif (empty(Configure::read('SimpleBackgroundJobs.enabled'))) {\n"
                     "\tCakePlugin::loadAll(array('CakeResque' => array('bootstrap' => true)));\n}\n")
         (defaults / "bootstrap.default.php").write_text(upstream)
-        settings = tmp_path / "settings.yaml"
-        settings.write_text("settings:\n  minimum_config:\n    MISP.redis_host:\n      value: redis\n  db_enable:\n    MISP.system_setting_db:\n      value: true\n")
         config_dir = tmp_path / "Config"
         monkeypatch.setattr(init_mod, "MISP_CONFIG", str(config_dir))
-        monkeypatch.setattr("misp_container.config.CONFIG_DIR", str(tmp_path))
         monkeypatch.setattr(init_mod, "CONFIG_DEFAULTS", str(defaults))
         env_vars = {"DB_HOST": "db", "DB_USER": "u",
                     "DB_PORT": "3306", "DB_PASSWORD": "p", "DB_NAME": "misp", "DB_SSLMODE": "prefer",
-                    "MISP_EMAIL": "m@x", "SMTP_FQDN": "smtp", "SMTP_PORT": "25"}
+                    "MISP_EMAIL": "m@x", "SMTP_FQDN": "smtp", "SMTP_PORT": "25",
+                    "MISP_CONFIG_MISP__redis_host": "redis", "MISP_CONFIG_MISP__system_setting_db": "true"}
         with patch.dict(os.environ, env_vars):
-            os.environ.pop("MISP_REDIS_HOST", None)
             init_mod.prepare_config()
         assert (config_dir / "core.php").read_text() == "<?php // core"
         assert (config_dir / "routes.php").exists()
@@ -196,10 +210,7 @@ class TestRenderLogBlock:
         config_dir.mkdir()
         for name in ("core.php", "routes.php", "bootstrap.php"):
             (config_dir / name).write_text("<?php // from the last release")
-        settings = tmp_path / "settings.yaml"
-        settings.write_text("settings: {}\n")
         monkeypatch.setattr(init_mod, "MISP_CONFIG", str(config_dir))
-        monkeypatch.setattr("misp_container.config.CONFIG_DIR", str(tmp_path))
         monkeypatch.setattr(init_mod, "CONFIG_DEFAULTS", str(defaults))
         with patch.dict(os.environ, {"DB_PORT": "3306", "SMTP_PORT": "25"}):
             init_mod.prepare_config()

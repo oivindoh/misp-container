@@ -18,7 +18,7 @@ import yaml
 from misp_container import db
 from misp_container.admin import has_authkey, has_password
 from misp_container.api import MISPClient, APIError
-from misp_container.env import apply_defaults, env
+from misp_container.env import env
 from misp_container.log import get as getlog, setup as setup_logging
 
 log = getlog("sync")
@@ -40,13 +40,6 @@ ROLE_FIELDS = ("name", "permission", "perm_site_admin", "perm_admin", "perm_sync
 
 TAG_DEFAULTS = {"colour": "#004daa", "exportable": True, "hide_tag": False}
 
-# Team keys of earlier formats, and what replaces each in the one users list
-RETIRED_USER_LISTS = {
-    "feide_users": "external_auth: true",
-    "sync_users": "role: Sync user",
-    "service_users": "a role",
-}
-
 # The lists apply() reconciles; a config without any of them is empty
 RESOURCE_KEYS = ("teams", "roles", "tags", "taxonomies", "warninglists", "sharing_groups")
 
@@ -65,17 +58,27 @@ class ConfigError(Exception):
     """The org config cannot be loaded as the deployment set it up."""
 
 
+class StepError(Exception):
+    """Items of a step failed; the step applied the others."""
+
+
 def is_empty(config: dict) -> bool:
     return not any(config.get(key) for key in RESOURCE_KEYS)
 
 
 def _expand_env(value: str) -> str:
-    """Replace ${VAR} and $VAR with environment variable values."""
-    return re.sub(
-        r'\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)',
-        lambda m: os.environ.get(m.group(1) or m.group(2), ""),
-        value,
-    )
+    """Replace each ${VAR} with the variable's value; an unset variable is an error.
+
+    A $ without braces stays as it is, so a password can hold one.
+    """
+    def value_of(match):
+        name = match.group(1)
+        if name not in os.environ:
+            raise ConfigError(f"${{{name}}} is not set")
+        return os.environ[name]
+    return re.sub(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}", value_of, value)
+
+
 _UUID_RE = re.compile(
     r'^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$',
     re.IGNORECASE,
@@ -122,10 +125,14 @@ def _load_local(path: str) -> dict:
 
 
 def _normalize(raw: dict) -> dict:
-    """Normalize shorthand forms and set defaults."""
+    """Normalize shorthand forms and set defaults.
+
+    taxonomies and warninglists stay None when the file lacks the key: the run then
+    leaves those of MISP as they are.
+    """
     config = {
-        "taxonomies": raw.get("taxonomies", []),
-        "warninglists": raw.get("warninglists", []),
+        "taxonomies": raw.get("taxonomies"),
+        "warninglists": raw.get("warninglists"),
         "tags": [_normalize_tag(t) for t in raw.get("tags", [])],
         "sharing_groups": raw.get("sharing_groups", []),
         "roles": raw.get("roles", []),
@@ -134,11 +141,6 @@ def _normalize(raw: dict) -> dict:
 
     for team in raw.get("teams", []):
         default_role = team.get("default_role", "User")
-        for key, replacement in RETIRED_USER_LISTS.items():
-            if key in team:
-                raise ConfigError(f"team '{team.get('name', '?')}': {key} is gone; "
-                                  f"list these users under users, with {replacement}")
-
         t = {
             "uuid": _validate_uuid(team["uuid"], f"team '{team.get('name', '?')}'"),
             "name": team["name"],
@@ -153,9 +155,6 @@ def _normalize(raw: dict) -> dict:
             "tags": [_normalize_tag(tg) for tg in team.get("tags", [])],
         }
         for u in t["users"]:
-            if "allow_external" in u:
-                raise ConfigError(f"user {u.get('email', '?')}: allow_external is gone with the remote "
-                                  "config source; delete it")
             u.setdefault("role", default_role)
             u.setdefault("disabled", False)
             u.setdefault("external_auth", False)
@@ -173,7 +172,7 @@ def _normalize_tag(t) -> dict:
 def _expand_env_recursive(obj):
     """Walk a config structure and expand ${VAR} in all string values."""
     if isinstance(obj, str):
-        return _expand_env(obj) if "$" in obj else obj
+        return _expand_env(obj) if "${" in obj else obj
     if isinstance(obj, dict):
         return {k: _expand_env_recursive(v) for k, v in obj.items()}
     if isinstance(obj, list):
@@ -256,64 +255,85 @@ def _reconcile(client: MISPClient, kind: str, label: str, existing: dict | None,
     return ("updated" if changes else "unchanged"), result
 
 
+def _each(kind: str, items, label, apply_one, counts: dict) -> None:
+    """apply_one(item) for every item, counting each outcome it returns.
+
+    A failed item fails the step once the others ran: the run exits 1, and a
+    failed step disables nothing of its kind.
+    """
+    failed = []
+    for item in items:
+        try:
+            outcome = apply_one(item)
+        except Exception as e:
+            log.error("%s '%s': %s", kind, label(item), e)
+            failed.append(label(item))
+            continue
+        if outcome in counts:
+            counts[outcome] += 1
+    if failed:
+        raise StepError(f"{kind}: {len(failed)} failed ({', '.join(failed)})")
+
+
 def _apply_roles(client: MISPClient, state: MISPState, roles: list) -> dict:
     """Create or update MISP roles. Returns {created: N, updated: N}."""
     counts = {"created": 0, "updated": 0}
-    for role_def in roles:
-        name = role_def.get("name")
-        if not name:
-            log.warning("skipping role with no name")
-            continue
 
+    def apply_one(role_def):
+        if not role_def.get("name"):
+            raise ValueError("the role has no name")
         role_data = {k: role_def[k] for k in role_def if k in ROLE_FIELDS}
-        outcome, _ = _reconcile(client, "role", name, state.roles.get(name), role_data,
-                                [f for f in role_data if f != "name"])
-        if outcome in counts:
-            counts[outcome] += 1
+        return _reconcile(client, "role", role_def["name"], state.roles.get(role_def["name"]), role_data,
+                          [f for f in role_data if f != "name"])[0]
 
-    if counts["created"]:
-        state.refresh_roles(client)
+    try:
+        _each("role", roles, lambda r: r.get("name", "?"), apply_one, counts)
+    finally:
+        if counts["created"]:
+            state.refresh_roles(client)
     return counts
 
 
 def _apply_orgs(client: MISPClient, state: MISPState, teams: list) -> dict:
     """Create or update organisations. Returns {created: N, updated: N}."""
     counts = {"created": 0, "updated": 0}
-    for team in teams:
+
+    def apply_one(team):
         uuid = team["uuid"]
         org_data = {**{k: team[k] for k in ORG_FIELDS}, "uuid": uuid, "local": True}
-        outcome, _ = _reconcile(client, "org", f"{team['name']} ({uuid})", state.orgs.get(uuid), org_data,
-                                ORG_FIELDS)
-        if outcome in counts:
-            counts[outcome] += 1
+        return _reconcile(client, "org", f"{team['name']} ({uuid})", state.orgs.get(uuid), org_data,
+                          ORG_FIELDS)[0]
 
-    if counts["created"]:
-        state.refresh_orgs(client)
+    try:
+        _each("organisation", teams, lambda t: t["name"], apply_one, counts)
+    finally:
+        if counts["created"]:
+            state.refresh_orgs(client)
     return counts
+
+
+def _team_items(state: MISPState, teams: list, key: str) -> list:
+    """(item, org ID) for each entry of a team list; the org ID is None for an org MISP lacks."""
+    return [(item, state.org_id(team["uuid"])) for team in teams for item in team.get(key, [])]
+
+
+def _in_org(apply_one):
+    """apply_one(item, org_id) for an (item, org ID) pair, refusing an org MISP lacks."""
+    def apply(pair):
+        item, org_id = pair
+        if org_id is None:
+            raise ValueError("its team's organisation is not in MISP")
+        return apply_one(item, org_id)
+    return apply
 
 
 def _apply_tags(client: MISPClient, state: MISPState,
                 global_tags: list, teams: list) -> dict:
-    """Create or update global and org-scoped tags."""
+    """Create or update global (org_id 0) and org-scoped tags."""
     counts = {"created": 0, "updated": 0}
-
-    # Global tags (org_id=0)
-    for tag in global_tags:
-        c = _apply_one_tag(client, state, tag, org_id=0)
-        if c in counts:
-            counts[c] += 1
-
-    # Org-scoped tags
-    for team in teams:
-        org_id = state.org_id(team["uuid"])
-        if not org_id:
-            log.warning("skipping tags for unknown org %s", team["uuid"])
-            continue
-        for tag in team.get("tags", []):
-            c = _apply_one_tag(client, state, tag, org_id=org_id)
-            if c in counts:
-                counts[c] += 1
-
+    items = [(tag, 0) for tag in global_tags] + _team_items(state, teams, "tags")
+    _each("tag", items, lambda pair: pair[0]["name"],
+          _in_org(lambda tag, org_id: _apply_one_tag(client, state, tag, org_id)), counts)
     return counts
 
 
@@ -331,23 +351,13 @@ def _apply_one_tag(client: MISPClient, state: MISPState,
 
 
 def _apply_users(client: MISPClient, state: MISPState,
-                 teams: list) -> dict:
+                 teams: list) -> tuple[dict, set]:
     """Create or update the users of every team. Returns counts and set of managed emails."""
     counts = {"created": 0, "updated": 0}
-    managed_emails = set()
-
-    for team in teams:
-        org_id = state.org_id(team["uuid"])
-        if not org_id:
-            log.warning("skipping users for unknown org %s", team["uuid"])
-            continue
-
-        for user in team.get("users", []):
-            managed_emails.add(user["email"].lower())
-            c = _apply_one_user(client, state, user, org_id)
-            if c in counts:
-                counts[c] += 1
-
+    items = _team_items(state, teams, "users")
+    managed_emails = {user["email"].lower() for user, _ in items}
+    _each("user", items, lambda pair: pair[0]["email"],
+          _in_org(lambda user, org_id: _apply_one_user(client, state, user, org_id)), counts)
     return counts, managed_emails
 
 
@@ -356,8 +366,7 @@ def _apply_one_user(client: MISPClient, state: MISPState, user: dict, org_id: in
     email = user["email"].lower()
     role_id = state.role_id(user.get("role", "User"))
     if not role_id:
-        log.warning("unknown role '%s' for user %s, skipping", user.get("role"), email)
-        return "unchanged"
+        raise ValueError(f"role '{user.get('role')}' is not in MISP")
 
     existing = state.users.get(email)
     user_data = {
@@ -391,10 +400,9 @@ def _apply_one_user(client: MISPClient, state: MISPState, user: dict, org_id: in
             user_id = user_obj.get("id") if isinstance(user_obj, dict) else None
         else:
             user_id = existing["id"]
-        if user_id:
-            _set_user_authkey(int(user_id), authkey)
-        else:
-            log.warning("could not extract user id from create response for %s, authkey not set", email)
+        if not user_id:
+            raise ValueError("MISP's answer to the create holds no user ID, so the authkey is not set")
+        _set_user_authkey(int(user_id), authkey)
     if unread and outcome == "unchanged":
         log.info("setting the password of user '%s'", email)
         return "updated"
@@ -410,93 +418,61 @@ def _set_user_authkey(user_id: int, authkey: str):
     as it is: the file is the truth for this user's key, and every run would
     otherwise replace the row.
     """
-    try:
-        import bcrypt
-        import uuid as uuid_mod
+    import bcrypt
+    import uuid as uuid_mod
 
-        if has_authkey(user_id, authkey):
-            return
+    if has_authkey(user_id, authkey):
+        return
 
-        # Use $2y$ prefix (PHP bcrypt) instead of Python's $2b$ for compatibility
-        # with PHP's password_verify() used by MISP
-        authkey_hash = bcrypt.hashpw(authkey.encode(), bcrypt.gensalt()).decode()
-        authkey_hash = authkey_hash.replace("$2b$", "$2y$", 1)
-        authkey_start = authkey[:4]
-        authkey_end = authkey[-4:]
+    # Use $2y$ prefix (PHP bcrypt) instead of Python's $2b$ for compatibility
+    # with PHP's password_verify() used by MISP
+    authkey_hash = bcrypt.hashpw(authkey.encode(), bcrypt.gensalt()).decode()
+    authkey_hash = authkey_hash.replace("$2b$", "$2y$", 1)
+    authkey_start = authkey[:4]
+    authkey_end = authkey[-4:]
 
-        # Delete existing keys for this user, then insert the configured one
-        db.execute("DELETE FROM auth_keys WHERE user_id = %s", (user_id,))
-        db.execute(
-            "INSERT INTO auth_keys (uuid, authkey, authkey_start, authkey_end, "
-            f"created, user_id, expiration) VALUES (%s, %s, %s, %s, {db.NOW_EPOCH}, %s, 0)",
-            (str(uuid_mod.uuid4()), authkey_hash, authkey_start, authkey_end, user_id),
-        )
-        log.info("set authkey for user id=%s (start=%s)", user_id, authkey_start)
-    except Exception as e:
-        log.warning("failed to set authkey for user id=%s: %s", user_id, e)
+    # Delete existing keys for this user, then insert the configured one
+    db.execute("DELETE FROM auth_keys WHERE user_id = %s", (user_id,))
+    db.execute(
+        "INSERT INTO auth_keys (uuid, authkey, authkey_start, authkey_end, "
+        f"created, user_id, expiration) VALUES (%s, %s, %s, %s, {db.NOW_EPOCH}, %s, 0)",
+        (str(uuid_mod.uuid4()), authkey_hash, authkey_start, authkey_end, user_id),
+    )
+    log.info("set authkey for user id=%s (start=%s)", user_id, authkey_start)
 
 
 def _apply_servers(client: MISPClient, state: MISPState,
-                   teams: list) -> dict:
+                   teams: list) -> tuple[dict, set]:
     """Create or update sync servers. Returns counts and set of managed URLs."""
     counts = {"created": 0, "updated": 0}
-    managed_urls = set()
+    items = _team_items(state, teams, "servers")
+    managed_urls = {server["url"].rstrip("/").lower() for server, _ in items}
 
-    for team in teams:
-        org_id = state.org_id(team["uuid"])
-        if not org_id:
-            continue
+    def apply_one(server, org_id):
+        url = server["url"].rstrip("/").lower()
+        # Our credential on the partner. MISP never returns it, so a configured one goes
+        # with every edit; MISP needs one to create the server, and a random one stands in
+        config_authkey = server.get("authkey", "")
+        server_data = {
+            "name": server["name"],
+            "url": server["url"].rstrip("/"),
+            "authkey": config_authkey or secrets.token_hex(20),
+            "remote_org_id": org_id,
+            # _normalize gave every field its SERVER_DEFAULTS value
+            "push": server["push"],
+            "pull": server["pull"],
+            "internal": server["internal"],
+            "self_signed": server["self_signed"],
+            "caching_enabled": server["caching_enabled"],
+            "pull_rules": json.dumps(_build_rules(server["pull_tags"], server["pull_tags_exclude"],
+                                                  pull=True, state=state)),
+            "push_rules": json.dumps(_build_rules(server["push_tags"], server["push_tags_exclude"],
+                                                  pull=False, state=state)),
+        }
+        return _reconcile(client, "server", f"{server['name']} ({url})", state.servers.get(url), server_data,
+                          SERVER_FIELDS, {"authkey": config_authkey} if config_authkey else None)[0]
 
-        for server in team.get("servers", []):
-            url = server["url"].rstrip("/").lower()
-            managed_urls.add(url)
-
-            # Authkey = our credential on the remote instance.
-            # 1. Explicit authkey in config (supports ${ENV_VAR} expansion)
-            # 2. Keep existing authkey (on update -- MISP doesn't return it via API)
-            # 3. Generate random placeholder (on create, should be replaced by config)
-            config_authkey = server.get("authkey", "")
-            authkey = config_authkey
-
-            existing_server = state.servers.get(url)
-            if not authkey:
-                if existing_server:
-                    authkey = existing_server.get("authkey", "") or secrets.token_hex(20)
-                else:
-                    authkey = secrets.token_hex(20)
-
-            pull_rules = _build_rules(
-                server["pull_tags"],
-                server["pull_tags_exclude"],
-                pull=True, state=state,
-            )
-            push_rules = _build_rules(
-                server["push_tags"],
-                server["push_tags_exclude"],
-                pull=False, state=state,
-            )
-
-            server_data = {
-                "name": server["name"],
-                "url": server["url"].rstrip("/"),
-                "authkey": authkey,
-                "remote_org_id": org_id,
-                # _normalize gave every field its SERVER_DEFAULTS value
-                "push": server["push"],
-                "pull": server["pull"],
-                "internal": server["internal"],
-                "self_signed": server["self_signed"],
-                "caching_enabled": server["caching_enabled"],
-                "pull_rules": json.dumps(pull_rules),
-                "push_rules": json.dumps(push_rules),
-            }
-
-            # MISP never returns a server's authkey, so a configured one goes with every edit
-            outcome, _ = _reconcile(client, "server", f"{server['name']} ({url})", existing_server, server_data,
-                                    SERVER_FIELDS, {"authkey": config_authkey} if config_authkey else None)
-            if outcome in counts:
-                counts[outcome] += 1
-
+    _each("server", items, lambda pair: pair[0]["url"], _in_org(apply_one), counts)
     return counts, managed_urls
 
 
@@ -513,8 +489,12 @@ def _build_rules(include_tags: list, exclude_tags: list,
         tags_or = include_tags
         tags_not = exclude_tags
     else:
-        tags_or = [state.tag_id(t) for t in include_tags if state.tag_id(t)]
-        tags_not = [state.tag_id(t) for t in exclude_tags if state.tag_id(t)]
+        # A push rule that lost its tag would push every event to the partner
+        unknown = [t for t in include_tags + exclude_tags if state.tag_id(t) is None]
+        if unknown:
+            raise ValueError(f"push tags not in MISP: {', '.join(unknown)}")
+        tags_or = [state.tag_id(t) for t in include_tags]
+        tags_not = [state.tag_id(t) for t in exclude_tags]
 
     rules = {
         "tags": {"OR": tags_or, "NOT": tags_not},
@@ -529,170 +509,139 @@ def _build_rules(include_tags: list, exclude_tags: list,
 
 def _apply_taxonomies(client: MISPClient, state: MISPState,
                       desired: list) -> dict:
-    """Enable desired taxonomies, disable unmanaged ones."""
+    """Enable the taxonomies the file names, then disable the others."""
     counts = {"enabled": 0, "disabled": 0}
-    desired_set = set(desired)
-
-    # Ensure taxonomies are loaded from disk into DB
     if desired:
-        try:
-            client.post("/taxonomies/update", {})
-            state.taxonomies = client.get_taxonomies()
-        except APIError:
-            pass  # older MISP versions may not support this
+        # Loads the taxonomies of the image into the database
+        client.post("/taxonomies/update", {})
+        state.taxonomies = client.get_taxonomies()
 
-    for namespace in desired:
+    def enable(namespace):
         tax = state.taxonomies.get(namespace)
         if not tax:
-            log.warning("taxonomy '%s' not found in MISP, skipping", namespace)
-            continue
-        if not tax.get("enabled"):
-            log.info("enabling taxonomy '%s'", namespace)
-            client.post(f"/taxonomies/enable/{tax['id']}", {})
-            counts["enabled"] += 1
+            raise ValueError("not in MISP")
+        if tax.get("enabled"):
+            return "unchanged"
+        log.info("enabling taxonomy '%s'", namespace)
+        client.post(f"/taxonomies/enable/{tax['id']}", {})
+        return "enabled"
 
-    # Disable unmanaged
-    for namespace, tax in state.taxonomies.items():
-        if namespace not in desired_set and tax.get("enabled"):
-            log.info("disabling unmanaged taxonomy '%s'", namespace)
-            client.post(f"/taxonomies/disable/{tax['id']}", {})
-            counts["disabled"] += 1
+    def disable(namespace):
+        log.info("disabling unmanaged taxonomy '%s'", namespace)
+        client.post(f"/taxonomies/disable/{state.taxonomies[namespace]['id']}", {})
+        return "disabled"
 
+    _each("taxonomy", desired, str, enable, counts)
+    unnamed = [ns for ns, tax in state.taxonomies.items() if ns not in desired and tax.get("enabled")]
+    _each("taxonomy", unnamed, str, disable, counts)
     return counts
 
 
 def _apply_warninglists(client: MISPClient, state: MISPState,
                         desired: list) -> dict:
-    """Enable/create desired warninglists, disable unmanaged ones.
+    """Enable or create the warninglists the file names, then disable the others.
 
     Items can be either:
       - string: enable an existing built-in warninglist by name
       - dict: create/update a custom warninglist with inline values
     """
     counts = {"enabled": 0, "disabled": 0, "created": 0, "updated": 0}
-    desired_names = set()
 
-    for item in desired:
-        if isinstance(item, str):
-            # Enable existing warninglist by name
-            desired_names.add(item)
-            wl = state.warninglists.get(item)
-            if not wl:
-                log.warning("warninglist '%s' not found in MISP, skipping", item)
-                continue
-            if not wl.get("enabled"):
-                log.info("enabling warninglist '%s'", item)
-                client.post("/warninglists/toggleEnable", {"id": wl["id"], "enabled": True})
-                counts["enabled"] += 1
+    def apply_one(item):
+        if isinstance(item, dict) and "name" in item:
+            return _apply_custom_warninglist(client, state, item, counts)
+        if not isinstance(item, str):
+            raise ValueError("an entry is neither a name nor a list with a name")
+        wl = state.warninglists.get(item)
+        if not wl:
+            raise ValueError("not in MISP")
+        if wl.get("enabled"):
+            return "unchanged"
+        log.info("enabling warninglist '%s'", item)
+        client.post("/warninglists/toggleEnable", {"id": wl["id"], "enabled": True})
+        return "enabled"
 
-        elif isinstance(item, dict) and "name" in item:
-            # Custom warninglist with inline values
-            name = item["name"]
-            desired_names.add(name)
-            existing = state.warninglists.get(name)
+    def disable(name):
+        log.info("disabling unmanaged warninglist '%s'", name)
+        client.post("/warninglists/toggleEnable", {"id": state.warninglists[name]["id"], "enabled": False})
+        return "disabled"
 
-            wl_data = {
-                "name": name,
-                "description": item.get("description", ""),
-                "version": str(item.get("version", 1)),
-                "type": item.get("type", "string"),
-                "category": item.get("category", "false_positive"),
-            }
-
-            # matching_attributes as indexed keys (MISP form-data style)
-            matching = item.get("matching_attributes", [])
-            for i, attr in enumerate(matching):
-                wl_data[f"matching_attributes[{i}]"] = attr
-
-            # Entries as CRLF-delimited string
-            values = item.get("values", [])
-            wl_data["entries"] = "\r\n".join(str(v) for v in values)
-
-            if not existing:
-                log.info("creating custom warninglist '%s' (%d entries)", name, len(values))
-                try:
-                    client.post("/warninglists/add", {"Warninglist": wl_data})
-                    counts["created"] += 1
-                except APIError as e:
-                    if "already exists" in str(e):
-                        # Warninglist exists but wasn't in our state -- refresh and update
-                        log.info("warninglist '%s' already exists, refreshing state", name)
-                        state.warninglists = client.get_warninglists()
-                        existing = state.warninglists.get(name)
-                    elif e.status == 302:
-                        counts["created"] += 1
-                    else:
-                        log.error("failed to create warninglist '%s': %s", name, e)
-
-            # Update if version changed (existing may have been set by the fallback above)
-            if existing:
-                if str(existing.get("version", "")) != str(item.get("version", 1)):
-                    log.info("updating custom warninglist '%s' to version %s",
-                             name, item.get("version"))
-                    try:
-                        client.post(f"/warninglists/edit/{existing['id']}",
-                                    {"Warninglist": wl_data})
-                        counts["updated"] += 1
-                    except APIError as e:
-                        log.warning("failed to update warninglist '%s': %s "
-                                    "(may need manual update via MISP UI)", name, e)
-
-            # Refresh state after creates to get IDs for enable
-            if counts["created"] > 0:
-                state.warninglists = client.get_warninglists()
-
-            # Ensure enabled
-            wl = state.warninglists.get(name)
-            if wl and not wl.get("enabled") and item.get("enabled", True):
-                log.info("enabling warninglist '%s'", name)
-                client.post("/warninglists/toggleEnable",
-                            {"id": wl["id"], "enabled": True})
-                counts["enabled"] += 1
-
-    # Refresh state after creates
-    if counts["created"]:
-        state.warninglists = client.get_warninglists()
-
-    # Disable unmanaged
-    for name, wl in state.warninglists.items():
-        if name not in desired_names and wl.get("enabled"):
-            log.info("disabling unmanaged warninglist '%s'", name)
-            client.post("/warninglists/toggleEnable", {"id": wl["id"], "enabled": False})
-            counts["disabled"] += 1
-
+    _each("warninglist", desired, lambda item: item.get("name", "?") if isinstance(item, dict) else str(item),
+          apply_one, counts)
+    names = {item["name"] if isinstance(item, dict) else item for item in desired}
+    unnamed = [name for name, wl in state.warninglists.items() if name not in names and wl.get("enabled")]
+    _each("warninglist", unnamed, str, disable, counts)
     return counts
+
+
+def _apply_custom_warninglist(client: MISPClient, state: MISPState, item: dict, counts: dict) -> None:
+    """Create a custom warninglist, or update it when its version changed, and enable it."""
+    name = item["name"]
+    version = str(item.get("version", 1))
+    wl_data = {
+        "name": name,
+        "description": item.get("description", ""),
+        "version": version,
+        "type": item.get("type", "string"),
+        "category": item.get("category", "false_positive"),
+    }
+    # matching_attributes as indexed keys (MISP form-data style)
+    for i, attr in enumerate(item.get("matching_attributes", [])):
+        wl_data[f"matching_attributes[{i}]"] = attr
+    # Entries as CRLF-delimited string
+    values = item.get("values", [])
+    wl_data["entries"] = "\r\n".join(str(v) for v in values)
+
+    existing = state.warninglists.get(name)
+    if existing is None:
+        log.info("creating custom warninglist '%s' (%d entries)", name, len(values))
+        try:
+            client.post("/warninglists/add", {"Warninglist": wl_data})
+            counts["created"] += 1
+        except APIError as e:
+            # A list that the index left out
+            if "already exists" not in str(e):
+                raise
+        state.warninglists = client.get_warninglists()
+        existing = state.warninglists.get(name)
+        if existing is None:
+            raise ValueError("MISP lists no warninglist of this name after the create")
+    if str(existing.get("version", "")) != version:
+        log.info("updating custom warninglist '%s' to version %s", name, version)
+        client.post(f"/warninglists/edit/{existing['id']}", {"Warninglist": wl_data})
+        counts["updated"] += 1
+    if not existing.get("enabled") and item.get("enabled", True):
+        log.info("enabling warninglist '%s'", name)
+        client.post("/warninglists/toggleEnable", {"id": existing["id"], "enabled": True})
+        counts["enabled"] += 1
 
 
 def _apply_sharing_groups(client: MISPClient, state: MISPState,
                           desired_sgs: list) -> dict:
     """Create or update sharing groups and reconcile org membership."""
     counts = {"created": 0, "updated": 0}
+    # MISP gives every sharing group a UUID; a file entry without one finds it by its name
+    by_name = {sg["name"]: sg for sg in state.sharing_groups.values()}
 
-    for sg in desired_sgs:
+    def apply_one(sg):
         # Only the fields the file sets: MISP keeps its defaults for the rest, and
         # an empty string sent for them would differ from those on every run
         sg_data = {k: sg[k] for k in SG_FIELDS if k in sg}
         if "uuid" in sg:
             sg_data["uuid"] = _validate_uuid(sg["uuid"], f"sharing group '{sg['name']}'")
-
-        # Lookup by UUID then name
-        key = sg_data.get("uuid", "") or sg["name"]
-        existing = state.sharing_groups.get(key)
-        if not existing and "uuid" in sg_data:
-            # Try name fallback
-            existing = state.sharing_groups.get(sg["name"])
-
+        existing = state.sharing_groups.get(sg_data.get("uuid", "")) or by_name.get(sg["name"])
         outcome, result = _reconcile(client, "sharing group", sg["name"], existing, sg_data, list(sg_data))
-        if outcome in counts:
-            counts[outcome] += 1
         if existing is None:
             sg_id = (result or {}).get("SharingGroup", result or {}).get("id")
-            if sg_id:
-                _sync_sg_orgs(client, state, sg_id, sg.get("organisations", []))
+            if not sg_id:
+                raise ValueError("MISP's answer to the create holds no sharing group ID")
+            _sync_sg_orgs(client, state, sg_id, sg.get("organisations", []))
         else:
             _sync_sg_orgs(client, state, existing["id"], sg.get("organisations", []),
                           current_orgs=existing.get("SharingGroupOrg", []))
+        return outcome
 
+    _each("sharing group", desired_sgs, lambda sg: sg.get("name", "?"), apply_one, counts)
     return counts
 
 
@@ -700,17 +649,13 @@ def _sync_sg_orgs(client: MISPClient, state: MISPState,
                   sg_id: int, desired_orgs: list,
                   current_orgs: list | None = None):
     """Add/remove orgs from a sharing group to match desired state."""
-    # Parse desired orgs
     desired_map = {}  # org_id -> extend
     for org_ref in desired_orgs:
-        if isinstance(org_ref, str):
-            oid = state.org_id(org_ref)
-            if oid:
-                desired_map[oid] = False
-        elif isinstance(org_ref, dict):
-            oid = state.org_id(org_ref["uuid"])
-            if oid:
-                desired_map[oid] = org_ref.get("extend", False)
+        uuid, extend = (org_ref, False) if isinstance(org_ref, str) else (org_ref["uuid"], org_ref.get("extend", False))
+        oid = state.org_id(uuid)
+        if oid is None:
+            raise ValueError(f"organisation {uuid} is not in MISP")
+        desired_map[oid] = extend
 
     # Parse current orgs
     current_ids = set()
@@ -743,62 +688,52 @@ def _sync_sg_orgs(client: MISPClient, state: MISPState,
 
 
 def _disable_unmanaged_users(client: MISPClient, state: MISPState,
-                             managed_emails: set | None):
+                             managed_emails: set | None) -> int:
     """Disable the local users the file does not name (never user ID 1).
 
     A user with an OIDC subject or external auth belongs to its identity
     provider. LdapAuth marks none of the users it creates, so with an LDAP
     login plugin on, no unnamed user is disabled. None means the users step
-    failed before it knew what it manages, so nothing is unmanaged.
+    failed, so nothing is unmanaged.
     """
-    count = 0
+    counts = {"disabled": 0}
     if managed_emails is None:
         log.warning("the users step failed; no user is disabled this run")
-        return count
-    if "true" in (env("LDAPAUTH_ENABLE"), env("APACHESECUREAUTH_LDAP_ENABLE")):
-        log.info("an LDAP login plugin is on and marks none of its users; no unnamed user is disabled")
-        return count
+        return 0
+    if env("LDAPAUTH_ENABLE") == "true":
+        log.info("the LDAP login plugin is on and marks none of its users; no unnamed user is disabled")
+        return 0
 
-    for email, user in state.users.items():
-        if email in managed_emails:
-            continue
-        # Never disable the site admin (user ID 1)
-        if user.get("id") == 1 or str(user.get("id")) == "1":
-            continue
-        if user.get("sub") or _values_equal(True, user.get("external_auth_required")):
-            continue
-        if not user.get("disabled"):
-            log.info("disabling unmanaged user '%s'", email)
-            try:
-                client.post(f"/admin/users/edit/{user['id']}",
-                            {"User": {"disabled": True}})
-                count += 1
-            except APIError as e:
-                log.warning("failed to disable user %s: %s", email, e)
+    def disable(email):
+        log.info("disabling unmanaged user '%s'", email)
+        client.post(f"/admin/users/edit/{state.users[email]['id']}", {"User": {"disabled": True}})
+        return "disabled"
 
-    return count
+    unnamed = [email for email, user in state.users.items()
+               if email not in managed_emails and str(user.get("id")) != "1"
+               and not (user.get("sub") or _values_equal(True, user.get("external_auth_required")))
+               and not user.get("disabled")]
+    _each("user", unnamed, str, disable, counts)
+    return counts["disabled"]
 
 
 def _disable_unmanaged_servers(client: MISPClient, state: MISPState,
-                               managed_urls: set | None):
+                               managed_urls: set | None) -> int:
     """Disable push/pull on servers not in managed set; None (the servers step failed) disables none."""
-    count = 0
+    counts = {"disabled": 0}
     if managed_urls is None:
         log.warning("the servers step failed; no server is disabled this run")
-        return count
-    for url, server in state.servers.items():
-        if url in managed_urls:
-            continue
-        if server.get("push") or server.get("pull"):
-            log.info("disabling unmanaged server '%s'", url)
-            try:
-                client.post(f"/servers/edit/{server['id']}",
-                            {"Server": {"push": False, "pull": False}})
-                count += 1
-            except APIError as e:
-                log.warning("failed to disable server %s: %s", url, e)
+        return 0
 
-    return count
+    def disable(url):
+        log.info("disabling unmanaged server '%s'", url)
+        client.post(f"/servers/edit/{state.servers[url]['id']}", {"Server": {"push": False, "pull": False}})
+        return "disabled"
+
+    unnamed = [url for url, server in state.servers.items()
+               if url not in managed_urls and (server.get("push") or server.get("pull"))]
+    _each("server", unnamed, str, disable, counts)
+    return counts["disabled"]
 
 
 # ---------------------------------------------------------------------------
@@ -861,21 +796,21 @@ def apply(client: MISPClient, config: dict) -> dict:
         summary["servers"] = {"error": str(e)}
         managed_urls = None
 
-    # 6. Taxonomies
-    try:
-        summary["taxonomies"] = _apply_taxonomies(
-            client, state, config.get("taxonomies", []))
-    except Exception as e:
-        log.error("failed applying taxonomies: %s", e)
-        summary["taxonomies"] = {"error": str(e)}
+    # 6. Taxonomies, when the file has the key
+    if config.get("taxonomies") is not None:
+        try:
+            summary["taxonomies"] = _apply_taxonomies(client, state, config["taxonomies"])
+        except Exception as e:
+            log.error("failed applying taxonomies: %s", e)
+            summary["taxonomies"] = {"error": str(e)}
 
-    # 7. Warninglists
-    try:
-        summary["warninglists"] = _apply_warninglists(
-            client, state, config.get("warninglists", []))
-    except Exception as e:
-        log.error("failed applying warninglists: %s", e)
-        summary["warninglists"] = {"error": str(e)}
+    # 7. Warninglists, when the file has the key
+    if config.get("warninglists") is not None:
+        try:
+            summary["warninglists"] = _apply_warninglists(client, state, config["warninglists"])
+        except Exception as e:
+            log.error("failed applying warninglists: %s", e)
+            summary["warninglists"] = {"error": str(e)}
 
     # 8. Sharing groups
     try:
@@ -887,12 +822,15 @@ def apply(client: MISPClient, config: dict) -> dict:
 
     # 9. Disable unmanaged
     try:
-        summary["disabled_users"] = _disable_unmanaged_users(
-            client, state, managed_emails)
-        summary["disabled_servers"] = _disable_unmanaged_servers(
-            client, state, managed_urls)
+        summary["disabled_users"] = _disable_unmanaged_users(client, state, managed_emails)
     except Exception as e:
-        log.error("failed disabling unmanaged resources: %s", e)
+        log.error("failed disabling unmanaged users: %s", e)
+        summary["disabled_users"] = {"error": str(e)}
+    try:
+        summary["disabled_servers"] = _disable_unmanaged_servers(client, state, managed_urls)
+    except Exception as e:
+        log.error("failed disabling unmanaged servers: %s", e)
+        summary["disabled_servers"] = {"error": str(e)}
 
     log.info("sync summary: %s", summary)
     return summary
@@ -929,12 +867,15 @@ def main(argv: list[str]) -> None:
     """
     setup_logging("sync")
     log.info("MISP org sync starting")
-    apply_defaults()
     base_url = env("SYNC_BASE_URL", env("MISP_BASEURL"))
     api_key = env("ADMIN_KEY")
     if not api_key:
         log.info("ADMIN_KEY not set, skipping org sync")
         sys.exit(0)
+    # The web pods of an older revision may still serve: apply orgs.yaml only once
+    # this revision's configure run finished
+    db.wait_for_db()
+    db.wait_for_configure()
     try:
         config = load_config(file_path=argv[0] if argv else None)
     except (ConfigError, ValueError) as e:

@@ -1,13 +1,10 @@
-# Builds the three images from the layer caches the build job filled (seconds)
+# Builds the two images from the layer caches the build job filled (seconds)
 # and loads them into the job's docker, under the tag the suites run.
 name: Load the images
-description: The misp, caddy and modules images from the build job's layer caches, loaded into docker
+description: The misp and modules images from the build job's layer caches, loaded into docker
 inputs:
   misp:
     description: The misp image name
-    required: true
-  caddy:
-    description: The caddy image name
     required: true
   modules:
     description: The modules image name
@@ -27,16 +24,6 @@ runs:
         load: true
         tags: ${{ inputs.misp }}:${{ inputs.tag }}
         cache-from: type=gha,scope=misp
-    - name: Build caddy image
-      uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
-      with:
-        context: .
-        target: caddy
-        load: true
-        tags: ${{ inputs.caddy }}:${{ inputs.tag }}
-        cache-from: |
-          type=gha,scope=misp
-          type=gha,scope=caddy
     - name: Build modules image
       uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
       with:

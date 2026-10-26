@@ -33,13 +33,12 @@ import os
 import re
 import shutil
 import sys
-import tempfile
 import time
 from pathlib import Path
 from typing import Iterator
 
 from . import MISP_BASE, cake, db
-from .env import apply_defaults, env
+from .env import env
 from .init import database_fields, prepare_config, purge_model_cache, setup_tmp, write_database_php
 from .log import setup as setup_logging, get as getlog
 from .s3 import Bucket, S3Error
@@ -77,6 +76,9 @@ SYSTEM_CA = "/etc/ssl/certs/ca-certificates.crt"
 # Org logos and custom images under the old app/files, which every pod reads from the
 # attachments volume (the image-paths check of scripts/check_upstream.py)
 IMAGE_DIRS = ("img/orgs", "img/custom")
+# An emptyDir of the migrate container without a size limit (job-configure.yaml): a
+# bucket-to-bucket copy holds one object here at a time, of any size
+SPOOL_DIR = "/var/tmp"
 
 
 # -- Configuration -------------------------------------------------------------
@@ -440,11 +442,13 @@ def source_attachments(source: Path | Bucket) -> Iterator[tuple[str, str]]:
 def copy_attachments(source: Path | Bucket, target: Path | Bucket) -> int:
     """Copy every attachment from source to target under MISP's key; returns the count."""
     copied = 0
-    spool = Path(tempfile.gettempdir()) / "migrate-attachment"
+    spool = Path(SPOOL_DIR) / "migrate-attachment"
+    spooled = False
     for key, where in source_attachments(source):
         if isinstance(source, Bucket) and isinstance(target, Bucket):
             source.download(where, spool)
             target.upload(key, spool)
+            spooled = True
         elif isinstance(source, Bucket):
             source.download(where, target / key)
         elif isinstance(target, Bucket):
@@ -453,7 +457,8 @@ def copy_attachments(source: Path | Bucket, target: Path | Bucket) -> int:
             (target / key).parent.mkdir(parents=True, exist_ok=True)
             shutil.copy(where, target / key)
         copied += 1
-    spool.unlink(missing_ok=True)
+    if spooled:
+        spool.unlink()
     return copied
 
 
@@ -488,8 +493,7 @@ def upgrade_source(source: dict) -> None:
     write_database_php(fields)
     purge_model_cache()
     try:
-        # runUpgrade refuses to run unless MISP.osuser names the user it runs as
-        cake.set_setting("MISP.osuser", "misp")
+        # runUpgrade refuses to run unless MISP.osuser (settings.yaml) names the user it runs as
         cake.run_checked("Admin", "runUpgrade")
     finally:
         write_database_php(database_fields())
@@ -596,9 +600,9 @@ def run() -> None:
             record(False)
             sys.exit(EXIT_COPY)
         log.info("database copied: %d rows", rows)
-        # Web and worker pods wait for MISP.live; the configure step sets it
-        # again once the copy is upgraded and configured.
-        db.set_system_setting("MISP.live", "false")
+        # The copy replaced the database: the pods wait for the configure run that
+        # upgrades and configures it
+        db.clear_configured()
 
         if files_from is None:
             log.info("neither MIGRATE_SOURCE_FILES nor MIGRATE_SOURCE_S3_BUCKET is set; attachments are not copied")
@@ -625,7 +629,6 @@ def run() -> None:
 
 def main() -> None:
     setup_logging("migrate")
-    apply_defaults()
     run()
 
 

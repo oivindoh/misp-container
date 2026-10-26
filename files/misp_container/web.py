@@ -8,13 +8,19 @@ import re
 import subprocess
 import sys
 import urllib.parse
+from pathlib import Path
 
 from . import db
-from .env import apply_defaults, env
+from .env import env
 from .init import check_writable, prepare
 from .log import get as getlog, setup as setup_logging
 
 log = getlog("web")
+
+PHP_INI_DIR = "/etc/misp-docker/php.d"
+FPM_POOL = "/etc/misp-docker/php-fpm-pool.conf"
+# On the pod's /tmp volume: the root is read-only
+FPM_POOL_RENDERED = "/tmp/php-fpm-pool.conf"
 
 
 def set_session_save_path():
@@ -33,27 +39,44 @@ def set_session_save_path():
     os.environ["SESSION_SAVE_PATH"] = session_path
 
 
+def render_fpm_pool() -> None:
+    """The FPM pool file with MISP's settings layer passed to the workers.
+
+    PHP-FPM clears the workers' environment, so each MISP_SETTING_* variable gets an
+    env[] line. [www] is the last section of the pool file, so the lines land in it.
+    """
+    lines = [f"env[{var}] = ${var}" for var in sorted(os.environ) if var.startswith("MISP_SETTING_")]
+    Path(FPM_POOL_RENDERED).write_text(Path(FPM_POOL).read_text().rstrip("\n") + "\n" + "\n".join(lines) + "\n")
+    log.info("PHP-FPM gets %d settings from the environment", len(lines))
+
+
 def start_log_relay():
-    """Relay the log files MISP writes directly to stdout; it outlives the exec of PHP-FPM."""
-    subprocess.Popen([sys.executable, "-m", "misp_container.logrelay"], stdout=sys.stdout, stderr=sys.stderr)
+    """Relay the log files MISP writes directly to stdout; it outlives the exec of PHP-FPM.
+
+    PHP-FPM restarts no child of its own, so a shell loop starts the relay again when it exits.
+    """
+    subprocess.Popen(["sh", "-c", 'while :; do "$0" -m misp_container.logrelay; sleep 1; done', sys.executable],
+                     stdout=sys.stdout, stderr=sys.stderr)
 
 
 def main():
     setup_logging("web")
     log.info("MISP web container starting")
-    apply_defaults()
     prepare()
     set_session_save_path()
     if not env("PLUGIN_S3_BUCKET_NAME"):
         check_writable(env("MISP_ATTACHMENTS_DIR"), "attachments")
     db.wait_for_db()
-    db.wait_for_live()
+    db.wait_for_configure()
     start_log_relay()
-    log.info("starting PHP-FPM on port 9002")
+    log.info("starting PHP-FPM on 127.0.0.1:9002")
+    # Debian's production php.ini first, then our overrides: a leading colon appends
+    # the directory to PHP's own scan path
+    os.environ["PHP_INI_SCAN_DIR"] = f":{PHP_INI_DIR}"
+    render_fpm_pool()
     os.execvp(
         "/usr/sbin/php-fpm8.4",
-        ["/usr/sbin/php-fpm8.4", "--fpm-config", "/etc/misp-docker/php-fpm-pool.conf", "-c",
-         "/etc/misp-docker/php.ini", "-F"],
+        ["/usr/sbin/php-fpm8.4", "--fpm-config", FPM_POOL_RENDERED, "-F"],
     )
 
 

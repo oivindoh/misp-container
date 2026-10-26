@@ -117,37 +117,6 @@ def _fetch_rows(cur):
     return list(cur.fetchall())
 
 
-def query(sql: str, *, check: bool = False) -> str:
-    """Run a statement. Returns rows as tab-separated columns, newline-separated rows."""
-    conn = _connect()
-    try:
-        with _cursor(conn) as cur:
-            cur.execute(sql)
-            rows = _fetch_rows(cur)
-            if not rows:
-                return ""
-            lines = []
-            for row in rows:
-                cols = []
-                for val in row:
-                    if val is None:
-                        cols.append("NULL")
-                    elif isinstance(val, (bytes, bytearray, memoryview)):
-                        cols.append(bytes(val).decode())
-                    elif isinstance(val, bool):
-                        cols.append("1" if val else "0")
-                    else:
-                        cols.append(str(val))
-                lines.append("\t".join(cols))
-            return "\n".join(lines)
-    except Exception as e:
-        if check:
-            raise RuntimeError(f"query failed: {e}") from e
-        return ""
-    finally:
-        conn.close()
-
-
 def dict_query(sql: str, params=None) -> list[dict]:
     """Run a statement, return rows as dicts keyed by column name."""
     conn = _connect()
@@ -271,39 +240,89 @@ def run_records() -> dict[str, dict]:
                                         (RUNS_PREFIX + "%",)))
 
 
-def wait_for_live(retries: int = 120, wait_seconds: int = 3) -> None:
-    """Wait for the configure step of this image version.
+# The configure run's record of what it configured: the image version and the checksum of the
+# chart's configuration (the pods' checksum/config annotation, MISP_CONFIG_CHECKSUM)
+VERSION_ROW = "misp_docker.defaults_version"
+CHECKSUM_ROW = "misp_docker.config_checksum"
 
-    The step sets MISP.live=true and records the image version it configured
-    (misp_docker.defaults_version). A pod of a newer image waits for its own
-    configure run, whatever tool applied the manifests and in whatever order.
-    """
+
+def image_version() -> str:
+    """The MISP version of this image, as the build recorded it; "" when unknown."""
     from . import DIST_VERSION_FILE
     try:
-        image_version = open(DIST_VERSION_FILE).read().strip()
+        return open(DIST_VERSION_FILE).read().strip()
     except OSError:
-        image_version = ""
-    log.info("waiting for the configure step of image %s", image_version or "unknown")
+        return ""
+
+
+def configured_for() -> dict[str, str]:
+    """{VERSION_ROW, CHECKSUM_ROW: what this pod's configure run must have recorded}; empty values dropped."""
+    wanted = {VERSION_ROW: image_version(), CHECKSUM_ROW: envmod.env("MISP_CONFIG_CHECKSUM")}
+    return {row: value for row, value in wanted.items() if value}
+
+
+def record_configured() -> None:
+    """Record that a configure run finished for this image and this configuration."""
+    for row, value in configured_for().items():
+        set_system_setting(row, value)
+
+
+def clear_configured() -> None:
+    """Forget the last configure run: the pods wait for the next one."""
+    execute("DELETE FROM system_settings WHERE setting IN (%s, %s)", (VERSION_ROW, CHECKSUM_ROW))
+
+
+def wait_for_configure(retries: int = 120, wait_seconds: int = 3) -> None:
+    """Wait for the configure run of this image and this configuration.
+
+    A pod of a newer image or of a changed configuration waits for its own
+    configure run, whatever tool applied the manifests and in whatever order.
+    MISP.live is MISP's own maintenance switch: the wait ignores it.
+    """
+    wanted = configured_for()
+    log.info("waiting for the configure run of %s", ", ".join(f"{k}={v}" for k, v in wanted.items()) or "anything")
     for i in range(retries, 0, -1):
-        rows = query(
-            "SELECT setting, value FROM system_settings "
-            "WHERE setting IN ('MISP.live', 'misp_docker.defaults_version');"
-        )
-        state = {}
-        for line in rows.splitlines():
-            key, _, value = line.partition("\t")
-            state[key] = value.strip().strip('"')
-        live = state.get("MISP.live") == "true"
-        configured = state.get("misp_docker.defaults_version", "")
-        if live and (not image_version or configured == image_version):
-            log.info("MISP is live and configured for %s", configured or "this image")
+        found = {}
+        for row in dict_query("SELECT setting, value FROM system_settings WHERE setting IN (%s, %s)",
+                              (VERSION_ROW, CHECKSUM_ROW)):
+            try:
+                found[row["setting"]] = json.loads(row["value"])
+            except (TypeError, ValueError):
+                found[row["setting"]] = row["value"]
+        if all(found.get(row) == value for row, value in wanted.items()) and (wanted or found):
+            log.info("configured for %s", ", ".join(f"{k}={v}" for k, v in found.items()))
             return
-        log.info("waiting: live=%s, configured for %s, this image is %s (%d retries left)",
-                 live, configured or "nothing", image_version or "unknown", i)
+        log.info("waiting: configured for %s (%d retries left)",
+                 ", ".join(f"{k}={v}" for k, v in found.items()) or "nothing", i)
         time.sleep(wait_seconds)
-    log.error("the configure step for image %s did not finish within the timeout; "
-              "is the configure job running?", image_version or "unknown")
+    log.error("no configure run for %s within the timeout; is the configure Job running, or did it fail?",
+              ", ".join(f"{k}={v}" for k, v in wanted.items()) or "this pod")
     sys.exit(1)
+
+
+# Rows of system_settings that this image or MISP itself writes: no change by hand
+OWN_PREFIX = "misp_docker."
+OWN_SETTINGS = ("MISP.live", "MISP.host_org_id", "MISP.uuid")
+
+
+def manual_settings(carried: set[str]) -> list[dict]:
+    """The settings a person changed in MISP that the repository does not carry.
+
+    [{"setting", "changed"}]: changed names who and when from MISP's log of the edit,
+    or is empty once housekeeping deleted it, or for an edit through the console.
+    """
+    names = [row["setting"] for row in dict_query("SELECT setting FROM system_settings ORDER BY setting")
+             if not row["setting"].startswith(OWN_PREFIX) and row["setting"] not in OWN_SETTINGS
+             and row["setting"] not in carried]
+    if not names:
+        return []
+    changed = {}
+    for row in dict_query("SELECT change, email, created FROM logs WHERE action = 'serverSettingsEdit' "
+                          "ORDER BY id DESC LIMIT 1000"):
+        name = (row["change"] or "").split(" ", 1)[0]
+        if name in names and name not in changed:
+            changed[name] = f"by {row['email']} at {row['created']}"
+    return [{"setting": name, "changed": changed.get(name, "")} for name in names]
 
 
 def init_schema() -> None:
@@ -314,69 +333,14 @@ def init_schema() -> None:
     log.info("importing MISP database schema from %s", SCHEMA_FILE)
     with open(SCHEMA_FILE) as f:
         sql = f.read()
-    # The baseline is one transaction (BEGIN ... COMMIT in the file); the
-    # statements run under one connection with commit at the end.
-    conn = _connect(autocommit=False)
+    # A statement without parameters goes to the server as one simple query, and the
+    # file's own BEGIN ... COMMIT makes it one transaction
+    conn = _connect(autocommit=True)
     try:
         with _cursor(conn) as cur:
-            for statement in split_sql_statements(sql):
-                if statement.upper() in ("BEGIN", "COMMIT"):
-                    continue
-                cur.execute(statement)
-        conn.commit()
+            cur.execute(sql)
     finally:
         conn.close()
-
-
-def split_sql_statements(sql: str) -> list[str]:
-    """Split a SQL dump into statements.
-
-    A ';' inside a quoted string or a comment does not end a statement.
-    '--' comments and block comments are dropped.
-    """
-    statements = []
-    buf = []
-    i = 0
-    n = len(sql)
-    quote = None
-    while i < n:
-        c = sql[i]
-        if quote:
-            buf.append(c)
-            if c == "\\" and i + 1 < n:
-                buf.append(sql[i + 1])
-                i += 2
-                continue
-            if c == quote:
-                quote = None
-            i += 1
-            continue
-        if c in ("'", '"'):
-            quote = c
-            buf.append(c)
-            i += 1
-            continue
-        if sql.startswith("--", i):
-            end = sql.find("\n", i)
-            i = n if end == -1 else end
-            continue
-        if sql.startswith("/*", i):
-            end = sql.find("*/", i + 2)
-            i = n if end == -1 else end + 2
-            continue
-        if c == ";":
-            text = "".join(buf).strip()
-            if text:
-                statements.append(text)
-            buf = []
-            i += 1
-            continue
-        buf.append(c)
-        i += 1
-    text = "".join(buf).strip()
-    if text:
-        statements.append(text)
-    return statements
 
 
 # -- Configure lock ----------------------------------------------------------

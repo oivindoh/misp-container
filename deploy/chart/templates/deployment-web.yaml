@@ -1,4 +1,4 @@
-# MISP's web tier: PHP-FPM (port 9002) and a caddy sidecar that serves the static
+# MISP's web tier: PHP-FPM (127.0.0.1:9002) and a caddy sidecar that serves the static
 # files and passes the rest to PHP-FPM over FastCGI (port 8080). Replicas scale
 # freely: each pod renders its own app/Config and waits for the configure Job.
 apiVersion: apps/v1
@@ -23,17 +23,18 @@ spec:
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: web
+        {{- include "misp.podLabels" (dict "root" . "name" "web") | nindent 8 }}
       annotations:
         {{- include "misp.checksums" . | nindent 8 }}
     spec:
       {{- include "misp.podSecurityContext" . | nindent 6 }}
       {{- include "misp.podScheduling" . | nindent 6 }}
       containers:
-        # caddy sidecar - lightweight scratch image with static webroot files
+        # caddy, from the main image: the static files of its webroot, the rest over
+        # FastCGI to PHP-FPM on the pod's loopback
         - name: caddy
-          image: {{ .Values.image.caddy }}:{{ include "misp.tag" . }}
-          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- include "misp.image" . | nindent 10 }}
+          args: ["caddy", "run", "--config", "/etc/caddy/Caddyfile"]
           env:
             # The ingress or Gateway proxies whose X-Forwarded-For caddy follows; unset,
             # every private range
@@ -51,7 +52,8 @@ spec:
             {{- toYaml .Values.web.resources.caddy | nindent 12 }}
           # Startup proves the application serves once. Readiness hits PHP-FPM's
           # ping through caddy, with no database round trip, so a database outage
-          # takes no pod out of the Service. Liveness checks caddy alone: the
+          # takes no pod out of the Service. The ping has a pool of its own, so busy
+          # request workers do not delay it. Liveness checks caddy alone: the
           # php-fpm container checks PHP-FPM, so a hung PHP-FPM restarts itself.
           startupProbe:
             httpGet:
@@ -74,10 +76,6 @@ spec:
         - name: php-fpm
           {{- include "misp.image" . | nindent 10 }}
           args: ["python3", "-m", "misp_container.web"]
-          ports:
-            - name: php-fpm
-              containerPort: 9002
-              protocol: TCP
           {{- include "misp.appEnv" (list . "misp-db" "misp-app") | nindent 10 }}
           volumeMounts:
             {{- include "misp.appVolumeMounts" . | nindent 12 }}
@@ -85,14 +83,16 @@ spec:
               mountPath: /var/www/MISP/app/attachments
           resources:
             {{- toYaml .Values.web.resources.phpFpm | nindent 12 }}
-          # PHP-FPM only listens after the configure Job has set MISP.live=true;
+          # PHP-FPM listens on the loopback only after the configure run of this
+          # pod's image and configuration, so the kubelet reaches it through caddy;
           # the startup budget covers a first install where the Job imports the
-          # schema and applies every setting. Liveness asks PHP-FPM itself for
-          # its ping, through caddy in the same pod: an open port does not show
-          # a hung PHP-FPM. caddy's readiness probe covers the pod's readiness.
+          # schema. Liveness asks PHP-FPM itself for its ping: an
+          # open port does not show a hung PHP-FPM. caddy's readiness probe covers
+          # the pod's readiness.
           startupProbe:
-            tcpSocket:
-              port: 9002
+            httpGet:
+              path: /fpm-ping
+              port: 8080
             failureThreshold: 150
             periodSeconds: 4
           livenessProbe:

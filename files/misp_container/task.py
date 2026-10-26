@@ -5,14 +5,15 @@ Usage: python3 -m misp_container.task <task> [workflow id]
 Runs as a Kubernetes CronJob (the chart's cronjobs component), or as a Job made
 from one. Every task runs MISP's console in this pod, with the command line MISP's
 own scheduler would hand a worker (app/Console/Command/SchedulerWorkerShell.php):
-the pod renders app/Config, and the work happens here, not on the workers.
+the pod renders app/Config, and the work happens here, not on the workers. The
+server tasks run once per server, one after the other, so a CronJob that forbids
+overlapping runs also keeps two pulls of one server apart.
 """
 
 import subprocess
 import sys
 
 from . import CAKE, db
-from .env import apply_defaults
 from .init import prepare
 from .log import is_log_line, setup as setup_logging, get as getlog
 from .worker import limit_worker_memory
@@ -21,7 +22,7 @@ log = getlog("task")
 
 # The user the console acts as: user 1, the admin the configure step keeps
 TASK_USER = "1"
-# Stands for the workflow ID in its command line
+# Stands for the workflow ID, or the server ID, in a command line
 ARG = "<id>"
 
 # Ad-hoc workflow by ID: python3 -m misp_container.task workflow <id>
@@ -31,14 +32,14 @@ WORKFLOW_TASK = "workflow"
 TASKS = {
     "cache-feeds": ("Server", "cacheFeed", TASK_USER, "all"),
     "fetch-feeds": ("Server", "fetchFeed", TASK_USER, "all"),
-    "cache-servers": ("Server", "cacheServerAll", TASK_USER),
+    "cache-servers": ("Server", "cacheServer", TASK_USER, ARG),
     "update-galaxies": ("Admin", "updateGalaxies", "false"),
     "update-taxonomies": ("Admin", "updateTaxonomies"),
     "update-warninglists": ("Admin", "updateWarningLists"),
     "update-noticelists": ("Admin", "updateNoticeLists"),
     "update-object-templates": ("Admin", "updateObjectTemplates", TASK_USER),
-    "pull-servers": ("Server", "pullAll", TASK_USER, "full"),
-    "push-servers": ("Server", "pushAll", TASK_USER, "full"),
+    "pull-servers": ("Server", "pull", TASK_USER, ARG, "full"),
+    "push-servers": ("Server", "push", TASK_USER, ARG, "full"),
     "push-taxii": ("Server", "push_taxii", TASK_USER, "all"),
     "sharing-group-blueprints": ("Admin", "executeSGBlueprint", "all"),
     WORKFLOW_TASK: ("Workflow", "executeAdHocWorkflow", ARG),
@@ -46,6 +47,11 @@ TASKS = {
     "check-user-validity": ("Admin", "checkUserValidity"),
     "block-invalid-users": ("Admin", "blockInvalidUsers"),
 }
+
+# The server tasks: each runs for every server whose column is true, in MISP's priority order
+SERVER_TASKS = {"pull-servers": "pull", "push-servers": "push", "cache-servers": "caching_enabled"}
+# The start of a line in which pull and push report a failed server; both exit 0 anyway
+FAILED = ("ERROR:", "Job failed.")
 
 # What each task does, for the usage message and docs/kubernetes.md (scripts/generate_docs.py)
 DESCRIPTIONS = {
@@ -95,39 +101,46 @@ def command(name: str, arg: str = "") -> list[str]:
     return [CAKE, *(arg if part == ARG else part for part in TASKS[name])]
 
 
-def nothing_to_do(name: str) -> str:
-    """Why a run would do nothing and fail, or "" when it has work.
+def servers(name: str) -> list[int]:
+    """The IDs of the servers a server task runs for."""
+    column = SERVER_TASKS[name]
+    return [row["id"] for row in db.dict_query(f"SELECT id FROM servers WHERE {column} ORDER BY priority, id")]
 
-    MISP's executeSGBlueprint exits 1 when no blueprint exists, which on an
-    instance without blueprints would fail every run.
-    """
-    if name == "sharing-group-blueprints" and db.query("SELECT COUNT(*) FROM sharing_group_blueprints", check=True) == "0":
-        return "no sharing group blueprint exists"
-    return ""
+
+def console(args: list[str]) -> bool:
+    """Run a console command, its output streamed as it comes; True when it succeeded."""
+    log.info("cake %s", " ".join(args[1:]))
+    failed = False
+    with subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1) as proc:
+        for line in proc.stdout:
+            line = line.rstrip("\n")
+            failed = failed or line.startswith(FAILED)
+            # MISP's own log lines are in the container format already; the console's
+            # plain output gets it here
+            if is_log_line(line):
+                print(line, flush=True)
+            elif line.strip():
+                log.info("%s", line)
+    if proc.returncode != 0:
+        log.error("cake %s exited %d", " ".join(args[1:]), proc.returncode)
+    elif failed:
+        log.error("cake %s reported a failure", " ".join(args[1:]))
+    return proc.returncode == 0 and not failed
 
 
 def run(name: str, arg: str = "") -> int:
-    """Run one task's console command in this pod. Returns the console's exit code."""
-    apply_defaults()
+    """Run one task's console command in this pod: 0 when it succeeded, else 1."""
     prepare()
     limit_worker_memory()
-    idle = nothing_to_do(name)
-    if idle:
-        log.info("%s: %s, nothing to run", name, idle)
-        return 0
-    args = command(name, arg)
-    log.info("cake %s", " ".join(args[1:]))
-    result = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-    for line in result.stdout.splitlines():
-        # MISP's own log lines are in the container format already; the console's
-        # plain output gets it here
-        if is_log_line(line):
-            print(line, flush=True)
-        elif line.strip():
-            log.info("%s", line)
-    if result.returncode != 0:
-        log.error("cake %s exited %d", " ".join(args[1:]), result.returncode)
-    return result.returncode
+    db.wait_for_db(retries=60, wait_seconds=5)
+    db.wait_for_configure()
+    if name not in SERVER_TASKS:
+        return 0 if console(command(name, arg)) else 1
+    ids = servers(name)
+    if not ids:
+        log.info("%s: no server has %s on, nothing to run", name, SERVER_TASKS[name])
+    results = [console(command(name, str(server))) for server in ids]
+    return 0 if all(results) else 1
 
 
 def main(argv: list[str]) -> None:
@@ -139,7 +152,7 @@ def main(argv: list[str]) -> None:
         for known in TASKS:
             log.error("  %-24s %s", known, DESCRIPTIONS[known])
         sys.exit(2)
-    sys.exit(1 if run(name, argv[1] if len(argv) > 1 else "") else 0)
+    sys.exit(run(name, argv[1] if len(argv) > 1 else ""))
 
 
 if __name__ == "__main__":

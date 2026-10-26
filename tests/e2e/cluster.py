@@ -25,7 +25,11 @@ K3S_IMAGE = ("docker.io/rancher/k3s:v1.37.1-k3s1"
 REPO = Path(__file__).resolve().parents[2]
 CHART = REPO / "deploy" / "chart"
 IMAGES = tuple(yaml.safe_load((CHART / "values.yaml").read_text())["image"][name]
-               for name in ("misp", "caddy", "modules"))
+               for name in ("misp", "modules"))
+
+sys.path.insert(0, str(REPO / "scripts"))
+# The tag of the images under test: MISP_IMAGE_TAG, else the chart's appVersion
+from build import default_tag as image_tag  # noqa: E402
 
 
 def scratch_dir() -> Path:
@@ -43,13 +47,6 @@ def cluster_engine() -> list[str]:
     if platform.system() == "Darwin" and image_engine()[0].endswith("podman"):
         return ["podman", "--connection", "podman-machine-default-root"]
     return image_engine()
-
-
-def image_tag() -> str:
-    """The tag of the images under test: MISP_IMAGE_TAG, else the chart's appVersion."""
-    if os.environ.get("MISP_IMAGE_TAG"):
-        return os.environ["MISP_IMAGE_TAG"]
-    return yaml.safe_load((CHART / "Chart.yaml").read_text())["appVersion"]
 
 
 def build_images(options: dict, _built: list[str] = []) -> None:
@@ -112,7 +109,7 @@ class Cluster:
                 raise RuntimeError(f"cannot load {image} into {self.name}: {loaded.stderr}")
 
     def load_images_under_test(self) -> str:
-        """The three images under the tag under test; returns that tag."""
+        """The two images under the tag under test; returns that tag."""
         tag = image_tag()
         self.load([f"{repo}:{tag}" for repo in IMAGES])
         return tag

@@ -1,7 +1,7 @@
-# One-shot configuration: schema, settings, admin user, GPG, auth. Web and
-# worker pods wait until this Job has set MISP.live=true and recorded their
-# image version, so the order of the rollout does not depend on the tool that
-# applies the chart. Each release revision has its own Job, because a Job's pod
+# One-shot configuration: schema, MISP's updates, admin user and organisation.
+# Web and worker pods wait until this Job has recorded their image version and
+# configuration checksum, so the order of the rollout does not depend on the
+# tool that applies the chart. Each release revision has its own Job, because a Job's pod
 # template cannot change; a run on a configured instance takes seconds. With
 # the migrate component, the copy runs first, in an init container.
 #
@@ -23,7 +23,9 @@ spec:
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: configure
+        {{- include "misp.podLabels" (dict "root" . "name" "configure") | nindent 8 }}
+      annotations:
+        {{- include "misp.checksums" . | nindent 8 }}
     spec:
       restartPolicy: Never
       {{- include "misp.podSecurityContext" . | nindent 6 }}
@@ -42,6 +44,9 @@ spec:
               mountPath: /var/www/MISP/app/attachments
             - name: tmp
               mountPath: /tmp
+            # A bucket-to-bucket copy spools one object at a time here, of any size
+            - name: migrate-spool
+              mountPath: /var/tmp
             # A copy into postgres runs MISP's updates on the baseline first
             - name: misp-config
               mountPath: /var/www/MISP/app/Config
@@ -70,6 +75,10 @@ spec:
       volumes:
         {{- include "misp.appVolumes" . | nindent 8 }}
         {{- include "misp.attachmentsVolume" . | nindent 8 }}
+        {{- if .Values.migrate.enabled }}
+        - name: migrate-spool
+          emptyDir: {}
+        {{- end }}
         {{- with .Values.migrate.volumes }}
         {{- toYaml . | nindent 8 }}
         {{- end }}

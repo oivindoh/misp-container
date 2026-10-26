@@ -5,15 +5,16 @@ chart that runs it on Kubernetes.
 
 MISP has not released 3.0 yet: the image runs MISP's `3.0_wip` branch, pinned to a commit,
 and its releases are the pre-releases `3.0.0-wip.N`. A MISP 2.x database comes in through the
-migrate Job. See [docs/misp-3.md](docs/misp-3.md).
+migrate Job ([docs/migration.md](docs/migration.md)).
 
 ## TL;DR
 
-- One image, one module per role: a `configure` Job sets the database and settings up,
-  then web and worker pods start and scale freely. Two small extra images: caddy and modules.
+- One image, one module per role: a `configure` Job sets the database up, then web and
+  worker pods start and scale freely. One more image: misp-modules.
 - Non-root (UID 1000), read-only root filesystem, all capabilities dropped, sessions in Redis.
-- Every MISP setting has an env var (`MISP.redis_host` -> `MISP_REDIS_HOST`). Curated defaults
-  live in `files/misp-config/settings.yaml`; every other setting is catalogued.
+- The settings in git win over MISP's UI: the chart passes each one to MISP's own environment
+  layer. Every setting has an env var (`MISP.redis_host` -> `MISP_REDIS_HOST`); the repository's
+  live in `deploy/chart/files/settings.yaml`.
 - Kubernetes: the Helm chart `deploy/chart` renders MISP itself; components switch on the
   optional parts (database, cache, ingress or HTTPRoute, network policies, CronJobs for all
   periodic work, PDBs). Each release publishes it to GHCR.
@@ -22,16 +23,12 @@ migrate Job. See [docs/misp-3.md](docs/misp-3.md).
 
 ## Images
 
-One Dockerfile, three targets:
+One Dockerfile, two targets:
 
-| Target | Image | On disk | Pull (compressed) | Purpose |
-|--------|-------|---------|-------------------|---------|
-| `final` | `misp-container` | 980 MB | 270 MB | PHP-FPM, workers, configure, org sync, metrics exporter, task runner, migrate, and the Python packages MISP's own scripts import (STIX, TAXII, ZeroMQ, sample extraction); `app/files` (360 MB of lists, galaxies and geolocation data) ships in the image |
-| `caddy` | `misp-container-caddy` | 84 MB | 31 MB | Static files and FastCGI reverse proxy (scratch image) |
-| `modules` | `misp-container-modules` | 360 MB | 98 MB | MISP enrichment, import, export and action modules (distroless) |
-
-Sizes are arm64 builds of MISP `3.0_wip` at commit 8888b98; the compressed size is the gzip of
-the image's layers.
+| Target | Image | Purpose |
+|--------|-------|---------|
+| `final` | `misp-container` | PHP-FPM and caddy (the web pod runs both from it), workers, configure, org sync, metrics exporter, task runner, migrate, and the Python packages MISP's own scripts import (STIX, TAXII, ZeroMQ, sample extraction); `app/files` (lists, galaxies and geolocation data) ships in the image |
+| `modules` | `misp-container-modules` | MISP enrichment, import, export and action modules (distroless) |
 
 Image tags are the release versions, `3.0.0-wip.N` while MISP 3.0 is a work in progress. See
 [DEVELOPING.md](DEVELOPING.md) for releases.
@@ -73,7 +70,7 @@ the images; [DEVELOPING.md](DEVELOPING.md) shows how a test suite runs them on k
 |----------|-------------|
 | `MISP_BASEURL` | Public URL of the instance |
 | `ADMIN_EMAIL` | Admin email and username |
-| `ADMIN_PASSWORD` | Admin password, 12 characters or more |
+| `ADMIN_PASSWORD` | Admin password; MISP's password policy applies |
 | `SECURITY_SALT` | Password hashing salt: 32 characters or more, identical on every replica, stable across restarts |
 | `MISP_UUID` | Instance UUID for server sync: unique and stable |
 
@@ -100,11 +97,10 @@ values and lists the components, Secrets, storage, network policies and periodic
 | [docs/architecture.md](docs/architecture.md) | The roles, the configure Job, startup and footprint, rollout order, scaling |
 | [docs/configuration.md](docs/configuration.md) | Settings and their env vars, database, HTTPS, authentication plugins and Keycloak, logging |
 | [docs/kubernetes.md](docs/kubernetes.md) | Install, values, components, client addresses, Secrets, storage, network policies, periodic tasks |
-| [docs/org-sync.md](docs/org-sync.md) | Organisations, users, servers, tags and taxonomies from a YAML file |
+| [docs/org-sync.md](docs/org-sync.md) | Organisations, users, servers, tags, taxonomies, warninglists and sharing groups from a YAML file |
 | [docs/metrics.md](docs/metrics.md) | The Prometheus metrics and example alerts |
-| [docs/migration.md](docs/migration.md) | Copying an existing MISP database and its attachments into a deployment |
+| [docs/migration.md](docs/migration.md) | Copying an existing MISP database and its attachments into a deployment, and what MISP 3.0 no longer has |
 | [docs/operations.md](docs/operations.md) | Backup and restore, keys and secrets, upgrades |
-| [docs/misp-3.md](docs/misp-3.md) | The MISP 3.0 pin, its versions, a 2.x database, and how 3.0 differs from 2.5 |
-| [DEVELOPING.md](DEVELOPING.md) | The settings engine, the tests, new MISP releases, the release process |
+| [DEVELOPING.md](DEVELOPING.md) | The settings, the tests, new MISP releases, patches to MISP, the release process |
 | [tests/README.md](tests/README.md) | The test suites |
-| [AGENTS.md](AGENTS.md) | A map of the tree for agents, generated from the tree (`mise run agents-md`) |
+| [AGENTS.md](AGENTS.md) | A map of the tree for agents, its tables generated from the tree (`mise run docs`) |

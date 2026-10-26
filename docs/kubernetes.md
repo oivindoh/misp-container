@@ -16,10 +16,11 @@
 
 ## Install
 
-Each release publishes the chart to GHCR; Helm takes the newest one:
+Each release publishes the chart to GHCR. With `--devel`, Helm takes the newest one, a
+pre-release included:
 
 ```bash
-helm install misp oci://ghcr.io/oivindoh/charts/misp \
+helm install misp oci://ghcr.io/oivindoh/charts/misp --devel \
     --namespace misp --create-namespace -f values.yaml
 ```
 
@@ -61,7 +62,7 @@ below come from them.
 <!-- generated: values -->
 | Value | Is |
 |---|---|
-| `image` | The three images, all with one tag. An empty tag is the chart's appVersion. |
+| `image` | The two images, with one tag. An empty tag is the chart's appVersion. The web pod's caddy container runs the misp image. |
 | `imagePullSecrets` | Secrets with the registry credentials for the images, by name. |
 | `nodeSelector` | Node selection for every pod of the release. |
 | `tolerations` | Tolerations for every pod of the release. |
@@ -70,7 +71,7 @@ below come from them.
 | `secrets` | The misp-db, misp-app and misp-admin Secrets: these entries on top of files/secrets-*.env, whose placeholders the configure Job refuses. With create: false the chart renders none of them: supply Secrets with the same names and keys (SOPS, External Secrets, Sealed Secrets). |
 | `connectionSecrets` | The connection to PostgreSQL and Redis from Secrets the release does not make, such as the ones a database operator keeps (docs/kubernetes.md, External PostgreSQL and Redis): each Secret by name, with the env var that each of its keys fills. They replace the same entries of misp-env, misp-db and misp-app in every pod, the postgres and redis components included. |
 | `databaseCA` | The CA certificate of the PostgreSQL server, from a Secret: a name and a key. Every pod that connects mounts it at DB_SSLROOTCERT, for DB_SSLMODE verify-ca or verify-full in env. |
-| `configure` | The configure Job: schema, settings, admin user, GPG and auth, on every install and upgrade. |
+| `configure` | The configure Job: schema, MISP's updates, admin user and organisation, on every install and upgrade. |
 | `web` | MISP's web tier: PHP-FPM and the caddy sidecar in each pod. Replicas scale freely. |
 | `worker` | The background workers, which take their jobs from Redis. Replicas scale freely. |
 | `metrics` | The Prometheus exporter (docs/metrics.md). |
@@ -87,10 +88,10 @@ Each component is off by default:
 | Component | Adds |
 |---|---|
 | `postgres` | Single-node PostgreSQL on a ReadWriteOnce claim. Leave it off for an external PostgreSQL (DB_HOST in env or connectionSecrets; CloudNativePG, StackGres, Percona and the like). |
-| `redis` | Single Redis without persistence: sessions and queued jobs do not survive a restart. Leave it off for an external Redis (MISP_REDIS_HOST in env or connectionSecrets). |
+| `redis` | Single Redis without persistence: sessions and queued jobs do not survive a restart. Leave it off for an external Redis (MISP_REDIS_HOST in env or connectionSecrets). maxmemory caps the data, under the memory limit: past it Redis refuses writes, and MISP's API calls and logins fail, because MISP keeps the feed and server caches, sessions and key use counters there. |
 | `ingress` | An Ingress to the web Service. The default annotation makes the haproxy ingress replace X-Forwarded-For with the address it sees (docs/kubernetes.md, Client addresses). |
 | `httpRoute` | An HTTPRoute for a Gateway API implementation, in place of the ingress. The Gateway must allow routes from this namespace; set TRUSTED_PROXY_CIDR in env to its proxy pods. |
-| `networkPolicy` | NetworkPolicies for every pod: the paths MISP needs, DNS, HTTPS out and SMTP out, for any CNI that enforces the NetworkPolicy API, Cilium included. ingressNamespace holds the ingress or Gateway proxies, monitoringNamespace Prometheus; databaseEgress and redisEgress reach an external PostgreSQL and Redis. |
+| `networkPolicy` | NetworkPolicies for the release's pods, for any CNI that enforces the NetworkPolicy API, Cilium included: ingress from the release's own pods, DNS, HTTPS out, SMTP and LDAP. ingressNamespace holds the ingress or Gateway proxies, monitoringNamespace Prometheus; egress adds rules for the MISP pods, by default an external PostgreSQL and Redis. |
 | `cronjobs` | The periodic tasks as CronJobs, each running MISP's console in its pod: tasks maps a task to its schedule, workflows a workflow ID to its schedule. The pod's PHP process has the workers' memory ceiling (WORKER_MEMORY_LIMIT, else PHP_MEMORY_LIMIT), which resources must hold. |
 | `housekeeping` | Nightly deletes of old rows in jobs, logs and audit_logs (HOUSEKEEPING_<TABLE>_DAYS in env, defaults 2, 30 and 90). |
 | `migrate` | A copy of an existing MySQL or MariaDB MISP into the database, before the configure Job runs (docs/migration.md). secret: entries on top of files/secrets-migrate.env for the misp-migrate Secret. volumes and volumeMounts: the source's attachments directory. |
@@ -128,8 +129,7 @@ workload gets a whole Secret, or only the keys the table names:
 | `misp-migrate` | `deploy/chart/files/secrets-migrate.env` | `MIGRATE_SOURCE_HOST`, `MIGRATE_SOURCE_USER`, `MIGRATE_SOURCE_PASSWORD`, `MIGRATE_FORCE`, `MIGRATE_REPLACE_COPY`, `MIGRATE_SOURCE_FILES`, `MIGRATE_SOURCE_S3_BUCKET`, `MIGRATE_SOURCE_S3_ENDPOINT`, `MIGRATE_SOURCE_S3_REGION`, `MIGRATE_SOURCE_S3_ACCESS_KEY`, `MIGRATE_SOURCE_S3_SECRET_KEY` | migrate |
 <!-- end generated -->
 
-With `ADMIN_KEY` empty, MISP generates a key, org-sync exits without changes, and the API
-task CronJobs fail with a clear message.
+With `ADMIN_KEY` empty, MISP generates a key, and org-sync exits without changes.
 
 The files hold placeholders that the configure Job refuses. Set the real values in the
 `secrets` value, or set `secrets.create: false` and supply Secrets with the same names and
@@ -141,7 +141,7 @@ These Secrets are optional and copied into every pod at start:
 | Secret | Content | Command |
 |--------|---------|---------|
 | `misp-gnupg` | `private.asc`, the instance GPG key (armoured secret key export). `GNUPG_PASSWORD` is its passphrase; set `GNUPG_SIGN=true` once it exists | `kubectl -n misp create secret generic misp-gnupg --from-file=private.asc` |
-| `misp-certs` | `<server id>.pem` files for sync servers that need a pinned certificate | `kubectl -n misp create secret generic misp-certs --from-file=3.pem` |
+| `misp-certs` | The pinned and client certificates of sync servers, by the names MISP keeps in `cert_file` and `client_cert_file` (`<server id>.pem`, `<server id>_client.pem`) | `kubectl -n misp create secret generic misp-certs --from-file=3.pem` |
 
 ```bash
 gpg --batch --passphrase "$GNUPG_PASSWORD" --quick-generate-key "MISP Admin <misp@example.com>" rsa3072 sign never
@@ -183,8 +183,9 @@ the certificate and the host name, `require` only encrypts.
 | Percona Operator for PostgreSQL | `<cluster>-pguser-<user>`: `host`, `port`, `dbname`, `user`, `password` | `<cluster>-cluster-cert`, key `ca.crt` | Accepts password logins only over TLS: `DB_SSLMODE` `require` or `verify-full` |
 | StackGres | A Secret of your own with the password of MISP's user | None: the server certificate is self-signed | The SGCluster's own Secret holds only the operator's users. Create MISP's user and database with an SGScript, and set `DB_HOST` in `env` to `<cluster>`, the Service to the leader: port 5432 through PgBouncer, 5433 direct |
 
-The database must be owned by `DB_USER`, and a connection pooler in front of it must run in
-session mode ([configuration.md](configuration.md#database)).
+MISP needs PostgreSQL 16 or later. The database must be owned by `DB_USER`: the configure Job
+runs `CREATE EXTENSION pg_trgm` on a new database. A connection pooler in front of it must run
+in session mode ([configuration.md](configuration.md#database)).
 
 ## Storage
 
@@ -201,21 +202,28 @@ on one replica only; use the `misp-certs` Secret.
 
 ## Network policies
 
-The `networkPolicy` component allows only the paths in the diagram in
-[architecture.md](architecture.md) plus DNS, HTTPS to the outside for web, worker, modules,
-metrics and the task CronJobs, SMTP (ports 25, 465 and 587, in or outside the cluster)
-for web, worker and the task CronJobs, and LDAP (ports 389 and 636, in or outside the
-cluster) for web and the task CronJobs. A mail relay or an LDAP server on another port
-needs a change to the template. `networkPolicy.ingressNamespace` (default `haproxy-controller`) and
-`networkPolicy.monitoringNamespace` (default `monitoring`) name the namespaces of the
-ingress and of Prometheus. The header of `deploy/chart/templates/networkpolicy.yaml`
-lists every flow. Any CNI that enforces the NetworkPolicy API applies them, Cilium included.
-While the `postgres` or `redis` component is off, the rules in `networkPolicy.databaseEgress`
-or `networkPolicy.redisEgress` reach the external server: by default any destination on port
-5432 or 6379. Narrow a rule to the server's pods with `to`, and name the port the pods listen
-on, which can differ from the port of their Service.
-A cluster whose CNI enforces none leaves every pod open to the namespace and, without a
-default-deny elsewhere, to the cluster.
+The `networkPolicy` component admits traffic to the release's pods from the release's own
+pods only, plus the ingress or Gateway proxies to web (namespace
+`networkPolicy.ingressNamespace`, default `haproxy-controller`) and Prometheus to metrics
+(namespace `networkPolicy.monitoringNamespace`, default `monitoring`). The MISP pods may reach
+the release's pods, DNS (ports 53 and 5353), HTTPS outside the private ranges, SMTP (ports
+25, 465 and 587) and LDAP (ports 389 and 636), in or outside the cluster; misp-modules reaches DNS and
+HTTPS. The policies select the pods by `app.kubernetes.io/instance` and
+`app.kubernetes.io/part-of: misp`, so other pods in the namespace keep their own rules. The
+header of `deploy/chart/templates/networkpolicy.yaml` lists every flow. Any CNI that enforces
+the NetworkPolicy API applies them, Cilium included; a CNI that enforces none leaves every
+pod open.
+
+`networkPolicy.egress` adds egress rules for the MISP pods. By default it reaches any
+destination on ports 5432 and 6379, for an external PostgreSQL and Redis. Narrow a rule to the
+server's pods with `to`, and name the port the pods listen on, which can differ from the port
+of their Service.
+
+NetworkPolicies add up, so a release opens any other path with a NetworkPolicy of its own: a
+proxy, Kafka, a plain-HTTP feed, or an identity provider, sync partner or S3 store on a
+private address. Select the web and worker pods by `app.kubernetes.io/name`, and the task
+CronJob pods by `app.kubernetes.io/component: misp-task`. A destination in the cluster with a
+policy of its own also needs an ingress rule there.
 
 ## Sizing
 
@@ -243,16 +251,16 @@ remote server, do not use a scheduler: the workers run them.
 |---|---|---|---|
 | `cache-feeds` | Cache every feed | `cake Server cacheFeed 1 all` | `20 2 * * *` (`cronjobs`) |
 | `fetch-feeds` | Fetch every enabled feed | `cake Server fetchFeed 1 all` | `30 2 * * *` (`cronjobs`) |
-| `cache-servers` | Cache the events of every server | `cake Server cacheServerAll 1` | `40 2 * * *` (`cronjobs`) |
+| `cache-servers` | Cache the events of every server | `cake Server cacheServer 1 <id>` | `40 2 * * *` (`cronjobs`) |
 | `update-galaxies` | Update MISP's bundled galaxies | `cake Admin updateGalaxies false` | `0 3 * * *` (`cronjobs`) |
 | `update-taxonomies` | Update MISP's bundled taxonomies | `cake Admin updateTaxonomies` | `10 3 * * *` (`cronjobs`) |
 | `update-warninglists` | Update MISP's bundled warninglists | `cake Admin updateWarningLists` | `20 3 * * *` (`cronjobs`) |
 | `update-noticelists` | Update MISP's bundled noticelists | `cake Admin updateNoticeLists` | `30 3 * * *` (`cronjobs`) |
 | `update-object-templates` | Update MISP's bundled object templates | `cake Admin updateObjectTemplates 1` | `40 3 * * *` (`cronjobs`) |
-| `pull-servers` | Pull from every server with pull enabled | `cake Server pullAll 1 full` | `*/5 * * * *` (`cronjobs`) |
-| `push-servers` | Push to every server with push enabled | `cake Server pushAll 1 full` | `*/15 * * * *` (`cronjobs`) |
+| `pull-servers` | Pull from every server with pull enabled | `cake Server pull 1 <id> full` | `*/5 * * * *` (`cronjobs`) |
+| `push-servers` | Push to every server with push enabled | `cake Server push 1 <id> full` | `*/15 * * * *` (`cronjobs`) |
 | `push-taxii` | Push to every enabled TAXII server | `cake Server push_taxii 1 all` | `7 * * * *` (`cronjobs`) |
-| `sharing-group-blueprints` | Apply the sharing group blueprints | `cake Admin executeSGBlueprint all` | `37 * * * *` (`cronjobs`) |
+| `sharing-group-blueprints` | Apply the sharing group blueprints | `cake Admin executeSGBlueprint all` | none |
 | `workflow` | Run one ad-hoc workflow, by its ID | `cake Workflow executeAdHocWorkflow <id>` | none |
 | `periodic-summary` | Send the daily, weekly (Mondays) and monthly (the first) summaries users subscribed to | `cake Server sendPeriodicSummaryToUsers` | `0 6 * * *` (`cronjobs`) |
 | `check-user-validity` | Report every account as valid or invalid at the OIDC or LDAP provider | `cake Admin checkUserValidity` | none |

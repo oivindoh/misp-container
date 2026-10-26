@@ -2,39 +2,63 @@
 
 ## TL;DR
 
-- Every MISP setting has an env var derived from its name; `settings.yaml` holds the image's
-  defaults. A set env var is enforced on every configure run, an unset one is written once.
+- The settings the repository brings win over any change made in MISP's UI or API: the state
+  of MISP is defined in git. `deploy/chart/files/settings.yaml` holds them; every setting has
+  an env var derived from its name, and a value in the chart's `env` replaces the file's.
+- A setting the repository does not set may change in the UI; the metrics exporter and the
+  configure log report each one.
 - The variables every deployment sets are in the [README](../README.md#essential-variables).
 - MISP runs on PostgreSQL, which `DB_*` names; the auth plugins switch on with one variable
   each; every pod logs to stdout and stderr, as JSON or text.
 
 ## Settings
 
-`files/misp-config/settings.yaml` holds the defaults this image applies, grouped by where they
-land. Every MISP setting has an env var derived from its name:
+```mermaid
+flowchart LR
+    file["settings.yaml<br/>(the chart)"] --> chart["helm template"]
+    env["values: env, Secrets"] --> chart
+    chart --> layer["MISP_SETTING_* env:<br/>MISP's own layer"]
+    chart --> php["MISP_CONFIG_* env:<br/>config.php, rendered by every pod"]
+    layer --> misp["MISP"]
+    php --> misp
+    db["system_settings:<br/>UI changes"] --> misp
+```
+
+`deploy/chart/files/settings.yaml` holds the settings this repository defines, in groups. Every
+setting has an env var derived from its name:
 
 ```
 MISP.redis_host        ->  MISP_REDIS_HOST
 Plugin.S3_bucket_name  ->  PLUGIN_S3_BUCKET_NAME
 ```
 
-| Env var | Effect |
-|---------|--------|
-| set and non-empty | The value is enforced on every configure run |
-| unset | The default from `settings.yaml` is written once; the setting then belongs to the MISP UI |
+A value in the chart's `env` (or, for a secret, in a Secret) replaces the file's. The chart
+passes every setting to MISP as `MISP_SETTING_<Category>__<key>`, MISP's own environment
+layer:
 
-`files/misp-config/settings-upstream.yaml` lists every other MISP setting, with MISP's default
-and description; the image never applies those values, and their env vars work all the same
-([DEVELOPING.md](../DEVELOPING.md#the-upstream-catalogue)).
+| Source | MISP reads it | A change in the UI or API |
+|--------|---------------|---------------------------|
+| `MISP_SETTING_*` env, every setting of the repository | Last, so it wins | Refused |
+| `system_settings` table | After config.php | Saved here, for a setting the repository does not set |
+| `config.php`, rendered by every pod | First | None |
 
-Some env vars fill others unless those are set explicitly: `MISP_REDIS_*` fills the
-background-job and ZeroMQ Redis settings, `MISP_BASEURL` the external and REST client base
-URLs, and `ADMIN_ORG` `MISP.org`, the hosting organisation in e-mail subjects and STIX 1
-exports.
+`config.php` holds what MISP reads before its environment layer: the `minimum_config` and
+`db_enable` groups, `s3` while `PLUGIN_S3_BUCKET_NAME` is set, and the auth plugins.
 
-A few settings are rendered into `config.php` in every pod, because MISP reads them before
-the database (Redis, salt, encryption key, paths). Those come from the
-`minimum_config` group and the same env vars.
+A MISP setting that `settings.yaml` does not list takes its `MISP_SETTING_*` name in the
+chart's `env` directly: `MISP_SETTING_MISP__welcome_text_top: Welcome` sets
+`MISP.welcome_text_top`. Once set there, the UI can no longer change it.
+
+Some env vars fill others unless those are set explicitly (the `derived` list of
+`settings.yaml`): `MISP_REDIS_*` fills the background-job and ZeroMQ Redis settings,
+`MISP_BASEURL` the external and REST client base URLs, `ADMIN_EMAIL` `MISP.email` and through
+it `MISP.contact` and `GnuPG.email`, and `ADMIN_ORG` `MISP.org`, the hosting organisation in
+e-mail subjects and STIX 1 exports.
+
+Each configure run deletes the database rows of the settings the repository carries, and logs
+a warning for every other row that a person changed, with who and when from MISP's log. The
+metrics exporter reports the same settings as `misp_setting_manual`
+([metrics.md](metrics.md)): move each into git, or undo it.
 
 Container-level defaults (database and Redis hosts, PHP limits, worker counts) are in
 `deploy/chart/files/base.env`, which the chart reads.
@@ -66,16 +90,15 @@ terminates TLS.
 ## Authentication plugins
 
 MISP's auth plugins read their configuration from `config.php`, so their settings are groups
-in `settings.yaml` that every pod renders when the plugin's switch is on. The documented
-short names below are aliases of the derived ones (`OidcAuth.provider_url` is
-`OIDCAUTH_PROVIDER_URL` as well).
+in `settings.yaml` that every MISP pod renders into `config.php` when the plugin's switch is on. The documented
+short names below are aliases of the derived ones (the `aliases` of `settings.yaml`:
+`OidcAuth.provider_url` is `OIDCAUTH_PROVIDER_URL` as well).
 
 | Switch | Group | Plugin |
 |--------|-------|--------|
 | `OIDC_ENABLE=true` | `oidc` | `OidcAuth`: OpenID Connect |
 | `LDAPAUTH_ENABLE=true` | `ldap` | `LdapAuth`: LDAP bind with a reader account |
-| `APACHESECUREAUTH_LDAP_ENABLE=true` | `apache_auth` | `ApacheSecureAuth`: a header from the proxy, looked up in LDAP |
-| `CUSTOM_AUTH_ENABLE=true` | `custom_auth` | `Plugin.CustomAuth_*`: a header from the proxy, no lookup. The configure step applies this group to the database; the `CUSTOM_AUTH_*` names below are aliases of the derived ones |
+| `CUSTOM_AUTH_ENABLE=true` | `custom_auth` | `Plugin.CustomAuth_*`: a header from the proxy, no lookup. These settings reach MISP's environment layer like any other; the `CUSTOM_AUTH_*` names below are aliases of the derived ones |
 
 ### OpenID Connect
 
@@ -165,7 +188,7 @@ or `text` (coloured on a terminal).
 |--------|-----------------------|--------|
 | The entrypoints, the configure Job, org sync, tasks, metrics | `time`, `level`, `context`, `message` (and `exception`) | `LOG_FORMAT` |
 | MISP's own log (CakeLog: job starts and ends, exceptions, warnings) | the same fields, `context` `misp` | `LOG_FORMAT` |
-| Files MISP appends to directly (`server-sync.log`, `workflow-execution.log`, `exec-errors.log`, `kafka.error.log`) | one line per file line, `context` `misp:<file>`; a file is emptied past 10 MB | `LOG_FORMAT` |
+| Files MISP appends to directly (`server-sync.log`, `workflow-execution.log`, `exec-errors.log`, `kafka.error.log`, `fatal_error.log`, `mispzmq.log`, `mispzmq.error.log`) | one line per file line, `context` `misp:<file>`; a file is emptied past 10 MB | `LOG_FORMAT` |
 | PHP errors and warnings in web pods | PHP's own line, through PHP-FPM | text |
 | PHP-FPM itself | FPM's own line | text |
 | Caddy access log | Caddy's own JSON | JSON |

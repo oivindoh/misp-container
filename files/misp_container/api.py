@@ -162,7 +162,9 @@ class MISPClient:
     def get_sharing_groups(self) -> dict[str, dict]:
         """Returns {uuid_or_name: sg_dict}. Includes SharingGroupOrg membership."""
         result = {}
-        for item in self.get("/sharing_groups"):
+        found = self.get("/sharing_groups")
+        # MISP wraps this list in "response"
+        for item in found.get("response", []) if isinstance(found, dict) else found:
             sg = self._unwrap(item, "SharingGroup")
             if not sg or "name" not in sg:
                 continue

@@ -253,8 +253,7 @@ def volume_copy(stack, forced_copy):
 def keycloak_team(stack, volume_copy):
     """An org sync that renames the migrated organisation to its Keycloak organisation's alias."""
     before = (stack.api("GET", f"/organisations/view/{ORG_UUID}", ADMIN_KEY) or {}).get("Organisation", {})
-    rc, out = stack.run("python3", "-m", "misp_container.sync", "/tmp/orgs.yaml", files={"/tmp/orgs.yaml": KEYCLOAK_ORGS},
-                        env={"ADMIN_KEY": ADMIN_KEY, "SYNC_BASE_URL": "http://web:8080"})
+    rc, out = stack.org_sync(KEYCLOAK_ORGS, ADMIN_KEY)
     after = (stack.api("GET", f"/organisations/view/{ORG_UUID}", ADMIN_KEY) or {}).get("Organisation", {})
     user = (stack.api("GET", f"/admin/users/view/{MIGRATED_USER_ID}", ADMIN_KEY) or {}).get("User", {})
     return {"rc": rc, "out": out, "before": before, "after": after, "user": user}
@@ -306,7 +305,8 @@ def row_count(table, stack, counts, where):
 
 
 def uuid_carried_over(stack, counts, where):
-    assert MISP_UUID in stack.sql("SELECT value FROM system_settings WHERE setting='MISP.uuid'")
+    # The identity check held the source's UUID to MISP_UUID, which MISP serves from its env layer
+    assert (stack.api("GET", "/servers/getSetting/MISP.uuid", ADMIN_KEY) or {}).get("value") == MISP_UUID
 
 
 def admin_key_logs_in(stack, counts, where):
@@ -449,8 +449,8 @@ def test_migrated_account_lands_in_the_renamed_org(keycloak_login):
 
 
 def test_migrated_account_is_linked_and_enabled(stack, keycloak_login):
-    assert stack.sql(f"SELECT sub IS NOT NULL FROM users WHERE id = {MIGRATED_USER_ID}") == "1"
-    assert stack.sql(f"SELECT disabled FROM users WHERE id = {MIGRATED_USER_ID}") == "0"
+    assert stack.sql(f"SELECT sub IS NOT NULL FROM users WHERE id = {MIGRATED_USER_ID}") == "True"
+    assert stack.sql(f"SELECT disabled FROM users WHERE id = {MIGRATED_USER_ID}") == "False"
 
 
 # -- attachments into S3 -------------------------------------------------------------
@@ -470,17 +470,28 @@ def test_s3_copy(stack, counts, s3_copy, check):
     check(stack, counts, s3_copy)
 
 
-def test_s3_new_attachment_goes_to_the_bucket(stack, s3_copy):
-    # The volume still holds a copy of every migrated attachment, so a read through
-    # the API passes from disk as well; only a new upload shows where MISP writes
+@pytest.fixture(scope="module")
+def s3_attachment(stack, s3_copy):
+    """A new attachment on the copy in S3: its object key and its attribute ID."""
     event = stack.api("POST", "/events/add", ADMIN_KEY, {
         "info": "S3 target event", "distribution": "0", "threat_level_id": "4", "analysis": "0"}) or {}
     event_id = event.get("Event", {}).get("id")
     attribute = stack.api("POST", f"/attributes/add/{event_id}", ADMIN_KEY, {
         "event_id": event_id, "category": "Payload delivery", "type": "attachment", "value": "s3.txt",
         "data": base64.b64encode(b"S3 target attachment").decode()}) or {}
-    key = f"{event_id}/{attribute.get('Attribute', {}).get('id')}"
-    assert objects(S3_TARGET["PLUGIN_S3_BUCKET_NAME"]).get(key) == b"S3 target attachment"
+    attribute_id = attribute.get("Attribute", {}).get("id")
+    return f"{event_id}/{attribute_id}", attribute_id
+
+
+def test_s3_new_attachment_goes_to_the_bucket(s3_attachment):
+    # The volume still holds a copy of every migrated attachment, so a read through
+    # the API passes from disk as well; only a new upload shows where MISP writes
+    assert objects(S3_TARGET["PLUGIN_S3_BUCKET_NAME"]).get(s3_attachment[0]) == b"S3 target attachment"
+
+
+def test_s3_new_attachment_downloads(stack, s3_attachment):
+    # Only the bucket holds it
+    assert stack.http("GET", f"/attributes/download/{s3_attachment[1]}", ADMIN_KEY) == (200, "S3 target attachment")
 
 
 # -- bucket to bucket ----------------------------------------------------------------

@@ -44,18 +44,18 @@ Scrape `/metrics`; `/healthz` and `/ready` answer 200.
 | `misp_server_push_enabled{id,name}` | gauge | Push enabled per server |
 | `misp_server_last_pull_event_id{id,name}` | gauge | Last pulled event ID |
 | `misp_server_last_push_event_id{id,name}` | gauge | Last pushed event ID |
-| `misp_server_reachable{id,name,url}` | gauge | Connectivity, auth-verified when the authkey is stored in clear (checked every 5 minutes). With `Security.encryption_key` set, MISP stores authkeys encrypted and any HTTP answer counts as reachable |
+| `misp_server_reachable{id,name,url}` | gauge | Whether the partner answers, connected as MISP connects to it, and with the authkey when MISP stores it in clear (checked every 5 minutes). With `Security.encryption_key` set, MISP stores authkeys encrypted and any HTTP answer counts as reachable |
 | `misp_server_tls_expiry_timestamp_seconds{id,name,url}` | gauge | TLS cert expiry as unix timestamp |
 
 **Background jobs:**
 | Metric | Type | Description |
 |--------|------|-------------|
 | `misp_jobs_queued{worker}` | gauge | Jobs waiting or running per worker queue, read from Redis. Absent when Redis cannot be read |
-| `misp_server_jobs_total{id,name,job_type,status}` | counter | Pull/push jobs per server |
-| `misp_jobs_total{worker,job_type,status}` | counter | Non-sync jobs by worker and type |
+| `misp_jobs{worker,job_type,status}` | gauge | Rows of MISP's jobs table. Housekeeping deletes old rows, so a count can fall |
+| `misp_server_job_last_timestamp_seconds{id,name,job_type,status}` | gauge | Unix time of the last `completed` and the last `failed` pull and push per server |
 | `misp_scheduled_tasks_enabled{type}` | gauge | Tasks enabled under MISP's Scheduled tasks page. No scheduler runs in this deployment, so these never run; the task runner does the periodic work |
 
-The `status` label of the job counters is `completed`, `failed` or `unfinished`. MISP keeps a
+The `status` label of `misp_jobs` is `completed`, `failed` or `unfinished`. MISP keeps a
 job at `unfinished` while it waits and runs; a job whose worker died stays `unfinished`.
 
 **Container jobs:**
@@ -63,6 +63,12 @@ job at `unfinished` while it waits and runs; a job whose worker died stays `unfi
 |--------|------|-------------|
 | `misp_container_job_runs_total{operation,status}` | counter | Runs of `configure`, `org-sync` and `migrate`, by `success` or `error` |
 | `misp_container_job_last_success_timestamp_seconds{operation}` | gauge | Unix time of the last successful run per job |
+
+**Settings outside git:**
+| Metric | Type | Description |
+|--------|------|-------------|
+| `misp_settings_manual` | gauge | Settings changed in MISP that the repository does not carry ([configuration.md](configuration.md#settings)) |
+| `misp_setting_manual{setting}` | gauge | 1 for each such setting |
 
 **Self-monitoring:**
 | Metric | Type | Description |
@@ -74,8 +80,9 @@ job at `unfinished` while it waits and runs; a job whose worker died stays `unfi
 
 - **The database on every scrape**: no cache. `events`, `attributes` and `shadow_attributes` come from PostgreSQL's row estimate (`n_live_tup` of `pg_stat_user_tables`), the small tables from exact counts.
 - **Partner checks beside the scrape**: a thread of the exporter probes every sync server (auth and TLS certificate) every 5 minutes; a scrape serves the last result, so an unreachable partner never delays a scrape or a probe of the exporter.
+- **Partners as MISP connects to them**: a check takes the server's `self_signed`, its pinned and client certificates (`cert_file` and `client_cert_file`, from the `misp-certs` Secret), `MISP.ca_path`, and MISP's `Proxy.*` settings unless the server has `skip_proxy`.
 - **Queue depth from Redis**: waiting jobs are the queue lists (`LLEN <namespace>:<queue>`) and running jobs the `<namespace>:running:<queue>:<id>` keys, in the database and namespace of `SimpleBackgroundJobs.redis_*`. A failed Redis read counts in `misp_scrape_errors`.
-- **Counters for jobs**: `misp_server_jobs_total` and `misp_jobs_total` are counters. Use `increase(...[1h])` in PromQL for time-windowed views. MISP prunes completed jobs, which Prometheus handles as counter resets.
+- **Jobs from the jobs table**: `misp_jobs` counts its rows. The last-job gauges take `date_modified` of the pull and push jobs that ended, by the server their `job_input` names.
 - **Container job runs from `system_settings`**: each run of the configure, org sync and migrate Jobs adds one to its count in the row `misp_docker.runs.<operation>` of `system_settings`, and records the time.
 
 ## Example alerts
@@ -90,9 +97,13 @@ job at `unfinished` while it waits and runs; a job whose worker died stays `unfi
 - alert: MISPServerCertExpiringSoon
   expr: misp_server_tls_expiry_timestamp_seconds - time() < 14 * 24 * 3600
 
-# Pull failures increasing
-- alert: MISPPullFailures
-  expr: increase(misp_server_jobs_total{job_type="pull",status="failed"}[1h]) > 0
+# The last pull from a server failed
+- alert: MISPPullFailing
+  expr: |
+    misp_server_job_last_timestamp_seconds{job_type="pull",status="failed"}
+      > ignoring(status) misp_server_job_last_timestamp_seconds{job_type="pull",status="completed"}
+    or (misp_server_job_last_timestamp_seconds{job_type="pull",status="failed"}
+      unless ignoring(status) misp_server_job_last_timestamp_seconds{job_type="pull",status="completed"})
 
 # Job queue backing up
 - alert: MISPJobQueueBacklog
@@ -103,6 +114,10 @@ job at `unfinished` while it waits and runs; a job whose worker died stays `unfi
 - alert: MISPScheduledTaskEnabled
   expr: misp_scheduled_tasks_enabled > 0
 
+# A setting changed in MISP's UI or API that git does not hold
+- alert: MISPSettingChangedOutsideGit
+  expr: misp_settings_manual > 0
+
 # A configure run failed in the last day
 - alert: MISPConfigureFailed
   expr: increase(misp_container_job_runs_total{operation="configure",status="error"}[1d]) > 0
@@ -110,7 +125,7 @@ job at `unfinished` while it waits and runs; a job whose worker died stays `unfi
 
 ## Consuming in Kubernetes
 
-Add a `ServiceMonitor` (if using prometheus-operator) or scrape annotations:
+With the Prometheus Operator, add a `ServiceMonitor`:
 
 ```yaml
 # ServiceMonitor
@@ -127,7 +142,7 @@ spec:
       interval: 30s
 ```
 
-Or use pod annotations for annotation-based discovery:
+The metrics pod also carries the annotations that annotation-based discovery reads:
 
 ```yaml
 annotations:

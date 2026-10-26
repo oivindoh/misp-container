@@ -1,5 +1,5 @@
 # Declarative org sync: applies the misp-orgs ConfigMap (orgs.yaml) through
-# the MISP API once the web Deployment serves. Exits 0 at once when ADMIN_KEY
+# the MISP API once the configure run of its revision finished and web serves. Exits 0 at once when ADMIN_KEY
 # is empty or orgs.yaml has nothing to apply. Each release revision has its
 # own Job; Argo CD: a Sync hook in wave 3, recreated on every sync.
 apiVersion: batch/v1
@@ -17,7 +17,9 @@ spec:
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: org-sync
+        {{- include "misp.podLabels" (dict "root" . "name" "org-sync") | nindent 8 }}
+      annotations:
+        {{- include "misp.checksums" . | nindent 8 }}
     spec:
       restartPolicy: Never
       {{- include "misp.podSecurityContext" . | nindent 6 }}
@@ -29,6 +31,7 @@ spec:
           env:
             - name: SYNC_BASE_URL
               value: http://web:8080
+            {{- include "misp.checksumEnv" . | nindent 12 }}
             {{- with include "misp.connectionEnv" (list . "misp-env" "misp-db") }}
             {{- . | nindent 12 }}
             {{- end }}

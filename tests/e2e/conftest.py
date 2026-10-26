@@ -5,7 +5,6 @@ one module at a time:
     pytest tests/e2e/test_migration.py [--skip-build] [--keep]
 """
 
-import os
 import sys
 from pathlib import Path
 

@@ -34,19 +34,16 @@ def setup_admin() -> None:
 
     _configure_admin_org(admin_org)
 
-    # Set admin password
+    # Set admin password: only when it differs, since a change saves the user, writes an
+    # audit row and fires MISP's user-after-save workflow trigger
     password = env("ADMIN_PASSWORD")
-    if password:
-        if len(password) < 12:
-            log.error("ADMIN_PASSWORD is too short (%d chars). MISP requires at least 12 "
-                      "characters. Login will not work until a valid password is set.", len(password))
+    if password and not has_password(1, password):
+        log.info("setting admin password (no forced reset)")
+        rc, out = cake.user_change_pw(admin_email, password)
+        if rc != 0:
+            log.error("failed to set admin password: %s", out)
         else:
-            log.info("setting admin password (no forced reset)")
-            rc, out = cake.user_change_pw(admin_email, password)
-            if rc != 0:
-                log.error("failed to set admin password: %s", out)
-            else:
-                db.execute(f"UPDATE users SET change_pw = FALSE, last_pw_change = {db.NOW_EPOCH} WHERE id = 1")
+            db.execute(f"UPDATE users SET change_pw = FALSE, last_pw_change = {db.NOW_EPOCH} WHERE id = 1")
 
     # Set admin API key
     api_key = env("ADMIN_KEY")
@@ -73,7 +70,7 @@ def _configure_admin_org(admin_org: str) -> None:
         org_id = _org_id_by_uuid(org_uuid)
         if not org_id:
             # MISP names the organisation it generates for its first user after
-            # MISP.org, which ADMIN_ORG fills (env.py): that one becomes the admin org
+            # MISP.org, which ADMIN_ORG fills (settings.yaml derived): that one becomes the admin org
             generated = _one("SELECT id FROM organisations WHERE name = %s AND type = 'ADMIN' AND description = %s",
                              (admin_org, GENERATED_ORG_DESCRIPTION))
             if generated:

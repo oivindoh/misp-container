@@ -15,6 +15,8 @@ import yaml
 TESTS = Path(__file__).resolve().parents[1]
 K3S = TESTS / "k3s"
 ATTACHMENTS = "/var/www/MISP/app/attachments"
+# The migrate container's spool for a bucket-to-bucket copy (misp_container.migrate SPOOL_DIR)
+SPOOL = "/var/tmp"
 
 
 def load(name: str) -> list[dict]:
@@ -80,16 +82,22 @@ def toolbox(job: dict, container: str = "configure") -> dict:
     """A long-running pod from a container of a configure Job's pod template: its image, env and mounts.
 
     The suites run one-off commands here, as a Job of the chart would, with the
-    attachments the workers share and no resource limits.
+    attachments the workers share, the migrate container's spool and no resource
+    limits.
     """
     template = job["spec"]["template"]["spec"]
     source = next(c for c in [*template.get("initContainers", []), *template["containers"]] if c["name"] == container)
     mounts = source.get("volumeMounts", [])
+    volumes = template.get("volumes", [])
     if not any(m["mountPath"] == ATTACHMENTS for m in mounts):
         mounts = [*mounts, {"name": "attachments", "mountPath": ATTACHMENTS}]
+    if not any(m["mountPath"] == SPOOL for m in mounts):
+        mounts = [*mounts, {"name": "toolbox-spool", "mountPath": SPOOL}]
+        volumes = [*volumes, {"name": "toolbox-spool", "emptyDir": {}}]
     box = {**{k: v for k, v in source.items() if k != "resources"}, "name": "toolbox", "args": ["sleep", "infinity"],
            "volumeMounts": mounts}
     spec = {k: v for k, v in template.items() if k not in ("initContainers", "containers", "restartPolicy")}
     return {"apiVersion": "v1", "kind": "Pod",
             "metadata": {"name": "toolbox", "labels": {"app.kubernetes.io/name": "toolbox"}},
-            "spec": {**spec, "containers": [box], "restartPolicy": "Always", "terminationGracePeriodSeconds": 1}}
+            "spec": {**spec, "containers": [box], "volumes": volumes, "restartPolicy": "Always",
+                     "terminationGracePeriodSeconds": 1}}

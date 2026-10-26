@@ -3,7 +3,9 @@
 # the space. Retention is a policy choice: HOUSEKEEPING_<TABLE>_DAYS in env.
 {{- if .Values.housekeeping.enabled }}
 {{- range $table, $schedule := .Values.housekeeping.schedules }}
+{{- if $schedule }}
 ---
 {{ include "misp.taskCronJob" (dict "root" $ "name" (printf "housekeeping-%s" ($table | replace "_" "-")) "module" "housekeeping" "task" $table "args" list "schedule" $schedule) }}
+{{- end }}
 {{- end }}
 {{- end }}

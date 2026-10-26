@@ -22,10 +22,10 @@ from pathlib import Path
 import yaml
 
 import manifests
-from cluster import CHART, IMAGES, REPO, Cluster, image_engine, image_tag, scratch_dir
+# The suites take REPO from here
+from cluster import CHART, IMAGES, REPO, Cluster, image_engine, image_tag, scratch_dir  # noqa: F401
+from manifests import K3S
 
-TESTS = REPO / "tests"
-K3S = TESTS / "k3s"
 VALUES = K3S / "values.yaml"
 # A name the suites use for a workload of the chart: (the object kubectl execs into, the container).
 # Any other name is a Deployment with a container of that name, such as a test service
@@ -110,7 +110,7 @@ class Misp:
         self.key = key
 
     def http(self, method: str, path: str, key: str = "", data=None, timeout: int = 60,
-             json_api: bool = True, base_url: str = "", headers: dict | None = None,
+             json_api: bool = True, headers: dict | None = None,
              redirects: bool = True) -> tuple[int, str]:
         """One request to MISP through caddy: the status and the body.
 
@@ -123,7 +123,7 @@ class Misp:
         if key:
             sent["Authorization"] = key
         body = json.dumps(data).encode() if data is not None else None
-        request = urllib.request.Request((base_url or self.base_url) + path, data=body, method=method,
+        request = urllib.request.Request(self.base_url + path, data=body, method=method,
                                          headers=sent)
         opener = urllib.request.build_opener() if redirects else urllib.request.build_opener(_NoRedirect)
         try:
@@ -134,9 +134,9 @@ class Misp:
         except (urllib.error.URLError, ConnectionError, TimeoutError) as e:
             return 0, str(e)
 
-    def api(self, method: str, path: str, key: str, data=None, base_url: str = ""):
+    def api(self, method: str, path: str, key: str, data=None):
         """A JSON API call; None when the answer is not JSON."""
-        _, body = self.http(method, path, key, data, base_url=base_url)
+        _, body = self.http(method, path, key, data)
         try:
             return json.loads(body)
         except ValueError:
@@ -274,9 +274,11 @@ class Release(Misp):
         Raises when the query or the library fails: an error would otherwise
         come back as a traceback string that a negative assertion accepts.
         """
-        rc, out = self.python("import os\nfrom misp_container.env import apply_defaults\n"
-                              "from misp_container import db\napply_defaults()\n"
-                              "print(db.query(os.environ['SQL'], check=True))", workload, env={"SQL": query})
+        rc, out = self.python("import os\n"
+                              "from misp_container import db\n"
+                              "for row in db.dict_query(os.environ['SQL']):\n"
+                              "    print('\\t'.join('NULL' if v is None else str(v) for v in row.values()))",
+                              workload, env={"SQL": query})
         if rc != 0:
             raise RuntimeError(f"query failed in {workload}: {query}\n{out}")
         return "".join(out.split())
@@ -319,18 +321,23 @@ class Release(Misp):
         script = " ".join(shlex.quote(arg) for arg in command)
         return self.exec_rc("toolbox", script, env=env, timeout=timeout)
 
+    def org_sync(self, config: str, key: str) -> tuple[int, str]:
+        """The org sync in the toolbox, applying config (the content of orgs.yaml) with the API key: exit code and output."""
+        return self.run("python3", "-m", "misp_container.sync", "/tmp/orgs.yaml", files={"/tmp/orgs.yaml": config},
+                        env={"ADMIN_KEY": key, "SYNC_BASE_URL": "http://web:8080"})
+
     # -- waits -----------------------------------------------------------------------
 
-    def wait_for_misp(self, timeout: int = 300, base_url: str = "") -> None:
+    def wait_for_misp(self, timeout: int = 300) -> None:
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            status, _ = self.http("GET", "/users/login", timeout=10, json_api=False, base_url=base_url)
+            status, _ = self.http("GET", "/users/login", timeout=10, json_api=False)
             if status == 200:
                 return
             time.sleep(3)
         # A fixture that fails here yields no release, so no test would dump the logs
         path = self.dump_logs("misp-wait-timeout")
-        raise RuntimeError(f"MISP did not answer on {base_url or self.base_url} in {timeout}s; logs: {path}")
+        raise RuntimeError(f"MISP did not answer on {self.base_url} in {timeout}s; logs: {path}")
 
     def wait_for(self, workload: str, script: str, timeout: int = 90) -> None:
         """Until a shell check in the workload's container succeeds."""

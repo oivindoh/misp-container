@@ -164,7 +164,8 @@ another port needs a change to the template.
 
 | Data | Where it goes |
 |------|---------------|
-| Terms, server certificates | The `misp-certs` Secret (see [kubernetes.md](kubernetes.md#secrets)) |
+| Server certificates | The `misp-certs` Secret (see [kubernetes.md](kubernetes.md#secrets)) |
+| Terms | Nothing carries them: `app/files/terms` is a volume of each pod, so a terms file uploaded in the UI stays on the pod that took it |
 | GPG keyring | The `misp-gnupg` Secret from the old `private.asc` export; or a new key, re-exported to sync partners |
 | Attachments already on S3 | Nothing: point `PLUGIN_S3_*` at the same bucket, or copy them to a new one with `MIGRATE_SOURCE_S3_*` |
 
@@ -188,9 +189,10 @@ index it builds. On a large instance the conversion takes hours.
 - **Passwords and authkeys** work as before when the salt and encryption key are the old
   ones. The configure Job sets the e-mail, password and API key of user 1 from `ADMIN_*` on
   every run. On a copy, user 1 is the old instance's user 1.
-- **Settings** stored in the old database are kept, except those this image drives from
-  env (`MISP.baseurl`, Redis, workers, the attachments directory, ...), which the configure
-  Job enforces.
+- **Settings** stored in the old database are kept, except those the repository carries:
+  the configure Job deletes their rows, and MISP takes them from its environment layer
+  ([configuration.md](configuration.md#settings)). The exporter reports each kept one in
+  `misp_setting_manual`: move it into the chart's values, or delete it in MISP.
 - **A new GPG key** must be re-exported to sync partners.
 
 ### Keycloak
@@ -213,9 +215,17 @@ person's login to another's account. An account that used header authentication 
 instance keeps its external auth, and the org sync leaves it enabled. The migration suite runs
 both steps on its copy.
 
+## What MISP 3.0 no longer has
+
+| What | In 3.0 |
+|------|--------|
+| The STIX 1 export | Needs `MISP.org`, which `ADMIN_ORG` fills |
+| The HIDS, OpenIOC and Suricata exports | Gone |
+
 ## Migrating from official misp-docker
 
-The database schema is the same, so the migration copies it directly. Differences to account
-for: the official image runs as `www-data` (33), this one as UID 1000, so copied files need
-`chown`; `app/files` ships in this image and only the attachments, `app/files/scripts/tmp`,
+The official image runs MISP 2.5, so its database is an older source: set
+`MIGRATE_SOURCE_UPGRADE=true` ([An older source](#an-older-source)). Other differences to
+account for: the official image runs as `www-data` (33), this one as UID 1000, so copied files
+need `chown`; `app/files` ships in this image and only the attachments, `app/files/scripts/tmp`,
 `certs`, `terms`, `img/orgs` and `img/custom` are volumes; workers run in their own container.

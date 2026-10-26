@@ -1,5 +1,6 @@
 """The Helm chart renders what the code and the release expect (helm template, no cluster)."""
 
+import json
 import re
 import sys
 from pathlib import Path
@@ -35,6 +36,12 @@ def test_every_task_has_a_cronjobs_entry_and_each_scheduled_one_a_cronjob():
     commands = [chart.pod_spec(d)["containers"][0]["args"] for d in kinds(every_component=True)["CronJob"]]
     scheduled = {c[c.index("misp_container.task") + 1] for c in commands if "misp_container.task" in c}
     assert scheduled == {name for name, schedule in tasks.items() if schedule}
+
+
+def test_the_schema_refuses_a_task_name_the_runner_does_not_know():
+    schema = json.loads((chart.CHART / "values.schema.json").read_text())
+    names = schema["properties"]["cronjobs"]["properties"]["tasks"]["propertyNames"]["enum"]
+    assert set(names) == set(task.TASKS) - {task.WORKFLOW_TASK}
 
 
 def test_every_task_cronjob_renders_app_config_and_mounts_the_attachments():
@@ -76,8 +83,24 @@ def test_a_change_to_env_or_secrets_rolls_the_misp_pods():
     secret = {name: chart.find("Deployment", name, "secrets.db.DB_PASSWORD=x")["spec"]["template"]["metadata"]["annotations"]
               for name in MISP_DEPLOYMENTS}
     for name in MISP_DEPLOYMENTS:
-        assert env[name]["checksum/env"] != before[name]["checksum/env"], name
-        assert secret[name]["checksum/secrets"] != before[name]["checksum/secrets"], name
+        assert env[name]["checksum/config"] != before[name]["checksum/config"], name
+        assert secret[name]["checksum/config"] != before[name]["checksum/config"], name
+
+
+def test_the_pods_wait_for_a_configure_run_of_their_own_configuration():
+    configure = chart.find("Job", "configure")["spec"]["template"]
+    expected = configure["metadata"]["annotations"]["checksum/config"]
+    pods = [chart.find("Deployment", name)["spec"]["template"] for name in ("web", "worker")]
+    pods.append(chart.find("Job", "org-sync")["spec"]["template"])
+    pods += [c["spec"]["jobTemplate"]["spec"]["template"] for c in kinds("cronjobs.enabled=true")["CronJob"]]
+    for pod in [configure, *pods]:
+        assert pod["metadata"]["annotations"]["checksum/config"] == expected
+        for container in pod["spec"]["containers"]:
+            if container["name"] == "caddy":
+                continue
+            env = {e["name"]: e for e in container.get("env", [])}
+            assert env["MISP_CONFIG_CHECKSUM"]["valueFrom"]["fieldRef"]["fieldPath"] == \
+                "metadata.annotations['checksum/config']", container["name"]
 
 
 def test_misp_env_holds_base_env_and_the_env_value_wins():
@@ -117,7 +140,7 @@ def test_the_postgres_pod_refuses_a_claim_from_chart_1(tmp_path):
     (tmp_path / "pgdata/PG_VERSION").write_text("17\n")
     refused = run()
     assert refused.returncode == 1
-    assert "PostgreSQL 17 data in" in refused.stderr and "runs PostgreSQL 18" in refused.stderr
+    assert "chart 1.x database (MISP 2.5, PostgreSQL 17)" in refused.stderr
 
 
 PG_SECRET = "pg-pguser-misp"
@@ -191,27 +214,30 @@ def test_the_database_ca_reaches_every_container_that_connects():
     assert len(seen) >= 8
 
 
-def test_the_policies_reach_an_external_database_and_redis_through_the_egress_values():
-    def egress(name: str, *sets: str) -> list:
-        return chart.find("NetworkPolicy", name, "networkPolicy.enabled=true", *sets)["spec"]["egress"]
-
-    on = ("postgres.enabled=true", "redis.enabled=true")
-    assert {"ports": [{"port": 5432, "protocol": "TCP"}]} in egress("web")
-    assert {"ports": [{"port": 6379, "protocol": "TCP"}]} in egress("web")
-    assert {"ports": [{"port": 5432, "protocol": "TCP"}]} not in egress("web", *on)
-    assert {"ports": [{"port": 7432, "protocol": "TCP"}]} in egress(
-        "housekeeping", "networkPolicy.databaseEgress[0].ports[0].port=7432",
-        "networkPolicy.databaseEgress[0].ports[0].protocol=TCP")
+def test_the_policies_select_every_pod_of_the_release_and_take_the_egress_value():
+    on = ("networkPolicy.enabled=true", "postgres.enabled=true", "redis.enabled=true")
+    release = chart.find("NetworkPolicy", "misp", *on)["spec"]["podSelector"]["matchLabels"]
+    for doc in chart.objects(*on, "cronjobs.enabled=true", "housekeeping.enabled=true", "migrate.enabled=true"):
+        if doc["kind"] in ("Deployment", "StatefulSet", "Job", "CronJob", "Pod"):
+            spec = doc["spec"]["jobTemplate"]["spec"] if doc["kind"] == "CronJob" else doc["spec"]
+            labels = doc["metadata"]["labels"] if doc["kind"] == "Pod" else spec["template"]["metadata"]["labels"]
+            assert release.items() <= labels.items(), doc["metadata"]["name"]
+    egress = chart.find("NetworkPolicy", "misp-egress", *on)["spec"]["egress"]
+    assert {"ports": [{"port": 5432, "protocol": "TCP"}, {"port": 6379, "protocol": "TCP"}]} in egress
+    egress = chart.find("NetworkPolicy", "misp-egress", "networkPolicy.enabled=true",
+                        "networkPolicy.egress[0].ports[0].port=7432",
+                        "networkPolicy.egress[0].ports[0].protocol=TCP")["spec"]["egress"]
+    assert {"ports": [{"port": 7432, "protocol": "TCP"}]} in egress
     names = {d["metadata"]["name"] for d in chart.objects("networkPolicy.enabled=true") if d["kind"] == "NetworkPolicy"}
-    assert not names & {"postgres", "cache"}
-    assert {"postgres", "cache"} <= {d["metadata"]["name"] for d in chart.objects("networkPolicy.enabled=true", *on)
-                                     if d["kind"] == "NetworkPolicy"}
+    assert "misp-stores" not in names and "misp-stores" in {
+        d["metadata"]["name"] for d in chart.objects(*on) if d["kind"] == "NetworkPolicy"}
 
 
 def test_supplied_secrets_render_no_secret():
     assert "Secret" not in kinds("secrets.create=false", "migrate.enabled=true")
     web = chart.find("Deployment", "web", "secrets.create=false")
-    assert "checksum/secrets" not in web["spec"]["template"]["metadata"]["annotations"]
+    assert chart.find("Deployment", "web", "secrets.create=false", "secrets.db.DB_PASSWORD=x")["spec"]["template"][
+        "metadata"]["annotations"] == web["spec"]["template"]["metadata"]["annotations"]
 
 
 def test_the_migration_runs_before_configure_and_is_not_retried():
@@ -225,19 +251,16 @@ def test_the_migration_runs_before_configure_and_is_not_retried():
 
 
 def test_attachments_in_s3_render_no_claim():
-    assert "PersistentVolumeClaim" not in kinds("attachments.claim=false")
-    volumes = chart.pod_spec(chart.find("Deployment", "web", "attachments.claim=false"))["volumes"]
+    s3 = ("attachments.claim=false", "env.PLUGIN_S3_BUCKET_NAME=misp")
+    assert "PersistentVolumeClaim" not in kinds(*s3)
+    volumes = chart.pod_spec(chart.find("Deployment", "web", *s3))["volumes"]
     assert next(v for v in volumes if v["name"] == "attachments") == {"name": "attachments", "emptyDir": {"sizeLimit": "1Gi"}}
 
 
-def test_the_helm_test_reaches_web_through_the_network_policy():
-    pod = chart.find("Pod", "misp-test", "networkPolicy.enabled=true")
-    assert pod["metadata"]["annotations"]["helm.sh/hook"] == "test"
-    component = pod["metadata"]["labels"]["app.kubernetes.io/component"]
-    web = chart.find("NetworkPolicy", "web", "networkPolicy.enabled=true")
-    allowed = [peer["podSelector"]["matchLabels"] for rule in web["spec"]["ingress"] for peer in rule["from"]
-               if "podSelector" in peer]
-    assert {"app.kubernetes.io/component": component} in allowed
+def test_attachments_without_the_claim_or_a_bucket_are_refused():
+    import pytest
+    with pytest.raises(RuntimeError, match="PLUGIN_S3_BUCKET_NAME is empty"):
+        chart.objects("attachments.claim=false")
 
 
 def test_every_component_renders_and_the_default_renders_none():
@@ -257,7 +280,7 @@ def test_a_misspelt_value_is_refused():
 
 def test_every_volume_mount_names_a_volume_of_its_pod():
     """kubeconform cannot see a mount of a volume the pod lacks; the API server refuses the pod."""
-    for sets in ((), ("migrate.enabled=true",), ("attachments.claim=false",)):
+    for sets in ((), ("migrate.enabled=true",), ("attachments.claim=false", "env.PLUGIN_S3_BUCKET_NAME=misp")):
         for doc in chart.objects(*sets, every_component=True):
             spec = chart.pod_spec(doc)
             if not spec:

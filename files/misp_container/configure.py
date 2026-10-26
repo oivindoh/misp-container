@@ -1,7 +1,9 @@
-"""One-shot MISP configuration: schema, settings, admin user, GPG, auth.
+"""One-shot MISP configuration: schema, updates, admin user and organisation.
 
-Runs in the configure Job before any web or worker starts. Sets MISP.live=true when done; web and
-worker entrypoints wait for that flag.
+Runs in the configure Job before any web or worker pod of its revision serves. MISP
+takes its settings from the env the chart renders (MISP_SETTING_*, config.php), not from
+this step. The step records the image version and the configuration checksum it ran for;
+the pods of that revision wait for both (db.wait_for_configure).
 """
 
 import sys
@@ -9,28 +11,19 @@ import sys
 from . import admin
 from . import cake
 from . import db
-from .config import CONDITIONAL_CONFIG_PHP_GROUPS, SettingsCache, apply_settings_fast, load_settings_yaml
-from .env import apply_defaults, env
+from .config import repository_settings
+from .env import env
 from .init import prepare
 from .log import get as getlog, setup as setup_logging
 
 log = getlog("configure")
 
 
-# The settings groups this step applies to the database, in order. The groups
-# init renders into config.php (config.CONFIG_PHP_GROUPS, the S3 group and the
-# auth plugins) are not among them: MISP reads those from the file. gpg follows
-# the key setup. A plugin group's defaults do nothing until its enable setting
-# is true.
-DB_GROUPS = ("initialisation", "critical", "optional", "proxy", "kafka", "linotp", "custom_auth", "upstream")
-
-
-# Values shipped in the chart's secrets-*.env files and the examples. A
-# deployment that still carries one of them forgot to set its secrets.
-PLACEHOLDER_MARKERS = ("change-me", "override-me", "REPLACE-WITH", "0000000000")
+# Values shipped in the chart's secrets-*.env files. A deployment that still
+# carries one of them forgot to set its secrets.
+PLACEHOLDER_MARKERS = ("change-me", "override-me")
 CHECKED_SECRETS = ("SECURITY_SALT", "SECURITY_ENCRYPTION_KEY", "ADMIN_PASSWORD", "ADMIN_KEY",
-                   "DB_PASSWORD", "POSTGRES_PASSWORD", "MISP_REDIS_PASSWORD",
-                   "GNUPG_PASSWORD")
+                   "DB_PASSWORD", "MISP_REDIS_PASSWORD", "GNUPG_PASSWORD")
 
 
 def is_placeholder(value: str) -> bool:
@@ -52,6 +45,11 @@ def check_identity() -> None:
     elif len(salt) < 32:
         problems.append(f"SECURITY_SALT is too short ({len(salt)} bytes, minimum 32)")
 
+    key = env("SECURITY_ENCRYPTION_KEY")
+    if key and len(key) < 32:
+        # MISP refuses every write of a sensitive value under a shorter key
+        problems.append(f"SECURITY_ENCRYPTION_KEY is too short ({len(key)} bytes, minimum 32)")
+
     if not env("MISP_UUID"):
         problems.append("MISP_UUID is not set; each instance needs a unique, stable UUID for server "
                         "sync. Generate with: python3 -c \"import uuid; print(uuid.uuid4())\"")
@@ -71,38 +69,37 @@ def check_layout() -> None:
         sys.exit(1)
 
 
+def forget_repository_rows() -> None:
+    """Delete the rows of the settings MISP takes from its environment layer.
+
+    The layer wins over them anyway; left, they would read as changes made by hand.
+    """
+    names = sorted(repository_settings())
+    if names:
+        gone = db.execute("DELETE FROM system_settings WHERE setting = ANY(%s)", (names,))
+        if gone:
+            log.info("deleted %d database rows of settings the repository carries", gone)
+
+
+def report_manual_settings() -> None:
+    """Log each setting that a person changed in MISP, with who and when where MISP logged it."""
+    for row in db.manual_settings(repository_settings()):
+        log.warning("setting %s was changed outside the repository%s: move it into git or undo it",
+                    row["setting"], f" ({row['changed']})" if row.get("changed") else "")
+
+
 def configure_misp() -> None:
-    """Run the full MISP configuration (settings, admin, GPG, auth) under the lock."""
-    db.acquire_config_lock()
-    try:
-        cake.set_setting("MISP.osuser", "misp")
-        cake.run_updates()
-        cake.run_db_script("highPerformance")
-
-        cache = SettingsCache()
-        cache.load()
-
-        all_specs = load_settings_yaml()
-
-        log.info("core settings")
-        for group in DB_GROUPS:
-            apply_settings_fast(group, cache, all_specs)
-
-        log.info("admin user")
-        admin.setup_admin()
-
-        log.info("GPG")
-        apply_settings_fast("gpg", cache, all_specs)
-
-        log.info("plugins")
-        for group, switch in CONDITIONAL_CONFIG_PHP_GROUPS:
-            if env(switch) == "true":
-                log.info("%s enabled (in config.php)", group)
-
-        cache.save_defaults_version()
-        log.info("configuration complete")
-    finally:
-        db.release_config_lock()
+    """Database updates, the admin user and organisation, and the settings bookkeeping."""
+    cake.run_updates()
+    log.info("admin user")
+    admin.setup_admin()
+    forget_repository_rows()
+    report_manual_settings()
+    # MISP.live is MISP's own maintenance switch: set once, then the admin's
+    if db.get_system_setting("MISP.live") is None:
+        log.info("setting MISP.live = true")
+        cake.set_setting("MISP.live", "true")
+    log.info("configuration complete")
 
 
 def record_run(ok: bool) -> None:
@@ -116,24 +113,26 @@ def record_run(ok: bool) -> None:
 def run() -> None:
     check_identity()
     db.wait_for_db()
-    db.init_schema()
-    check_layout()
-
+    # Two configure runs at once, or a migrate Job beside one, would import the
+    # schema twice: the whole run holds the lock
+    db.acquire_config_lock()
     try:
+        db.init_schema()
+        check_layout()
         configure_misp()
-        log.info("setting MISP.live = true")
-        cake.set_setting("MISP.live", "true")
+        db.record_configured()
     except BaseException:
         record_run(False)
         raise
+    finally:
+        db.release_config_lock()
     record_run(True)
 
 
 def main() -> None:
-    """The configure role: runs once per rollout, before web and worker pods serve."""
+    """The configure role: runs once per revision, before its web and worker pods serve."""
     setup_logging("configure")
     log.info("MISP configure starting")
-    apply_defaults()
     prepare()
     run()
     log.info("MISP configure complete")

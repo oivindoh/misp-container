@@ -1,9 +1,8 @@
-# Opens a pull request for each new MISP release of the major version the
-# Dockerfile pins: bumps CORE_TAG, clears a CORE_COMMIT pin, resolves
-# files/composer.lock and files/requirements-misp.txt, and regenerates the
-# settings catalogue (DEVELOPING.md, New MISP releases). While the pin is a
-# work-in-progress branch such as 3.0_wip, the first release of that major
-# version replaces it.
+# Opens a draft pull request for each new MISP release of the major version the
+# Dockerfile pins: bumps CORE_TAG, clears a CORE_COMMIT pin, and resolves
+# files/composer.lock and files/requirements-misp.txt (DEVELOPING.md, New MISP
+# releases). While the pin is a work-in-progress branch such as 3.0_wip, the first
+# release of that major version replaces it.
 name: Track MISP releases
 
 on:
@@ -69,31 +68,6 @@ jobs:
           scripts/update-composer-lock.sh
           python3 scripts/update_misp_requirements.py
 
-      # Build the new version from the CI job's layer caches, install it on k3s,
-      # and regenerate the settings catalogue from what this MISP defines, so the
-      # PR carries the settings diff and CI's strict coverage check can pass.
-      - name: Build the images
-        if: steps.misp.outputs.changed == 'true' && steps.bump.outputs.skip != 'true'
-        uses: ./.github/actions/load-images
-        with:
-          misp: ghcr.io/${{ github.repository }}
-          caddy: ghcr.io/${{ github.repository }}-caddy
-          modules: ghcr.io/${{ github.repository }}-modules
-          tag: settings
-      - name: Install helm and kubectl
-        if: steps.misp.outputs.changed == 'true' && steps.bump.outputs.skip != 'true'
-        uses: ./.github/actions/install-helm
-        with:
-          kubectl: "true"
-      - name: Regenerate the settings catalogue
-        if: steps.misp.outputs.changed == 'true' && steps.bump.outputs.skip != 'true'
-        timeout-minutes: 60
-        env:
-          CONTAINER_CMD: docker
-          MISP_IMAGE_TAG: settings
-          TMPDIR: ${{ runner.temp }}
-        run: python3 scripts/update_settings.py --stack --skip-build --write --summary "$RUNNER_TEMP/settings-summary.md"
-
       - name: Commit and open PR
         if: steps.misp.outputs.changed == 'true' && steps.bump.outputs.skip != 'true'
         run: |
@@ -104,23 +78,22 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git checkout -b "${BRANCH}"
-          git add Dockerfile files/composer.lock files/requirements-misp.txt files/misp-config/settings-upstream.yaml
+          git add Dockerfile files/composer.lock files/requirements-misp.txt
           git commit -m "bump MISP to ${NEW}"
           git push --force-with-lease origin "${BRANCH}"
 
-          BODY="MISP released ${NEW} (was ${OLD}). files/composer.lock, files/requirements-misp.txt and the settings catalogue were regenerated from ${NEW}: review their diffs."
+          BODY="MISP released ${NEW} (was ${OLD}). files/composer.lock and files/requirements-misp.txt were regenerated from ${NEW}: review their diffs."
           BODY="${BODY}
 
-          CI builds and tests automatically. After merging, release from master: a new MISP
-          version is a normal release, which sets the image tags, raises the chart's minor
-          version, and commits and tags.
+          GitHub starts no CI for a pull request this workflow opens: mark it ready for
+          review to run CI. After merging, release from master: a new MISP version is a
+          normal release, which sets the image tags, raises the chart's minor version, and
+          commits and tags.
 
               mise run release normal
-              git push --atomic origin master ${NEW}
+              git push --atomic origin master ${NEW}"
 
-          $(cat "$RUNNER_TEMP/settings-summary.md" 2>/dev/null || echo "(no settings summary)")"
-
-          gh pr create \
+          gh pr create --draft \
             --title "bump MISP to ${NEW}" \
             --body "${BODY}" \
             --head "${BRANCH}"

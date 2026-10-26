@@ -1,0 +1,18 @@
+# misp-settings: the settings the repository brings (files/settings.yaml, with base.env and
+# the env value on top) as MISP's own env layer and as config.php entries (_settings.tpl).
+# The pods that run MISP read it; a setting a Secret holds is an env entry of their
+# container instead. Its checksum rolls the pods.
+{{- $settings := include "misp.settings" . | fromJson }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: misp-settings
+  labels:
+    {{- include "misp.labels" (dict "root" . "name" "misp-settings") | nindent 4 }}
+data:
+  {{- range $var := keys $settings | sortAlpha }}
+  {{- $entry := get $settings $var }}
+  {{- if hasKey $entry "value" }}
+  {{ $var }}: {{ $entry.value | quote }}
+  {{- end }}
+  {{- end }}

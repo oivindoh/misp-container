@@ -17,7 +17,7 @@ spec:
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: worker
+        {{- include "misp.podLabels" (dict "root" . "name" "worker") | nindent 8 }}
       annotations:
         {{- include "misp.checksums" . | nindent 8 }}
     spec:

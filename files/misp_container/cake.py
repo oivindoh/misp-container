@@ -43,12 +43,6 @@ def run_updates():
     run_checked("Admin", "runUpdates")
 
 
-def run_db_script(name):
-    """Run a MISP database script (idempotent)."""
-    log.info("running DB script: %s", name)
-    run_checked("Admin", "runDbScript", name)
-
-
 def user_init():
     """Initialize default user/role/org."""
     run_checked("user", "init")

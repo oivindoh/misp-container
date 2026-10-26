@@ -6,11 +6,11 @@ Unit tests on the Python library and the chart's renders, an upstream guard that
 
 ```bash
 mise run test                # unit tests, the chart lint and every chart render validated against the schemas
-mise run build               # the three images under the chart's appVersion, or MISP_IMAGE_TAG
-mise run test-integration    # the upstream guard, then the integration suite (~4min)
-mise run test-sync           # hub-spoke sync with 2 releases and a MISP 2.5 partner (~6min)
-mise run test-migration      # a MISP 2.5 database on MariaDB into PostgreSQL (~4min)
-mise run test-lifecycle      # upgrade from the newest release, helm test, CronJobs, upgrade, rollback (~6min)
+mise run build               # the two images under the chart's appVersion, or MISP_IMAGE_TAG
+mise run test-integration    # the upstream guard, then the integration suite
+mise run test-sync           # hub-spoke sync with 2 releases and a MISP 2.5 partner
+mise run test-migration      # a MISP 2.5 database on MariaDB into PostgreSQL
+mise run test-lifecycle      # upgrade from the newest release, helm test, CronJobs, upgrade, rollback
 mise run smoketest https://misp.example.com   # a live MISP; asks for an API key
 mise run test-all            # the unit tests and every stack suite
 ```
@@ -25,13 +25,11 @@ Tests of the Python entrypoint library (`files/misp_container/`), the scripts an
 | Module | Tests |
 |---|---|
 | `test_admin.py` | Unit tests for admin helpers: every value reaches SQL as a parameter. |
-| `test_agents_md.py` | AGENTS.md is what scripts/generate_agents_md.py makes of the tree. |
 | `test_apply_patches.py` | The patches of patches/ and their applier (scripts/apply_patches.py), on real git trees. |
 | `test_chart.py` | The Helm chart renders what the code and the release expect (helm template, no cluster). |
 | `test_chart_schema.py` | helm lint, and every render of the chart validated against the Kubernetes and CRD schemas. |
 | `test_check_upstream.py` | Unit tests for the upstream guard (scripts/check_upstream.py). |
-| `test_config.py` | Unit tests for the config diff engine. |
-| `test_config_php.py` | Unit tests for config.php rendering from settings.yaml. |
+| `test_config.py` | Unit tests for config.php from the MISP_CONFIG_* env (misp_container.config). |
 | `test_configure.py` | Unit tests for the configure step's identity and secret checks. |
 | `test_db.py` | Unit tests for the database layer and housekeeping (no PostgreSQL needed). |
 | `test_docs.py` | The docs name only what the code has. |
@@ -42,10 +40,11 @@ Tests of the Python entrypoint library (`files/misp_container/`), the scripts an
 | `test_metrics.py` | Unit tests for the Prometheus metrics exporter. |
 | `test_migrate.py` | Unit tests for the migration Job (misp_container.migrate). |
 | `test_release.py` | Unit tests for the release tool (scripts/release.py): the next tag and chart version. |
+| `test_requirements.py` | files/requirements-misp.txt was resolved for the MISP the Dockerfile pins. |
 | `test_s3.py` | Unit tests for the minimal S3 client (misp_container.s3). |
+| `test_settings.py` | The repository's settings as the chart renders them (_settings.tpl) and a pod reads them. |
 | `test_sync.py` | Unit tests for the org sync engine. |
 | `test_task.py` | Unit tests for the periodic task runner. |
-| `test_update_settings.py` | Unit tests for the settings catalogue updater (scripts/update_settings.py). |
 | `test_worker.py` | Unit tests for the worker supervisor (misp_container.worker): the programs, restarts and stop. |
 <!-- end generated -->
 
@@ -54,9 +53,10 @@ Run with: `mise run test` or `PYTHONPATH=files python -m pytest tests/ -v --igno
 **Render check** (`test_chart_schema.py`): runs `helm lint --strict`, renders the chart with
 the default values, with each component on, with every component on, and with supplied
 Secrets, attachments in S3 and a workflow CronJob. It validates each render with
-`kubeconform -strict` against the Kubernetes schemas and, for the HTTPRoute, the copy of the
-datree CRD catalog in `tests/schemas/`. It needs `helm` and `kubeconform` (`mise install` in
-the repository); without `kubeconform` the render tests skip, and in CI they fail.
+`kubeconform -strict` against the Kubernetes schemas and, for the HTTPRoute, the datree CRD
+catalog at a pinned commit; the first run downloads both into a cache. It needs `helm` and
+`kubeconform` (`mise install` in the repository); without `kubeconform` the render tests skip,
+and in CI they fail.
 `test_chart.py` checks what the renders hold.
 
 ## Upstream guard
@@ -85,7 +85,7 @@ flowchart LR
 ```
 
 1. The suite builds the images (`scripts/build.py`) unless `--skip-build`, starts a k3s cluster
-   (`e2e/cluster.py`) and copies the three images into its containerd.
+   (`e2e/cluster.py`) and copies the two images into its containerd.
 2. It applies the test services of `k3s/*.yaml` and NodePorts for the ports the host reaches,
    then installs the chart with `k3s/values.yaml` and the suite's own values (`e2e/stack.py`).
 3. Tests call MISP over HTTP through the NodePorts, and run commands in the pods with
@@ -115,41 +115,36 @@ teardown writes `$TMPDIR/<suite>-cluster-logs.txt`. CI uploads them with the JUn
 
 ## Integration suite
 
-One release of the chart, checked feature by feature, with Keycloak for the OIDC login, garage
-for the attachments in S3, and PostgreSQL and Redis outside the chart, as a database operator
-runs them (`k3s/external.yaml`).
+One release of the chart, checked feature by feature, with Keycloak for the OIDC login, custom
+auth on, and PostgreSQL and Redis outside the chart, as a database operator runs them
+(`k3s/external.yaml`).
 
 | Section | What it verifies |
 |-------|------------------|
-| Non-root operation | The web and worker pods run as UID 1000; so does the caddy image |
+| Non-root operation | The web and worker pods and the caddy container run as UID 1000 |
 | HTTP / Caddy | Login page, static CSS, root redirect, a forged `X-Forwarded-For` kept out of the audit log |
 | Admin user config | Email, password (no forced reset), org name, org UUID, last_pw_change |
-| Database settings | DB persistence, setting count, BASE_URL in DB |
+| Settings from the repository | MISP serves `MISP.baseurl` from its env layer and refuses a change to a repository setting; the database holds no row of one |
 | Workers | Each of the five queues runs `NUM_WORKERS_<QUEUE>` workers, no scheduler worker, a killed worker is started again |
 | Background jobs | Event publish triggers job, worker completes it (status=4) |
 | MISP's Python scripts | STIX 2 and STIX 1 exports |
-| PHP-FPM | Listening on port 9002, its php.ini, the built extensions |
-| Distribution files and app/Config | taxonomies in the image, bootstrap.php is MISP's default plus the logging block, database.php on the external PostgreSQL with `verify-full`, config.php content and the external Redis |
+| PHP-FPM | Listening on the loopback only, its php.ini, the built extensions |
+| Distribution files and app/Config | The TLP taxonomy in the image, bootstrap.php is MISP's default plus the logging block, database.php on the external PostgreSQL with `verify-full`, config.php on the external Redis |
 | External PostgreSQL | The database user is no superuser, a connection without TLS is refused, the server certificate is checked against the CA of `databaseCA` |
 | GPG | The key of the `misp-gnupg` Secret, which the suite makes with the image's `gpg`, imported into the web pod's homedir |
 | MISP API | Version endpoint, event create via API |
-| Warm restart | A second run over the database groups loads the settings and changes none |
-| Defaults version | The configure step records the image version the pods wait for |
-| S3 attachment storage | Garage S3 bootstrap, upload, download, bucket verification |
 | Custom auth | Header login (200), no-header redirect (302) |
 | OIDC login | Redirect to Keycloak, its login form, the callback, the user's email, the highest client role, the team of the user's Keycloak organisation, mixed auth |
-| Task runner | Every scheduled task through MISP's console in the toolbox; `sharing-group-blueprints` without blueprints; `periodic-summary` and `check-user-validity` |
-| Org sync | Org/user/tag/server creation, server authkey (DB verify), sync user authkey prefix, taxonomy enable, disabled user, an unnamed local user disabled and the OIDC user left enabled, a break-glass password login, custom warninglist create/update, warm run idempotency |
-| Metrics exporter | Endpoints, core metrics, no scrape errors, a job that waits in `misp_jobs_queued` while the workers are scaled to none, `misp_scheduled_tasks_enabled` |
+| Task runner | Every scheduled task through MISP's console in the toolbox; `periodic-summary` and `check-user-validity` |
+| Org sync | Exit code 0, org/user/tag/server creation, server authkey (DB verify), sync user authkey prefix, taxonomy enable, disabled user, an unnamed local user disabled and the OIDC user left enabled, a break-glass password login, a sharing group with its organisation, custom warninglist create/update, a warm run that changes nothing and keeps one sharing group |
+| Metrics exporter | Endpoints, core metrics, the instance UUID and base URL, no scrape errors, a setting changed through the API in `misp_setting_manual`, a job that waits in `misp_jobs_queued` while the workers are scaled to none, `misp_scheduled_tasks_enabled` |
 | MISP modules | Enrichment through the modules Service |
-| Logging | JSON lines from configure and none in text, MISP's own log in the web and worker output once, no CakeLog files on disk, the relay forwarding `server-sync.log`, every log file MISP wrote in web and worker relayed |
+| Logging | No text lines from configure, MISP's own log in the web and worker output once, no CakeLog files on disk, the relay forwarding `server-sync.log`, every log file MISP wrote in web and worker relayed |
 | Multi-replica web | The configure Job ran once, two web replicas serve without configuring |
-| Settings | Every MISP setting curated or catalogued, no rejected `cake` setting |
 
 **Files:**
 - `e2e/test_integration.py` -- the suite, in the order above; later sections use the state earlier ones leave
 - `k3s/keycloak.yaml`, `keycloak-realm.json` -- Keycloak and its realm: the MISP client with its roles and the `roles` mapper, an organisation, and a user in it
-- `k3s/garage.yaml`, `e2e/garage.py` -- garage, and its layout, keys and buckets through the admin API
 - `e2e/keycloak.py` -- a Keycloak login through MISP, run in the toolbox; the migration suite uses it too
 - `k3s/external.yaml`, `k3s/postgres-tls.yaml`, `k3s/external-redis.yaml` -- PostgreSQL that takes password logins over TLS only, with its Secrets in the shape of the Percona operator's and a certificate that openssl in its image makes, and Redis with a password
 
@@ -236,12 +231,13 @@ On that copy an org sync renames the migrated organisation, whose name holds spa
 Keycloak organisation's alias by its UUID, and disables the migrated account. That account's
 first Keycloak login links it by its email, enables it again and lands it in the renamed
 organisation. A forced second copy uploads the attachments into an S3 bucket in garage; the
-same checks run on it, plus a new attachment that MISP must write to the bucket. A last run
-copies that bucket into a second one and compares every key and byte.
+same checks run on it, plus a new attachment that MISP must write to the bucket and serve
+back from it. A last run copies that bucket into a second one and compares every key and byte.
 
 **Files:**
 - `e2e/test_migration.py` -- the suite; module fixtures carry each step's state to the next
 - `migrate-source.sql` -- the rows of the source, on top of MISP's 2.5 schema
+- `k3s/garage.yaml`, `e2e/garage.py` -- garage, and its layout, keys and buckets through the admin API
 
 Run with: `mise run test-migration`
 
@@ -261,13 +257,13 @@ GitHub Actions on every push to master, every tag and every pull request:
 | Job | Runs |
 |-----|------|
 | `gate` | Decides what the run does: nothing on a master push whose commit carries a release tag, since the tag run tests and releases that commit; the unit tests only on a draft; no unit tests and no suites on a push to master that merges a pull request, which ran them on the same tree |
-| `build` | The three images into the layer cache. The misp image's final stage is built fresh each run, so it carries the current Debian packages |
+| `build` | The two images into the layer cache, then Trivy on each: CRITICAL and HIGH findings with a fix go to the Security tab, and a CRITICAL one fails the job. The misp image's final stage is built fresh each run, so it carries the current Debian packages |
 | `unit` | The unit tests, the chart lint and every chart render validated against the schemas |
 | `suite` | The stack suites, one job each, in parallel, each on k3s in docker against the images from `build` (`MISP_IMAGE_TAG=ci`): `integration` (the upstream guard, then the integration suite), `hub-spoke`, `migration` and `lifecycle`. Each uploads its JUnit report and, after a failure, the cluster's logs |
-| `scan` | Trivy on the three images, one scan each: CRITICAL and HIGH findings with a fix go to the Security tab, and a CRITICAL one fails the job, which blocks `publish` |
 | `ci-ok` | The one required check: fails when a job failed or was cancelled, and on a draft |
-| `publish-arm64` | After every other job, on a tag: the arm64 images, on an arm64 runner without the layer cache, to GHCR by digest |
-| `publish` | After every other job, on a tag: the amd64 images, one tag per image over both architectures, the chart and the GitHub Release |
+| `publish-plan` | On a tag, once every other job passed: the image tag and chart version of the release, refused when GHCR has either already |
+| `publish-arm64` | After `publish-plan`: the arm64 images, on an arm64 runner without the layer cache, to GHCR by digest, through the same CRITICAL gate as `build` |
+| `publish` | After `publish-arm64`: the amd64 images, one tag per image over both architectures, the chart and the GitHub Release |
 
 ## Environment
 

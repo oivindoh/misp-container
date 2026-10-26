@@ -2,6 +2,9 @@
 # pods on different nodes write here, so the storage class must support
 # ReadWriteMany. With attachments.claim: false (attachments in S3) the chart
 # renders no claim.
+{{- if not (or .Values.attachments.claim .Values.env.PLUGIN_S3_BUCKET_NAME) }}
+{{- fail "attachments.claim is false and env.PLUGIN_S3_BUCKET_NAME is empty: every pod would keep its own attachments, and lose them at restart" }}
+{{- end }}
 {{- if .Values.attachments.claim }}
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -10,8 +13,10 @@ metadata:
   labels:
     {{- include "misp.labels" (dict "root" . "name" "web") | nindent 4 }}
   annotations:
-    # helm uninstall leaves the claim and its data
+    # helm uninstall leaves the claim and its data. Argo CD keeps it on an
+    # Application delete for the Helm annotation, but prunes it without its own.
     helm.sh/resource-policy: keep
+    argocd.argoproj.io/sync-options: Prune=false
 spec:
   accessModes:
     - {{ .Values.attachments.accessMode }}

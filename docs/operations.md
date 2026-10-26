@@ -90,8 +90,11 @@ at all times instead, which leaves every local password open to guessing.
 ## Upgrades
 
 [architecture.md](architecture.md#rollout-order) describes what serves when during a rollout.
-[kubernetes.md](kubernetes.md#install) has the chart versions, and the steps for an upgrade
-from chart 1.x.
+[kubernetes.md](kubernetes.md#install) has the chart versions.
+
+A release can carry a newer MISP pin, whose schema changes are one-way: the configure Job
+applies them, and only a backup goes back. Before each upgrade, back up the database and check
+that the backup restores ([What to back up](#what-to-back-up), [Restore](#restore)).
 
 ### A new PostgreSQL major version
 
