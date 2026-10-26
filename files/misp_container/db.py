@@ -333,69 +333,14 @@ def init_schema() -> None:
     log.info("importing MISP database schema from %s", SCHEMA_FILE)
     with open(SCHEMA_FILE) as f:
         sql = f.read()
-    # The baseline is one transaction (BEGIN ... COMMIT in the file); the
-    # statements run under one connection with commit at the end.
-    conn = _connect(autocommit=False)
+    # A statement without parameters goes to the server as one simple query, and the
+    # file's own BEGIN ... COMMIT makes it one transaction
+    conn = _connect(autocommit=True)
     try:
         with _cursor(conn) as cur:
-            for statement in split_sql_statements(sql):
-                if statement.upper() in ("BEGIN", "COMMIT"):
-                    continue
-                cur.execute(statement)
-        conn.commit()
+            cur.execute(sql)
     finally:
         conn.close()
-
-
-def split_sql_statements(sql: str) -> list[str]:
-    """Split a SQL dump into statements.
-
-    A ';' inside a quoted string or a comment does not end a statement.
-    '--' comments and block comments are dropped.
-    """
-    statements = []
-    buf = []
-    i = 0
-    n = len(sql)
-    quote = None
-    while i < n:
-        c = sql[i]
-        if quote:
-            buf.append(c)
-            if c == "\\" and i + 1 < n:
-                buf.append(sql[i + 1])
-                i += 2
-                continue
-            if c == quote:
-                quote = None
-            i += 1
-            continue
-        if c in ("'", '"'):
-            quote = c
-            buf.append(c)
-            i += 1
-            continue
-        if sql.startswith("--", i):
-            end = sql.find("\n", i)
-            i = n if end == -1 else end
-            continue
-        if sql.startswith("/*", i):
-            end = sql.find("*/", i + 2)
-            i = n if end == -1 else end + 2
-            continue
-        if c == ";":
-            text = "".join(buf).strip()
-            if text:
-                statements.append(text)
-            buf = []
-            i += 1
-            continue
-        buf.append(c)
-        i += 1
-    text = "".join(buf).strip()
-    if text:
-        statements.append(text)
-    return statements
 
 
 # -- Configure lock ----------------------------------------------------------

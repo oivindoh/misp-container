@@ -755,8 +755,8 @@ def _disable_unmanaged_users(client: MISPClient, state: MISPState,
     if managed_emails is None:
         log.warning("the users step failed; no user is disabled this run")
         return count
-    if "true" in (env("LDAPAUTH_ENABLE"), env("APACHESECUREAUTH_LDAP_ENABLE")):
-        log.info("an LDAP login plugin is on and marks none of its users; no unnamed user is disabled")
+    if env("LDAPAUTH_ENABLE") == "true":
+        log.info("the LDAP login plugin is on and marks none of its users; no unnamed user is disabled")
         return count
 
     for email, user in state.users.items():

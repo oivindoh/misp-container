@@ -1097,12 +1097,11 @@ class TestDisableUnmanaged:
         assert _disable_unmanaged_users(client, state, set()) == 0
         client.post.assert_not_called()
 
-    @pytest.mark.parametrize("plugin", ["LDAPAUTH_ENABLE", "APACHESECUREAUTH_LDAP_ENABLE"])
-    def test_ldap_login_disables_no_unnamed_user(self, plugin):
+    def test_ldap_login_disables_no_unnamed_user(self):
         client = MagicMock()
         state = MagicMock()
         state.users = {"ldap@x.com": {"id": 2, "disabled": False, "sub": "", "external_auth_required": "0"}}
-        with patch("misp_container.sync.env", side_effect=lambda k, d="": "true" if k == plugin else d):
+        with patch("misp_container.sync.env", side_effect=lambda k, d="": "true" if k == "LDAPAUTH_ENABLE" else d):
             assert _disable_unmanaged_users(client, state, set()) == 0
         client.post.assert_not_called()
 

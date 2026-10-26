@@ -94,25 +94,6 @@ class TestConfigLock:
         assert connections == []
 
 
-class TestSplitSqlStatements:
-    def test_semicolons_in_comments_and_strings(self):
-        sql = (
-            "-- header; with a semicolon\n"
-            "CREATE TABLE t (\n  a INT -- trailing; comment\n);\n"
-            "/* block; comment */\n"
-            "INSERT INTO t VALUES ('a;b', \"c;d\", 'it''s');\n"
-            "SELECT 1"
-        )
-        assert db.split_sql_statements(sql) == [
-            "CREATE TABLE t (\n  a INT \n)",
-            "INSERT INTO t VALUES ('a;b', \"c;d\", 'it''s')",
-            "SELECT 1",
-        ]
-
-    def test_empty_and_comment_only_input(self):
-        assert db.split_sql_statements("-- only; a comment\n/* and; this */\n") == []
-
-
 def test_an_empty_port_takes_postgres_default():
     with patch.dict(os.environ, {"DB_HOST": "h", "DB_PORT": ""}):
         assert db.settings()["port"] == 5432

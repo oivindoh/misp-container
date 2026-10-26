@@ -88,8 +88,8 @@ At the end of a run the org sync disables:
   identity provider backs.
 - each server the file does not name: it turns its push and pull off.
 
-LdapAuth marks none of the accounts it creates. So with `LDAPAUTH_ENABLE` or
-`APACHESECUREAUTH_LDAP_ENABLE` on, a run disables no account that the file does not name.
+LdapAuth marks none of the accounts it creates. So with `LDAPAUTH_ENABLE` on, a run disables
+no account that the file does not name.
 
 A step that fails part way (one rejected user, one refused server) disables nothing of its
 kind that run: the run exits 1 and the next one starts over.
