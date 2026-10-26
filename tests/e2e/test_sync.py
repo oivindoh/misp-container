@@ -128,9 +128,7 @@ def tag_and_publish(stack, inst, eid, tag):
 
 def run_sync(stack, inst, config: str) -> int:
     """Apply an orgs.yaml to one instance through the org sync in its toolbox; the exit code."""
-    rc, _ = stack[inst].run("python3", "-m", "misp_container.sync", "/tmp/orgs.yaml", files={"/tmp/orgs.yaml": config},
-                            env={"ADMIN_KEY": ADMIN_KEYS[inst], "SYNC_BASE_URL": "http://web:8080"})
-    return rc
+    return stack[inst].org_sync(config, ADMIN_KEYS[inst])[0]
 
 
 def spoke(hub_server=True):

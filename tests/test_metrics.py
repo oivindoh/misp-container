@@ -4,8 +4,7 @@ import base64
 import os
 import ssl
 import sys
-import time
-from unittest.mock import MagicMock, patch, PropertyMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 import redis

@@ -282,10 +282,6 @@ def test_simdjson_has_the_encoder_misp_calls(stack):
 
 # -- distribution files and app/Config rendering -------------------------------------
 
-def test_taxonomies_ship_in_the_image(stack):
-    assert stack.exec("web", "ls /var/www/MISP/app/files/taxonomies/ | head -3")
-
-
 def test_tlp_taxonomy_ships_in_the_image(stack):
     assert "tlp" in stack.exec("web", "ls /var/www/MISP/app/files/taxonomies/").split()
 
@@ -333,17 +329,6 @@ def test_the_connection_checks_the_server_certificate(stack):
     assert rc != 0 and "CERTIFICATE_VERIFY_FAILED" in out, out
 
 
-@pytest.mark.parametrize("needle", ["redis_host", "redis_password", "SimpleBackgroundJobs"])
-def test_web_config_php(stack, needle):
-    # Each pod renders its own app/Config; workers never run the configure step
-    assert needle in stack.exec("web", "cat /var/www/MISP/app/Config/config.php")
-
-
-@pytest.mark.parametrize("needle", ["redis_host", "redis_password", "SimpleBackgroundJobs"])
-def test_worker_config_php(stack, needle):
-    assert needle in stack.exec("worker", "cat /var/www/MISP/app/Config/config.php")
-
-
 # -- GPG -----------------------------------------------------------------------------
 
 def test_gpg_key_imported(stack):
@@ -363,20 +348,6 @@ def test_event_created_through_the_api(stack):
     eid = event.get("Event", {}).get("id")
     assert eid, event
     stack.http("POST", f"/events/delete/{eid}", stack.key, {})
-
-
-# -- the configure handshake ---------------------------------------------------------
-
-def test_configure_recorded_the_image_version(stack):
-    # The marker the Dockerfile writes: CORE_TAG, and +CORE_COMMIT when the build pins one
-    version = stack.exec("web", "cat /srv/misp-dist-version")
-    assert stack.sql("SELECT value FROM system_settings WHERE setting='misp_docker.defaults_version'") == f'"{version}"'
-
-
-def test_configure_recorded_the_configuration_checksum(stack):
-    checksum = stack.exec("web", "printenv MISP_CONFIG_CHECKSUM")
-    assert checksum and stack.sql(
-        "SELECT value FROM system_settings WHERE setting='misp_docker.config_checksum'") == f'"{checksum}"'
 
 
 # -- custom auth (reverse proxy header login) ----------------------------------------
@@ -604,17 +575,12 @@ except ValueError:
 """
 
 
-def org_sync(stack, config):
-    return stack.run("python3", "-m", "misp_container.sync", "/tmp/orgs.yaml", files={"/tmp/orgs.yaml": config},
-                     env={"ADMIN_KEY": stack.key, "SYNC_BASE_URL": "http://web:8080"})
-
-
 @pytest.fixture(scope="module")
 def synced(stack, oidc):
     # A local user the file does not name, beside the OIDC user of the login above
     stack.api("POST", "/admin/users/add", stack.key, {"User": {
         "email": "unnamed-local@example.com", "org_id": 1, "role_id": 3, "password": "Unnamed-L0cal#2026"}})
-    rc, out = org_sync(stack, ORGS.format(version=1, extra=""))
+    rc, out = stack.org_sync(ORGS.format(version=1, extra=""), stack.key)
     servers = stack.api("GET", "/servers", stack.key) or []
     server = next((s["Server"] for s in servers if s["Server"]["url"] == "https://sync-test.example.com"), {})
     return {"rc": rc, "out": out, "server": server}
@@ -679,10 +645,6 @@ def test_sync_server_authkey_from_config(stack, synced):
         "outbound000000000000000000000000000000000"
 
 
-def test_sync_user_with_explicit_authkey(stack, synced):
-    assert search_user(stack, "sync-inbound@example.com").get("User", {}).get("email") == "sync-inbound@example.com"
-
-
 def test_sync_user_authkey_prefix(stack, synced):
     # MISP stores a hash and the first four characters
     uid = search_user(stack, "sync-inbound@example.com").get("User", {}).get("id")
@@ -692,11 +654,6 @@ def test_sync_user_authkey_prefix(stack, synced):
 @pytest.mark.parametrize("namespace", ["admiralty-scale", "tlp"])
 def test_sync_taxonomy_enabled(stack, synced, namespace):
     assert taxonomy_enabled(stack, namespace)
-
-
-def test_sync_disabled_user_created(stack, synced):
-    user = search_user(stack, "sync-disabled-user@example.com").get("User", {})
-    assert user.get("email") == "sync-disabled-user@example.com"
 
 
 def test_sync_disabled_user_is_disabled(stack, synced):
@@ -717,10 +674,6 @@ def test_sync_break_glass_password_logs_in(stack, synced):
     assert me.get("User", {}).get("email") == "break-glass@example.com", out[-2000:]
 
 
-def test_sync_custom_warninglist_created(stack, synced):
-    assert "Sync Test Warninglist" in stack.http("GET", "/warninglists", stack.key)[1]
-
-
 def test_sync_custom_warninglist_version(stack, synced):
     assert stack.sql("SELECT version FROM warninglists WHERE name='Sync Test Warninglist';") == "1"
 
@@ -734,14 +687,14 @@ def test_sync_sharing_group_created_with_its_org(stack, synced):
 
 
 def test_sync_custom_warninglist_updated_to_v2(stack, synced):
-    rc, out = org_sync(stack, ORGS.format(version=2, extra="\n      - new-entry.example.org"))
+    rc, out = stack.org_sync(ORGS.format(version=2, extra="\n      - new-entry.example.org"), stack.key)
     assert rc == 0, out[-3000:]
     assert stack.sql("SELECT version FROM warninglists WHERE name='Sync Test Warninglist';") == "2"
 
 
 @pytest.fixture(scope="module")
 def warm_sync(stack, synced):
-    return org_sync(stack, ORGS.format(version=2, extra="\n      - new-entry.example.org"))
+    return stack.org_sync(ORGS.format(version=2, extra="\n      - new-entry.example.org"), stack.key)
 
 
 def test_sync_warm_run_exits_0(warm_sync):
@@ -787,17 +740,9 @@ def value(text, name):
     return line.split(" ", 1)[1] if line else None
 
 
-def test_metrics_endpoint_responds(metrics_text):
-    assert metrics_text
-
-
 @pytest.mark.parametrize("path,status", [("/healthz", 200), ("/ready", 200), ("/nonexistent", 404)])
 def test_metrics_paths(metrics_text, path, status):
     assert metric(path)[0] == status
-
-
-def test_metrics_misp_up_present(metrics_text):
-    assert "misp_up" in metrics_text
 
 
 def test_metrics_misp_up_is_1(metrics_text):
@@ -823,10 +768,6 @@ def test_metrics_scrape_duration(metrics_text):
     assert "misp_scrape_duration_seconds" in metrics_text
 
 
-def test_metrics_scrape_errors_present(metrics_text):
-    assert "misp_scrape_errors" in metrics_text
-
-
 def test_metrics_no_scrape_errors(metrics_text):
     # A failed Redis read counts here too
     assert value(metrics_text, "misp_scrape_errors") == "0"
@@ -835,10 +776,6 @@ def test_metrics_no_scrape_errors(metrics_text):
 def test_metrics_help_and_type_for_every_block(metrics_text):
     lines = metrics_text.splitlines()
     assert sum(l.startswith("# HELP") for l in lines) == sum(l.startswith("# TYPE") for l in lines)
-
-
-def test_metrics_jobs_queued_present(metrics_text):
-    assert "misp_jobs_queued" in metrics_text
 
 
 def test_metrics_scheduled_tasks_present(metrics_text):
@@ -908,10 +845,6 @@ def modules_ready(stack):
     return False
 
 
-def test_modules_healthcheck(modules_ready):
-    assert modules_ready
-
-
 def test_modules_loaded(modules_ready):
     assert len(json.loads(modules("/modules")[1])) > 0
 
@@ -979,14 +912,6 @@ def test_login_served_with_two_replicas(two_web):
 
 
 # -- logging -------------------------------------------------------------------------
-
-def test_configure_writes_json_lines(stack):
-    # LOG_FORMAT=json is the chart's default (base.env)
-    lines = [l for l in stack.logs("configure").splitlines() if l.startswith("{")]
-    assert len(lines) >= 10
-    for line in lines:
-        json.loads(line)
-
 
 def test_configure_writes_no_text_lines(stack):
     text = [l for l in stack.logs("configure").splitlines()

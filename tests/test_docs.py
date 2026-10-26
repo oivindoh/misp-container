@@ -13,7 +13,6 @@ import sys
 import tomllib
 from pathlib import Path
 
-import pytest
 import yaml
 
 REPO = Path(__file__).resolve().parents[1]
@@ -21,7 +20,7 @@ sys.path.insert(0, str(REPO / "files"))
 sys.path.insert(0, str(REPO / "scripts"))
 
 import chart  # noqa: E402
-from misp_container import db, task  # noqa: E402
+from misp_container import db  # noqa: E402
 
 DOCS = sorted([REPO / "README.md", REPO / "DEVELOPING.md", REPO / "tests" / "README.md",
                *(REPO / "docs").glob("*.md")])

@@ -253,8 +253,7 @@ def volume_copy(stack, forced_copy):
 def keycloak_team(stack, volume_copy):
     """An org sync that renames the migrated organisation to its Keycloak organisation's alias."""
     before = (stack.api("GET", f"/organisations/view/{ORG_UUID}", ADMIN_KEY) or {}).get("Organisation", {})
-    rc, out = stack.run("python3", "-m", "misp_container.sync", "/tmp/orgs.yaml", files={"/tmp/orgs.yaml": KEYCLOAK_ORGS},
-                        env={"ADMIN_KEY": ADMIN_KEY, "SYNC_BASE_URL": "http://web:8080"})
+    rc, out = stack.org_sync(KEYCLOAK_ORGS, ADMIN_KEY)
     after = (stack.api("GET", f"/organisations/view/{ORG_UUID}", ADMIN_KEY) or {}).get("Organisation", {})
     user = (stack.api("GET", f"/admin/users/view/{MIGRATED_USER_ID}", ADMIN_KEY) or {}).get("User", {})
     return {"rc": rc, "out": out, "before": before, "after": after, "user": user}

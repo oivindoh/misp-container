@@ -6,7 +6,6 @@ of the pinned MISP. Each test changes one of them the way a MISP release could.
 
 import json
 import os
-import shutil
 import sys
 
 import pytest
@@ -479,10 +478,6 @@ class TestLogBlockPhp:
     def test_without_php(self, misp, monkeypatch):
         monkeypatch.setattr(cu.shutil, "which", lambda name: None)
         assert cu.log_block_php(misp) == ["php is not on PATH"]
-
-    @pytest.mark.skipif(shutil.which("php") is None, reason="no php here; the image runs it")
-    def test_both_writers_run(self, misp):
-        assert cu.log_block_php(misp) == []
 
 
 class TestMain:

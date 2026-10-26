@@ -190,8 +190,7 @@ def scripts() -> str:
 def tests() -> str:
     e2e = [(f"`{p.name}`", docstring(p)) for p in sorted((REPO / "tests/e2e").glob("*.py"))]
     unit = [(f"`{p.name}`", docstring(p)) for p in sorted((REPO / "tests").glob("test_*.py"))]
-    other = [(f"`{rel(p)}`", comment_block(p)) for p in sorted((REPO / "tests").glob("*.sh"))]
-    other += [(f"`{rel(p)}`", comment_block(p)) for p in sorted((REPO / "tests/k3s").glob("*.yaml"))]
+    other = [(f"`{rel(p)}`", comment_block(p)) for p in sorted((REPO / "tests/k3s").glob("*.yaml"))]
     return ("## Tests: `tests/`\n\nThe stack suites, their harness and the smoke test, in pytest (`tests/e2e/`):\n\n"
             + table(("Module", "Does"), e2e)
             + "\n\nUnit tests (`tests/`, no containers):\n\n" + table(("Module", "Tests"), unit)

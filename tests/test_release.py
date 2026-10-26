@@ -66,6 +66,20 @@ class TestNextChartVersion:
         assert release.next_chart_version("3.0.0-wip.7", "3.0.0-wip.7", "normal") == "3.0.0"
 
 
+class TestWipChartVersion:
+    def test_before_the_first_release_the_tags_version(self):
+        assert release.wip_chart_version(None, "v3.0.0-wip.1", "normal") == "3.0.0-wip.1"
+
+    def test_after_a_pre_release_its_version_with_the_new_suffix(self):
+        assert release.wip_chart_version("4.1.0-wip.1", "v3.1.0-wip.2", "normal") == "4.1.0-wip.2"
+
+    @pytest.mark.parametrize("kind, expected", [("hotfix", "4.0.1-wip.1"), ("normal", "4.1.0-wip.1"),
+                                                ("breaking", "5.0.0-wip.1")])
+    def test_after_a_release_the_next_version_of_the_kind(self, kind, expected):
+        # A MISP 3.1 work in progress after chart 4.0.0 never goes back to 3.1.0
+        assert release.wip_chart_version("4.0.0", "v3.1.0-wip.1", kind) == expected
+
+
 def test_set_chart_changes_the_two_versions_only():
     text = '# comment\nversion: 1.0.0\n# about the app\nappVersion: "2.5.37"\nname: misp\n'
     assert release.set_chart(text, "1.1.0", "2.5.48") == \
@@ -97,6 +111,7 @@ class TestMain:
         monkeypatch.setattr(release, "REPO", work)
         monkeypatch.setattr(release, "CHART_YAML", work / "deploy/chart/Chart.yaml")
         monkeypatch.setattr("builtins.input", lambda prompt: "y")
+        monkeypatch.setattr(release, "published", lambda version: False)
         return work
 
     def test_the_first_release_tags_head_when_the_files_name_it(self, repo):
@@ -110,3 +125,8 @@ class TestMain:
         assert self.git(repo, "log", "-1", "--format=%s") == "release v3.0.0-wip.2, chart 3.0.0-wip.2"
         assert self.git(repo, "rev-list", "-n", "1", "v3.0.0-wip.2") == self.git(repo, "rev-parse", "HEAD")
         assert "appVersion: \"3.0.0-wip.2\"" in (repo / "deploy/chart/Chart.yaml").read_text()
+
+    def test_a_chart_version_ghcr_has_is_refused(self, repo, monkeypatch):
+        monkeypatch.setattr(release, "published", lambda version: True)
+        assert release.main([]) == 1
+        assert self.git(repo, "tag", "--list") == ""

@@ -101,8 +101,10 @@ older image. Each pin move is a release of its own.
 ## Releases
 
 While MISP is a work-in-progress pin, every release is the next pre-release of the version the
-pin prepares, the same for the git tag, the images and the chart: `v3.0.0-wip.1`, then
-`v3.0.0-wip.2` and on. `mise run release` takes no kind then.
+pin prepares, for the git tag and the images: `v3.0.0-wip.1`, then `v3.0.0-wip.2` and on. The
+chart takes the version that the next release of the kind would take, with the same suffix:
+`3.0.0-wip.1` before the first release, `4.1.0-wip.1` after chart `4.0.0`. The kind defaults to
+`normal` then.
 
 Once the pin is a MISP release tag such as `v3.0.0`, each release has a kind. The git tag and
 the images carry the MISP version, with `-rN` from the second release of it on, and the chart
@@ -120,8 +122,9 @@ without the suffix.
 2. Computes the next tag from the `Dockerfile` pin and the tags that exist.
 3. For a kind, reads the chart version that the previous release published, from the
    `Chart.yaml` of its tag, and raises the part the kind names.
-4. Sets `version` and `appVersion` in `deploy/chart/Chart.yaml`.
-5. Shows the plan and the diff. On a yes it commits and tags; on a no it restores the files.
+4. Refuses a chart version that GHCR has already: `helm push` would replace it.
+5. Sets `version` and `appVersion` in `deploy/chart/Chart.yaml`.
+6. Shows the plan and the diff. On a yes it commits and tags; on a no it restores the files.
 
 Publish the release. `--atomic` lands the branch and the tag together:
 

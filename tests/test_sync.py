@@ -730,8 +730,8 @@ class TestApplyServers:
         state.tag_id = lambda name: None  # no local tags needed for pull rules
 
         teams = [{"uuid": "ee8e368c-1587-4630-99f7-0b7a3ff2674f", "name": "T",
-                  "sync_users": [], "tags": [],
-                  "users": [], "feide_users": [], "service_users": [],
+                  "tags": [],
+                  "users": [],
                   "servers": [{
                       "name": "Remote",
                       "url": "https://remote.example.com",
@@ -777,8 +777,8 @@ class TestApplyServers:
         state.tag_id = lambda name: {"tlp:white": 10, "rpz:blocked": 20}.get(name)
 
         teams = [{"uuid": "ee8e368c-1587-4630-99f7-0b7a3ff2674f", "name": "T",
-                  "sync_users": [], "tags": [],
-                  "users": [], "feide_users": [], "service_users": [],
+                  "tags": [],
+                  "users": [],
                   "servers": [{
                       "name": "Push Server",
                       "url": "https://push.example.com",
@@ -806,8 +806,8 @@ class TestApplyServers:
         state.tag_id = lambda name: None
 
         teams = [{"uuid": "ee8e368c-1587-4630-99f7-0b7a3ff2674f", "name": "T",
-                  "sync_users": [], "users": [], "feide_users": [],
-                  "service_users": [], "tags": [],
+                  "users": [],
+                  "tags": [],
                   "servers": [{
                       "name": "Remote", "url": "https://remote.com",
                       "authkey": "key-from-remote-operator-abcdef123456789",
@@ -842,8 +842,8 @@ class TestApplyServers:
         }}
 
         teams = [{"uuid": "ee8e368c-1587-4630-99f7-0b7a3ff2674f", "name": "T",
-                  "sync_users": [], "users": [], "feide_users": [],
-                  "service_users": [], "tags": [],
+                  "users": [],
+                  "tags": [],
                   "servers": [{
                       "name": "Remote", "url": "https://remote.com",
                       "pull": True, "push": False,
@@ -866,8 +866,8 @@ class TestApplyServers:
         state.tag_id = lambda name: None
 
         teams = [{"uuid": "ee8e368c-1587-4630-99f7-0b7a3ff2674f", "name": "T",
-                  "sync_users": [], "users": [], "feide_users": [],
-                  "service_users": [], "tags": [],
+                  "users": [],
+                  "tags": [],
                   "servers": [{
                       "name": "Remote", "url": "https://remote.com",
                       "authkey": "my-explicit-key-from-config-abcdef1234567890",
@@ -903,8 +903,8 @@ class TestApplyServers:
         }}
 
         teams = [{"uuid": "ee8e368c-1587-4630-99f7-0b7a3ff2674f", "name": "T",
-                  "sync_users": [], "users": [], "feide_users": [],
-                  "service_users": [], "tags": [],
+                  "users": [],
+                  "tags": [],
                   "servers": [{
                       "name": "Remote", "url": "https://remote.com",
                       "authkey": "new-key-from-config-0000000000000000000000",
@@ -925,8 +925,6 @@ class TestApplyServers:
         """Authkey should support ${ENV_VAR} expansion."""
         os.environ["TEST_SERVER_KEY"] = "env-injected-key-for-remote-server-000"
         try:
-            config = load_config(file_path="/dev/null")  # empty
-            # Build a config manually with env var
             raw = {
                 "teams": [{
                     "uuid": "4f1ed2b2-1821-49da-bf2c-b7ab639d9b19",

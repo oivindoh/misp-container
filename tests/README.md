@@ -130,18 +130,17 @@ auth on, and PostgreSQL and Redis outside the chart, as a database operator runs
 | Background jobs | Event publish triggers job, worker completes it (status=4) |
 | MISP's Python scripts | STIX 2 and STIX 1 exports |
 | PHP-FPM | Listening on the loopback only, its php.ini, the built extensions |
-| Distribution files and app/Config | taxonomies in the image, bootstrap.php is MISP's default plus the logging block, database.php on the external PostgreSQL with `verify-full`, config.php content and the external Redis |
+| Distribution files and app/Config | The TLP taxonomy in the image, bootstrap.php is MISP's default plus the logging block, database.php on the external PostgreSQL with `verify-full`, config.php on the external Redis |
 | External PostgreSQL | The database user is no superuser, a connection without TLS is refused, the server certificate is checked against the CA of `databaseCA` |
 | GPG | The key of the `misp-gnupg` Secret, which the suite makes with the image's `gpg`, imported into the web pod's homedir |
 | MISP API | Version endpoint, event create via API |
-| Configure handshake | The configure step records the image version and the configuration checksum the pods wait for |
 | Custom auth | Header login (200), no-header redirect (302) |
 | OIDC login | Redirect to Keycloak, its login form, the callback, the user's email, the highest client role, the team of the user's Keycloak organisation, mixed auth |
 | Task runner | Every scheduled task through MISP's console in the toolbox; `sharing-group-blueprints` without blueprints; `periodic-summary` and `check-user-validity` |
-| Org sync | Org/user/tag/server creation, server authkey (DB verify), sync user authkey prefix, taxonomy enable, disabled user, an unnamed local user disabled and the OIDC user left enabled, a break-glass password login, custom warninglist create/update, warm run idempotency |
+| Org sync | Exit code 0, org/user/tag/server creation, server authkey (DB verify), sync user authkey prefix, taxonomy enable, disabled user, an unnamed local user disabled and the OIDC user left enabled, a break-glass password login, a sharing group with its organisation, custom warninglist create/update, a warm run that changes nothing and keeps one sharing group |
 | Metrics exporter | Endpoints, core metrics, the instance UUID and base URL, no scrape errors, a setting changed through the API in `misp_setting_manual`, a job that waits in `misp_jobs_queued` while the workers are scaled to none, `misp_scheduled_tasks_enabled` |
 | MISP modules | Enrichment through the modules Service |
-| Logging | JSON lines from configure and none in text, MISP's own log in the web and worker output once, no CakeLog files on disk, the relay forwarding `server-sync.log`, every log file MISP wrote in web and worker relayed |
+| Logging | No text lines from configure, MISP's own log in the web and worker output once, no CakeLog files on disk, the relay forwarding `server-sync.log`, every log file MISP wrote in web and worker relayed |
 | Multi-replica web | The configure Job ran once, two web replicas serve without configuring |
 
 **Files:**

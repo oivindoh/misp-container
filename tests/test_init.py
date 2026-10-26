@@ -2,7 +2,6 @@
 
 import os
 from unittest.mock import patch
-from pathlib import Path
 
 import pytest
 import sys
@@ -34,6 +33,19 @@ class TestGenerateDatabaseConfig:
     def test_an_empty_port_takes_postgres_default(self, tmp_path):
         assert "'port' => 5432," in self.render(tmp_path, {"DB_PORT": ""})
 
+    def test_a_password_with_a_quote(self, tmp_path):
+        assert "'password' => 'pa\\'ss\\\\word'," in self.render(tmp_path, {"DB_PASSWORD": "pa'ss\\word"})
+
+    @pytest.mark.parametrize("tls, sslmode", [
+        ({}, "prefer"),
+        ({"DB_SSLMODE": "verify-full"}, "verify-full;sslrootcert=system"),
+        ({"DB_SSLMODE": "verify-ca", "DB_SSLROOTCERT": "/etc/misp-docker/db-ca/ca.crt"},
+         "verify-ca;sslrootcert=/etc/misp-docker/db-ca/ca.crt"),
+    ])
+    def test_sslmode_follows_db_sslmode(self, tmp_path, tls, sslmode):
+        content = self.render(tmp_path, {"DB_SSLMODE": "", "DB_SSLROOTCERT": "", **tls})
+        assert f"'sslmode' => '{sslmode}'," in content
+
 
 class TestGenerateEmailConfig:
     """Generate email.php from environment variables."""
@@ -51,6 +63,11 @@ class TestGenerateEmailConfig:
         assert "smtp.example.com" in content
         assert "587" in content
         assert "misp@example.com" in content
+
+    def test_a_port_that_is_no_number_falls_back(self, tmp_path):
+        with patch.dict(os.environ, {"MISP_EMAIL": "m@x", "SMTP_FQDN": "smtp", "SMTP_PORT": ""}):
+            _generate_email_config(tmp_path)
+        assert "'port'          => 25," in (tmp_path / "email.php").read_text()
 
 
 class TestCheckWritable:
@@ -237,34 +254,3 @@ class TestPurgeModelCache:
         assert not any((tmp_path / "cache/models").iterdir())
         assert not any((tmp_path / "cache/persistent").iterdir())
         assert (tmp_path / "cache/views/page").exists() and (tmp_path / "logs/error.log").exists()
-
-
-class TestGeneratedPhpEscaping:
-    def test_database_password_with_quote(self, tmp_path):
-        env_vars = {"DB_HOST": "db", "DB_USER": "u", "DB_PORT": "5432",
-                    "DB_PASSWORD": "pa'ss\\word", "DB_NAME": "misp", "DB_SSLMODE": "prefer"}
-        with patch.dict(os.environ, env_vars), patch("misp_container.init.MISP_CONFIG", str(tmp_path)):
-            write_database_php(database_fields())
-        content = (tmp_path / "database.php").read_text()
-        assert "'password' => 'pa\\'ss\\\\word'," in content
-        assert "'port' => 5432," in content
-
-    @pytest.mark.parametrize("tls, sslmode", [
-        ({}, "prefer"),
-        ({"DB_SSLMODE": "verify-full"}, "verify-full;sslrootcert=system"),
-        ({"DB_SSLMODE": "verify-ca", "DB_SSLROOTCERT": "/etc/misp-docker/db-ca/ca.crt"},
-         "verify-ca;sslrootcert=/etc/misp-docker/db-ca/ca.crt"),
-    ])
-    def test_database_sslmode_follows_db_sslmode(self, tmp_path, tls, sslmode):
-        env_vars = {"DB_HOST": "db", "DB_USER": "u", "DB_PORT": "5432", "DB_PASSWORD": "p",
-                    "DB_NAME": "misp", "DB_SSLMODE": "", "DB_SSLROOTCERT": "", **tls}
-        with patch.dict(os.environ, env_vars), patch("misp_container.init.MISP_CONFIG", str(tmp_path)):
-            write_database_php(database_fields())
-        assert f"'sslmode' => '{sslmode}'," in (tmp_path / "database.php").read_text()
-
-    def test_email_port_falls_back_when_not_numeric(self, tmp_path):
-        env_vars = {"MISP_EMAIL": "m@x", "SMTP_FQDN": "smtp", "SMTP_PORT": ""}
-        with patch.dict(os.environ, env_vars):
-            _generate_email_config(tmp_path)
-        content = (tmp_path / "email.php").read_text()
-        assert "'port'          => 25," in content
