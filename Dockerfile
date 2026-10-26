@@ -114,9 +114,12 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 WORKDIR /tmp
 COPY --from=misp-source --chown=0:0 --chmod=0644 /var/www/MISP/app/composer.json /tmp/composer.json
 COPY --from=composer:2@sha256:1364b5b9132ab4c42ea3be53e894572c32fe75a512cb3b1c3903fcc9bce53dcc /usr/bin/composer /usr/bin/composer
+# certmichelin/openid-connect-php accepts any phpseclib from 3.0.47 on, but its Jwks.php
+# needs phpseclib 3's EC key formats: with phpseclib 4 every OIDC login fails
 RUN composer require --no-update --no-interaction \
         elasticsearch/elasticsearch:^8.19 \
         certmichelin/openid-connect-php:^1.3 \
+        phpseclib/phpseclib:^3.0 \
         aws/aws-sdk-php:^3.398 && \
     php -r '$j = json_decode(file_get_contents("composer.json"), true); \
         $j["extra"]["aws/aws-sdk-php"] = ["S3", "Sts"]; \
