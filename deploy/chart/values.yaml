@@ -2,10 +2,10 @@
 # docs/kubernetes.md and AGENTS.md take their tables from these comments. A key
 # with enabled: false is a component: an optional part that a release switches on.
 
-# The three images, all with one tag. An empty tag is the chart's appVersion.
+# The two images, with one tag. An empty tag is the chart's appVersion. The web
+# pod's caddy container runs the misp image.
 image:
   misp: ghcr.io/oivindoh/misp-container
-  caddy: ghcr.io/oivindoh/misp-container-caddy
   modules: ghcr.io/oivindoh/misp-container-modules
   tag: ""
   pullPolicy: IfNotPresent

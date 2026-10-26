@@ -25,7 +25,7 @@ import pytest
 import garage
 import keycloak
 import manifests
-from cluster import IMAGES, Cluster, build_images, image_engine, image_tag
+from cluster import Cluster, build_images
 from misp_container import WORKER_QUEUES
 from misp_container.logrelay import FILES as RELAYED
 from stack import K3S, REPO, VALUES, Release, gnupg_key, merge, scratch_dir, server_certificate, values_file
@@ -87,11 +87,8 @@ def test_runs_as_uid_1000(stack, service):
     assert stack.exec(service, "id -u") == "1000"
 
 
-def test_the_caddy_image_runs_as_uid_1000():
-    # Caddy runs on scratch, with no shell: read its image user
-    user = subprocess.run([*image_engine(), "image", "inspect", f"{IMAGES[1]}:{image_tag()}",
-                           "--format", "{{.Config.User}}"], capture_output=True, text=True).stdout.strip()
-    assert user.split(":")[0] == "1000"
+def test_caddy_runs_as_uid_1000(stack):
+    assert stack.exec("caddy", "id -u") == "1000"
 
 
 # -- HTTP and caddy ------------------------------------------------------------------
@@ -248,23 +245,33 @@ def test_stix1_export_runs_python_stix(stack, stix_event):
 
 # -- PHP-FPM -------------------------------------------------------------------------
 
-def test_fpm_listens_on_9002(stack):
-    # 9002 is 0x232A in /proc/net/tcp6
-    assert ":232A" in stack.exec("web", "cat /proc/net/tcp6")
+def test_fpm_listens_on_the_loopback_only(stack):
+    # 127.0.0.1:9002 is 0100007F:232A in /proc/net/tcp; no address of the pod's
+    listening = [line.split()[1] for line in stack.exec("web", "cat /proc/net/tcp /proc/net/tcp6").splitlines()
+                 if line.split()[3:4] == ["0A"]]
+    assert "0100007F:232A" in listening and not [a for a in listening if a.endswith(":232A") and a != "0100007F:232A"]
 
 
-def test_fpm_php_ini_turns_upload_progress_off(stack):
-    # PHP-FPM starts with -c /etc/misp-docker/php.ini; the CLI reads the same file here,
-    # and its startup notices go to stderr
-    rc, out = stack.exec_rc("web", "php -c /etc/misp-docker/php.ini "
-                                   "-r 'var_dump(ini_get(\"session.upload_progress.enabled\"));' 2>/dev/null")
-    assert (rc, out) == (0, 'string(1) "0"'), out
+def test_fpm_loads_debians_production_ini_and_ours(stack):
+    # PHP-FPM reads Debian's production php.ini, then php.d through PHP_INI_SCAN_DIR (web.py);
+    # the CLI loads the same files here, and its startup notices go to stderr
+    rc, out = stack.exec_rc("web", "PHP_INI_SCAN_DIR=:/etc/misp-docker/php.d php -c /etc/php/8.4/fpm/php.ini "
+                                   "-r 'var_dump(ini_get(\"session.upload_progress.enabled\"), "
+                                   "ini_get(\"zend.exception_ignore_args\"));' 2>/dev/null")
+    assert (rc, out.split()) == (0, ['string(1)', '"0"', 'string(1)', '"1"']), out
 
 
 @pytest.mark.parametrize("extension", ["rdkafka", "zstd", "brotli", "simdjson", "ssdeep"])
-def test_php_loads_the_built_extension(stack, extension):
+def test_php_loads_the_extension(stack, extension):
     # PHP skips an extension it cannot load with a warning and runs on without it
     assert extension in stack.exec("web", "php -m 2>/dev/null").split()
+
+
+@pytest.mark.parametrize("extension", ["brotli", "zstd"])
+def test_compression_extensions_link_debians_library(stack, extension):
+    # A bundled copy of the library escapes Debian's security fixes and Trivy, and MISP
+    # decodes compressed request bodies before authentication
+    assert "bundled" not in stack.exec("web", f"php --ri {extension} 2>/dev/null").lower()
 
 
 def test_simdjson_has_the_encoder_misp_calls(stack):

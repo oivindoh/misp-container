@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import ast
 import json
-import operator
 import re
 import shutil
 import subprocess
@@ -47,11 +46,6 @@ ORG_IMG_HELPER = "app/View/Helper/OrgImgHelper.php"
 # Where MISP keeps the files of each upload rule of Server::getFileRules(): the
 # chart mounts the attachments claim at these paths
 IMAGE_DIRS = {"orgs": "files/img/orgs", "img": "files/img/custom"}
-# The packages MISP's own scripts import, and the pins the image installs for them
-MISP_REQUIREMENTS = "requirements.txt"
-OUR_REQUIREMENTS = FILES / "requirements-misp.txt"
-COMPARE = {"==": operator.eq, "!=": operator.ne, ">=": operator.ge, ">": operator.gt,
-           "<=": operator.le, "<": operator.lt}
 # The directories of MISP's own PHP code, and the parts in them that are not MISP's
 MISP_PHP = ("app/Model", "app/Lib", "app/Controller", "app/Console", "app/Plugin")
 NOT_MISP_PARTS = {"cakephp", "Vendor"}
@@ -127,8 +121,8 @@ def job_keys(root: Path) -> list[str]:
         "a running job at running:<queue>:<job id>":
             r"self::RUNNING_JOB_PREFIX\s*\.\s*':'\s*\.\s*\$worker->queue\(\)\s*\.\s*':'\s*\.\s*\$job->id\(\)",
     }
-    problems = [f"MISP no longer stores {what}. misp_jobs_queued reads 0 and the task runner's backlog "
-                f"check never holds a run" for what, pattern in expected.items() if not re.search(pattern, source)]
+    problems = [f"MISP no longer stores {what}. misp_jobs_queued misses those jobs"
+                for what, pattern in expected.items() if not re.search(pattern, source)]
     prefix = re.search(r"RUNNING_JOB_PREFIX\s*=\s*'([^']+)'", source)
     if prefix and prefix.group(1) != RUNNING_PREFIX:
         problems.append(f"MISP's running-job prefix is {prefix.group(1)!r}; RUNNING_PREFIX is {RUNNING_PREFIX!r}")
@@ -245,33 +239,6 @@ def api_routes(root: Path, routes: dict[str, list[str]] | None = None) -> list[s
 
 
 # -- bootstrap.php and the logging block ---------------------------------------------
-
-def _blocks(source: str, opening: str) -> list[tuple[int, int]]:
-    """The spans of the brace blocks that follow each occurrence of opening."""
-    spans = []
-    for found in re.finditer(opening, source):
-        start = source.find("{", found.end())
-        depth, i = 0, start
-        while i < len(source):
-            depth += {"{": 1, "}": -1}.get(source[i], 0)
-            if depth == 0:
-                spans.append((start, i))
-                break
-            i += 1
-    return spans
-
-
-def cakeresque(root: Path) -> list[str]:
-    source = strip_php_comments(bootstrap_default(root).read_text())
-    guarded = _blocks(source, r"if\s*\(\s*empty\(\s*Configure::read\(\s*'SimpleBackgroundJobs\.enabled'\s*\)\s*\)\s*\)")
-    loose = [m.start() for m in re.finditer(r"CakeResque", source)
-             if not any(a < m.start() < b for a, b in guarded)]
-    if loose:
-        return ["bootstrap.default.php loads CakeResque outside if (empty(SimpleBackgroundJobs.enabled)). The image "
-                "drops iglocska/cake-resque from composer.json (Dockerfile, stage composer-prep), so MISP stops "
-                "at start with MissingPluginException. Remove the load in init.py prepare_config()"]
-    return []
-
 
 def file_streams(source: str) -> dict[str, str]:
     """{stream name: log file} of the CakeLog FileLog streams bootstrap.php configures."""
@@ -396,60 +363,6 @@ def image_paths(root: Path) -> list[str]:
     return problems
 
 
-# -- the Python packages of MISP's scripts -------------------------------------------
-
-def package(name: str) -> str:
-    """A package name as PyPI compares it: case, dots and underscores do not count."""
-    return re.sub(r"[-_.]+", "-", name).lower()
-
-
-def release(version: str) -> tuple[int, ...] | None:
-    """1.2.10 -> (1, 2, 10) and 1.2.0 -> (1, 2); None for a version with letters, which this check cannot order."""
-    if not re.fullmatch(r"\d+(\.\d+)*", version):
-        return None
-    parts = [int(p) for p in version.split(".")]
-    while len(parts) > 1 and parts[-1] == 0:
-        parts.pop()
-    return tuple(parts)
-
-
-def pinned(text: str) -> dict[str, str]:
-    """{package: version} of the name==version lines of a requirements file."""
-    pins = {}
-    for line in text.splitlines():
-        found = re.match(r"\s*([A-Za-z0-9][A-Za-z0-9._-]*)\s*==\s*([^\s;#]+)", line)
-        if found:
-            pins[package(found.group(1))] = found.group(2)
-    return pins
-
-
-def python_requirements(root: Path) -> list[str]:
-    """requirements-misp.txt pins every package of MISP's requirements.txt at a version MISP accepts."""
-    pins = pinned(OUR_REQUIREMENTS.read_text())
-    problems = []
-    for line in read(root, MISP_REQUIREMENTS).splitlines():
-        line = line.split("#", 1)[0].strip()
-        if not line:
-            continue
-        found = re.match(r"([A-Za-z0-9][A-Za-z0-9._-]*)(\[[^\]]*\])?\s*([^;]*)", line)
-        if not found:
-            problems.append(f"cannot read the requirement {line!r}: check it by hand")
-            continue
-        name = package(found.group(1))
-        if name not in pins:
-            problems.append(f"MISP's scripts need {line}, which no pin covers: run mise run misp-requirements")
-            continue
-        for clause in filter(None, (c.strip() for c in found.group(3).split(","))):
-            spec = re.fullmatch(r"(==|!=|>=|<=|>|<)\s*(\S+)", clause)
-            have, want = release(pins[name]), release(spec.group(2)) if spec else None
-            if not spec or have is None or want is None:
-                problems.append(f"cannot compare the pin {name}=={pins[name]} with {clause}: check it by hand")
-            elif not COMPARE[spec.group(1)](have, want):
-                problems.append(f"MISP's scripts need {name}{clause}, the pin is {pins[name]}: "
-                                "run mise run misp-requirements")
-    return problems
-
-
 CHECKS = [
     Check("worker-queues", BACKGROUND_JOBS, "files/misp_container/__init__.py WORKER_QUEUES", worker_queues,
           fails_when="adds or drops a job queue"),
@@ -464,8 +377,6 @@ CHECKS = [
     Check("attachment-keys", f"{ATTACHMENT_TOOL}, {AWS_S3_CLIENT}",
           "files/misp_container/migrate.py attachment_key(), files/misp_container/s3.py", attachment_keys,
           fails_when="keys attachments another way, or stops sending path-style S3 requests"),
-    Check("cakeresque", BOOTSTRAP, "Dockerfile stage composer-prep", cakeresque,
-          fails_when="loads CakeResque while SimpleBackgroundJobs is on"),
     Check("cakelog-streams", BOOTSTRAP, "files/misp_container/init.py LOG_BLOCK", cakelog_streams,
           fails_when="configures a CakeLog file stream that the logging block does not drop"),
     Check("shell-streams", CONSOLE_SHELL, "files/misp_container/init.py LOG_BLOCK", shell_streams,
@@ -476,8 +387,6 @@ CHECKS = [
     Check("image-paths", f"{SERVER_MODEL}, {ORG_IMG_HELPER}",
           "deploy/chart/templates/_helpers.tpl misp.appVolumeMounts", image_paths,
           fails_when="uploads org logos or custom images to, or reads them from, a directory the volumes do not mount"),
-    Check("python-requirements", MISP_REQUIREMENTS, "files/requirements-misp.txt", python_requirements,
-          fails_when="needs a Python package, or a version of one, that the pins do not give (mise run misp-requirements)"),
 ]
 PHP_CHECK = Check("log-block-php", "php", "files/misp_container/init.py LOG_BLOCK", log_block_php,
           fails_when="cannot run the logging block, in either format")

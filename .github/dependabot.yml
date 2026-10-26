@@ -1,3 +1,4 @@
+# One weekly pull request per ecosystem: each one runs the four stack suites.
 version: 2
 updates:
   # Keep GitHub Actions pinned SHAs up to date, all in one PR: the workflows and
@@ -17,10 +18,12 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    groups:
+      base-images:
+        patterns: ["*"]
 
   # The images of the chart (the postgres and redis components, in values.yaml) and of
-  # the stack suites' test services (tests/k3s), one PR per image for both directories.
-  # MariaDB stays on its LTS line, 11.8.
+  # the stack suites' test services (tests/k3s). MariaDB stays on its LTS line, 11.8.
   - package-ecosystem: docker
     directories:
       - /deploy/chart
@@ -29,7 +32,7 @@ updates:
       interval: weekly
     groups:
       images:
-        group-by: dependency-name
+        patterns: ["*"]
     ignore:
       - dependency-name: library/mariadb
         update-types: ["version-update:semver-major", "version-update:semver-minor"]
@@ -43,3 +46,6 @@ updates:
       - files/requirements-misp.txt
     schedule:
       interval: weekly
+    groups:
+      python:
+        patterns: ["*"]

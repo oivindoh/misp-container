@@ -1,12 +1,10 @@
-# syntax=docker/dockerfile:1
 #
-# Non-root MISP 2.5 Docker image
+# Non-root MISP 3.0 image
 #
 # Build targets:
-#   final    PHP-FPM, workers, configure, org sync, metrics (one image, a module per role)
-#   caddy    static files + FastCGI reverse proxy (scratch)
+#   final    PHP-FPM, caddy, workers, configure, org sync, metrics (one image, a module per role)
 #   modules  misp-modules (distroless)
-# Build all three: mise run build (scripts/build.py)
+# Build both: mise run build (scripts/build.py)
 #
 
 # MISP 3.0 Early Access: the 3.0_wip branch, pinned to a commit (DEVELOPING.md, MISP 3.0)
@@ -15,17 +13,22 @@ ARG CORE_COMMIT=8888b98919f3d4788be0b7dd2c652f1e85281029
 ARG PHP_VER=20240924
 # The runtime packages of the final image. php-base, which the build stages
 # start from, installs the same set, so composer and the extension builds see
-# the extensions MISP runs with.
+# the extensions MISP runs with. systemd-standalone-tmpfiles satisfies
+# php8.4-fpm's dependency, which would otherwise pull in systemd.
 ARG RUNTIME_PACKAGES="ca-certificates tini procps openssl gpg gpg-agent \
     php8.4 php8.4-apcu php8.4-curl php8.4-xml php8.4-intl php8.4-bcmath php8.4-mbstring \
-    php8.4-mysql php8.4-pgsql php8.4-redis php8.4-gd php8.4-fpm php8.4-zip php8.4-ldap \
-    libmagic1 libldap-common librdkafka1 libbrotli1 libzstd1 libfuzzy2 \
+    php8.4-mysql php8.4-pgsql php8.4-redis php8.4-gd php8.4-fpm php8.4-zip php8.4-ldap php8.4-zstd \
+    systemd-standalone-tmpfiles libmagic1 libldap-common librdkafka1 libbrotli1 libfuzzy2 \
     python3-minimal libpython3.13-stdlib"
+# The MISP submodules the image does not ship: PyMISP and the STIX helpers, which
+# requirements-misp.txt installs as packages
+ARG EXCLUDED_SUBMODULES="PyMISP app/files/scripts/cti-python-stix2 app/files/scripts/misp-stix \
+    app/files/scripts/mixbox app/files/scripts/python-cybox app/files/scripts/python-maec \
+    app/files/scripts/python-stix"
 
 # =============================================================================
 # Stage 1: php-base - Common runtime packages
 # =============================================================================
-# debian:trixie-20261020-slim
 FROM debian:trixie-slim@sha256:62bd423aeee912639ca8ee681c2b762cb3e25137e0a92b20be455898a9f034ad AS php-base
 ENV DEBIAN_FRONTEND=noninteractive
 ARG RUNTIME_PACKAGES
@@ -37,92 +40,12 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     && apt-get autoremove -y
 
 # =============================================================================
-# Stage 2: composer - PHP dependencies, pinned by files/composer.lock
+# Stage 2: misp-source - Clone MISP, set permissions
 # =============================================================================
-# composer-prep downloads upstream composer.json and adds our extra packages.
-# composer-lock resolves it (scripts/update-composer-lock.sh writes the result
-# to files/composer.lock). composer-build installs exactly the lock; an
-# out-of-date lock fails the build.
-FROM php-base AS composer-prep
-ARG CORE_TAG
-ARG CORE_COMMIT
-ENV COMPOSER_ALLOW_SUPERUSER=1
-
-# curl fetches composer.json, jq edits it, composer unpacks with unzip; the
-# final image carries none of the three
-RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
-    rm -f /etc/apt/apt.conf.d/docker-clean && apt-get update && \
-    apt-get install -y --no-install-recommends curl jq unzip
-
-WORKDIR /tmp
-RUN curl -fsSL -o /tmp/composer.json https://raw.githubusercontent.com/MISP/MISP/${CORE_COMMIT:-${CORE_TAG}}/app/composer.json
-
-# composer:2.9.8
-COPY --from=composer:2@sha256:1364b5b9132ab4c42ea3be53e894572c32fe75a512cb3b1c3903fcc9bce53dcc /usr/bin/composer /usr/bin/composer
-RUN composer config --no-interaction allow-plugins.composer/installers true && \
-    composer require --no-update --no-interaction \
-        elasticsearch/elasticsearch:8.19.0 \
-        jakub-onderka/openid-connect-php:1.5.0 \
-        certmichelin/openid-connect-php:1.3.0 \
-        aws/aws-sdk-php:3.398.1
-
-FROM composer-prep AS composer-lock
-RUN --mount=type=cache,target=/root/.composer/cache \
-    composer update --no-install --no-interaction --with-all-dependencies
-
-FROM composer-prep AS composer-build
-COPY files/composer.lock /tmp/composer.lock
-# The composer download cache survives across builds (buildah and BuildKit)
-RUN --mount=type=cache,target=/root/.composer/cache \
-    composer validate --no-check-all --no-check-publish --no-interaction && \
-    composer install --no-interaction --no-dev
-
-# =============================================================================
-# Stage 3: php-build - Native PHP extensions, built from pinned sources
-# =============================================================================
-FROM php-base AS php-build
-ARG PHP_VER
-ENV TZ=Etc/UTC
-
-RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
-    rm -f /etc/apt/apt.conf.d/docker-clean && apt-get update && apt-get install -y --no-install-recommends \
-        gcc g++ git make php8.4-dev \
-        libbrotli-dev libfuzzy-dev librdkafka-dev libzstd-dev \
-    && apt-get autoremove -y
-
-RUN update-alternatives --set php /usr/bin/php8.4 && \
-    update-alternatives --set php-config /usr/bin/php-config8.4 && \
-    update-alternatives --set phpize /usr/bin/phpize8.4
-
-# Each extension builds from its GitHub repository at a pinned commit, so the
-# build reaches no host but GitHub:
-#   rdkafka   arnaud-lb/php-rdkafka         6.0.5
-#   zstd      kjdev/php-ext-zstd            0.18.0, its zstd library a submodule
-#   brotli    kjdev/php-ext-brotli          0.21.0, its brotli library a submodule
-#   simdjson  JakubOnderka/simdjson_php     the fork with the encoder MISP's JsonTool calls
-#   ssdeep    JakubOnderka/pecl-text-ssdeep
-RUN cp "/usr/lib/$(gcc -dumpmachine)"/libfuzzy.* /usr/lib && \
-    build() ( \
-        mkdir "/tmp/$1" && cd "/tmp/$1" && git init -q && \
-        git fetch -q --depth 1 "https://github.com/$2.git" "$3" && git checkout -q FETCH_HEAD && \
-        git submodule -q update --init --recursive --depth 1 && \
-        phpize && ./configure && make -j"$(nproc)" && make install \
-    ) && \
-    build rdkafka arnaud-lb/php-rdkafka 2df0c74170d95d027e6773d3a9afb1fab5917558 && \
-    build zstd kjdev/php-ext-zstd c2593a4ce2457b23e7fa7f81ddf0dd9bbdd89b47 && \
-    build brotli kjdev/php-ext-brotli ced23f5b6f52ef58a3a96d4731db4bee40a82736 && \
-    build simdjson JakubOnderka/simdjson_php ab23d7e5f0edd23b49cf1385f52dc6e300a25fd4 && \
-    build ssdeep JakubOnderka/pecl-text-ssdeep aa7ea7045a294548aedc3ccdfbb3936e1716bebd
-
-# =============================================================================
-# Stage 4: misp-source - Clone MISP, set permissions
-# =============================================================================
-# debian:trixie-20261020-slim
 FROM debian:trixie-slim@sha256:62bd423aeee912639ca8ee681c2b762cb3e25137e0a92b20be455898a9f034ad AS misp-source
 ARG CORE_TAG
 ARG CORE_COMMIT
+ARG EXCLUDED_SUBMODULES
 ARG MISP_UID=1000
 ARG MISP_GID=1000
 
@@ -130,9 +53,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
     rm -f /etc/apt/apt.conf.d/docker-clean && apt-get update && apt-get install -y --no-install-recommends git ca-certificates python3
 
-# Initialise only the submodules the image ships: PyMISP and the STIX helpers
-# under app/files/scripts are removed below, so they are never fetched. No
-# submodule is recursive: only misp-iconify nests any, the sources of its icon
+# No submodule is recursive: only misp-iconify nests any, the sources of its icon
 # exports, over SSH URLs.
 RUN if [ -n "${CORE_COMMIT}" ]; then \
         mkdir -p /var/www/MISP && cd /var/www/MISP && git init -q && \
@@ -142,7 +63,7 @@ RUN if [ -n "${CORE_COMMIT}" ]; then \
     fi && \
     cd /var/www/MISP && \
     git config --file .gitmodules --get-regexp path | awk '{print $2}' \
-        | grep -v -E '^(PyMISP|app/files/scripts/(cti-python-stix2|misp-stix|mixbox|python-cybox|python-maec|python-stix))$' \
+        | grep -v -x -F "$(printf '%s\n' ${EXCLUDED_SUBMODULES})" \
         | xargs git submodule update --init --depth 1 --
 
 # Our changes to MISP's code: one patch each in patches/, with its reason. The build
@@ -151,17 +72,13 @@ COPY patches/ /tmp/patches/
 COPY scripts/apply_patches.py /tmp/apply_patches.py
 RUN python3 /tmp/apply_patches.py /var/www/MISP /tmp/patches
 
-# Clean and set permissions - all in one layer
+# Clean and set permissions - all in one layer. MISP reads none of the removed
+# files at run time: its docs, slides, packaging, tests and tools.
 RUN find /var/www/MISP/INSTALL/* ! -name 'POSTGRESQL.sql' -type f -exec rm {} + && \
     find /var/www/MISP/INSTALL/* ! -name 'POSTGRESQL.sql' -type l -exec rm {} + && \
     find /var/www/MISP/.git/* ! -name HEAD -exec rm -rf {} + 2>/dev/null || true && \
-    rm -rf /var/www/MISP/PyMISP \
-           /var/www/MISP/app/files/scripts/cti-python-stix2 \
-           /var/www/MISP/app/files/scripts/misp-stix \
-           /var/www/MISP/app/files/scripts/mixbox \
-           /var/www/MISP/app/files/scripts/python-cybox \
-           /var/www/MISP/app/files/scripts/python-maec \
-           /var/www/MISP/app/files/scripts/python-stix && \
+    cd /var/www/MISP && rm -rf ${EXCLUDED_SUBMODULES} \
+        docs slides format tests tools debian build db_schema.json app/Test app/composer.phar && \
     # The configure step records this marker and the pods wait for it
     echo "${CORE_TAG}${CORE_COMMIT:++${CORE_COMMIT}}" > /tmp/misp-dist-version && \
     # app/Config is a per-pod volume rendered at start from these defaults
@@ -178,9 +95,85 @@ RUN find /var/www/MISP/INSTALL/* ! -name 'POSTGRESQL.sql' -type f -exec rm {} + 
     chown -R ${MISP_UID}:${MISP_GID} /var/www/MISP
 
 # =============================================================================
+# Stage 3: composer - PHP dependencies, pinned by files/composer.lock
+# =============================================================================
+# composer-prep takes MISP's composer.json and adds our extra packages, and keeps
+# only the S3 and Sts clients of the AWS SDK (the SDK's own removeUnusedServices).
+# composer-lock resolves it (scripts/update-composer-lock.sh writes the result to
+# files/composer.lock). composer-build installs exactly the lock; an out-of-date
+# lock fails the build.
+FROM php-base AS composer-prep
+ENV COMPOSER_ALLOW_SUPERUSER=1
+
+# composer unpacks with unzip; the final image does not carry it
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
+    rm -f /etc/apt/apt.conf.d/docker-clean && apt-get update && \
+    apt-get install -y --no-install-recommends unzip
+
+WORKDIR /tmp
+COPY --from=misp-source --chown=0:0 --chmod=0644 /var/www/MISP/app/composer.json /tmp/composer.json
+COPY --from=composer:2@sha256:1364b5b9132ab4c42ea3be53e894572c32fe75a512cb3b1c3903fcc9bce53dcc /usr/bin/composer /usr/bin/composer
+RUN composer require --no-update --no-interaction \
+        elasticsearch/elasticsearch:^8.19 \
+        certmichelin/openid-connect-php:^1.3 \
+        aws/aws-sdk-php:^3.398 && \
+    php -r '$j = json_decode(file_get_contents("composer.json"), true); \
+        $j["extra"]["aws/aws-sdk-php"] = ["S3", "Sts"]; \
+        $j["scripts"]["pre-autoload-dump"] = "Aws\\Script\\Composer\\Composer::removeUnusedServices"; \
+        file_put_contents("composer.json", json_encode($j, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . "\n");'
+
+FROM composer-prep AS composer-lock
+RUN --mount=type=cache,target=/root/.composer/cache \
+    composer update --no-install --no-interaction --with-all-dependencies
+
+FROM composer-prep AS composer-build
+COPY files/composer.lock /tmp/composer.lock
+# The composer download cache survives across builds (buildah and BuildKit)
+RUN --mount=type=cache,target=/root/.composer/cache \
+    composer validate --no-check-all --no-check-publish --no-interaction && \
+    composer install --no-interaction --no-dev
+
+# =============================================================================
+# Stage 4: php-build - Native PHP extensions, built from pinned sources
+# =============================================================================
+FROM php-base AS php-build
+ARG PHP_VER
+ENV TZ=Etc/UTC
+
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
+    rm -f /etc/apt/apt.conf.d/docker-clean && apt-get update && apt-get install -y --no-install-recommends \
+        gcc g++ git make php8.4-dev \
+        libbrotli-dev libfuzzy-dev librdkafka-dev \
+    && apt-get autoremove -y
+
+RUN update-alternatives --set php /usr/bin/php8.4 && \
+    update-alternatives --set php-config /usr/bin/php-config8.4 && \
+    update-alternatives --set phpize /usr/bin/phpize8.4
+
+# Debian packages none of these four. Each builds from its GitHub repository at a
+# pinned commit, so the build reaches no host but GitHub:
+#   rdkafka   php-rdkafka/php-rdkafka       6.0.5
+#   brotli    kjdev/php-ext-brotli          0.21.0, linked to Debian's libbrotli, which
+#                                           the final stage upgrades and Trivy sees
+#   simdjson  JakubOnderka/simdjson_php     the fork with the encoder MISP's JsonTool calls
+#   ssdeep    JakubOnderka/pecl-text-ssdeep
+RUN cp "/usr/lib/$(gcc -dumpmachine)"/libfuzzy.* /usr/lib && \
+    build() ( \
+        name="$1" repo="$2" commit="$3" && shift 3 && \
+        mkdir "/tmp/$name" && cd "/tmp/$name" && git init -q && \
+        git fetch -q --depth 1 "https://github.com/$repo.git" "$commit" && git checkout -q FETCH_HEAD && \
+        phpize && ./configure "$@" && make -j"$(nproc)" && make install \
+    ) && \
+    build rdkafka php-rdkafka/php-rdkafka 2df0c74170d95d027e6773d3a9afb1fab5917558 && \
+    build brotli kjdev/php-ext-brotli ced23f5b6f52ef58a3a96d4731db4bee40a82736 --with-libbrotli && \
+    build simdjson JakubOnderka/simdjson_php ab23d7e5f0edd23b49cf1385f52dc6e300a25fd4 && \
+    build ssdeep JakubOnderka/pecl-text-ssdeep aa7ea7045a294548aedc3ccdfbb3936e1716bebd
+
+# =============================================================================
 # Stage 5: uv - Python package installer (pinned)
 # =============================================================================
-# uv 0.11.14
 FROM ghcr.io/astral-sh/uv:latest@sha256:b46b03ddfcfbf8f547af7e9eaefdf8a39c8cebcba7c98858d3162bd28cf536f6 AS uv
 
 # =============================================================================
@@ -192,7 +185,6 @@ FROM ghcr.io/astral-sh/uv:latest@sha256:b46b03ddfcfbf8f547af7e9eaefdf8a39c8cebcb
 # build here, with a compiler the final image does not carry. One install
 # resolves both files together. The bind mount keeps the uv binary out of
 # every layer.
-# debian:trixie-20261020-slim
 FROM debian:trixie-slim@sha256:62bd423aeee912639ca8ee681c2b762cb3e25137e0a92b20be455898a9f034ad AS python
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -207,13 +199,20 @@ RUN --mount=type=bind,from=uv,source=/uv,target=/tmp/uv \
         -r /tmp/requirements-final.txt -r /tmp/requirements-misp.txt
 
 # =============================================================================
-# Stage 7: final - Runtime image (non-root)
+# Stage 7: caddy-bin - The caddy binary for the web pod's caddy container
+# =============================================================================
+FROM caddy:2@sha256:cb9d71ad83182011b79355cd57692686374bd78d6fe327efe0ff8507da03ab13 AS caddy-bin
+# Kubernetes' allowPrivilegeEscalation: false (no_new_privs) blocks execve of a
+# binary with file capabilities, and caddy listens on 8080, so it needs none
+RUN setcap -r /usr/bin/caddy
+
+# =============================================================================
+# Stage 8: final - Runtime image (non-root)
 # =============================================================================
 # A fresh FROM, not php-base: the strip below runs in the same layer as the
-# install, so what it removes (perl from adduser and debconf, gconv, the systemd
-# libraries, the Python test suite, docs and man pages) never enters a layer.
-# Deleted in a later layer on top of php-base, those files would still be pulled.
-# debian:trixie-20261020-slim
+# install, so what it removes (perl from adduser and debconf, gconv, the Python
+# test suite, docs and man pages) never enters a layer. Deleted in a later layer
+# on top of php-base, those files would still be pulled.
 FROM debian:trixie-slim@sha256:62bd423aeee912639ca8ee681c2b762cb3e25137e0a92b20be455898a9f034ad AS final
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -221,12 +220,16 @@ ARG RUNTIME_PACKAGES
 ARG PHP_VER
 ARG MISP_UID=1000
 ARG MISP_GID=1000
+# scripts/build.py sets this to the day of the build, so a local build takes the
+# day's security fixes as CI's uncached final stage does
+ARG APT_REFRESH=
 
 # The upgrade takes the security pocket's fixes for the base image's packages
 # (perl-base and the like, which no stage removes): the scan job fails a release
 # on a fixable CRITICAL finding
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
+    echo "apt refresh ${APT_REFRESH:-none}" && \
     rm -f /etc/apt/apt.conf.d/docker-clean && apt-get update && \
     apt-get upgrade -y --no-install-recommends && \
     apt-get install -y --no-install-recommends $RUNTIME_PACKAGES \
@@ -236,7 +239,6 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
               /usr/lib/*/perl \
               /usr/lib/*/perl-base \
               /usr/lib/*/libperl* \
-              /usr/lib/*/systemd \
               /usr/lib/python3.*/test \
               /usr/lib/python3.*/unittest \
               /usr/share/doc \
@@ -255,9 +257,8 @@ RUN groupadd -g ${MISP_GID} misp && \
 # By name: final takes the security pocket's PHP packages, so the build stage's
 # other modules may be older than its own
 COPY --from=php-build /usr/lib/php/${PHP_VER}/ssdeep.so /usr/lib/php/${PHP_VER}/rdkafka.so \
-     /usr/lib/php/${PHP_VER}/brotli.so /usr/lib/php/${PHP_VER}/simdjson.so \
-     /usr/lib/php/${PHP_VER}/zstd.so /usr/lib/php/${PHP_VER}/
-RUN for mod in ssdeep rdkafka brotli simdjson zstd; do \
+     /usr/lib/php/${PHP_VER}/brotli.so /usr/lib/php/${PHP_VER}/simdjson.so /usr/lib/php/${PHP_VER}/
+RUN for mod in ssdeep rdkafka brotli simdjson; do \
         for dir in /etc/php/*/; do \
             echo "extension=${mod}.so" > "${dir}mods-available/${mod}.ini"; \
         done; \
@@ -269,6 +270,9 @@ RUN for mod in ssdeep rdkafka brotli simdjson zstd; do \
     for dir in /etc/php/*/cli/conf.d; do \
         printf 'session.save_path = "/tmp"\n' > "${dir}/99-misp-cli-sessions.ini"; \
     done
+
+# The web pod's caddy container runs this binary from this image
+COPY --from=caddy-bin /usr/bin/caddy /usr/bin/caddy
 
 # Copy MISP source (permissions already set in misp-source stage)
 COPY --from=misp-source --chown=${MISP_UID}:${MISP_GID} /var/www/MISP /var/www/MISP
@@ -291,13 +295,15 @@ RUN for dir in app/files/scripts/tmp app/files/certs app/files/terms app/files/i
 # The Python package: each role starts as python3 -m misp_container.<role>
 COPY --chown=${MISP_UID}:${MISP_GID} files/misp_container/ /opt/misp_container/
 
-# Config templates and settings
+# Config files and settings. PHP-FPM loads Debian's php.ini, then the files of
+# php.d through PHP_INI_SCAN_DIR (web.py)
 COPY --chown=${MISP_UID}:${MISP_GID} files/php-fpm-pool.conf /etc/misp-docker/php-fpm-pool.conf
-COPY --chown=${MISP_UID}:${MISP_GID} files/php.ini /etc/misp-docker/php.ini
+COPY --chown=${MISP_UID}:${MISP_GID} files/php.ini /etc/misp-docker/php.d/99-misp.ini
+COPY --chown=${MISP_UID}:${MISP_GID} files/Caddyfile /etc/caddy/Caddyfile
 COPY --chown=${MISP_UID}:${MISP_GID} files/misp-config/ /etc/misp-docker/
 # gnupg/ is the mount point of the instance GPG key (the misp-gnupg Secret)
-RUN find /etc/misp-docker -type f -exec chmod 0440 {} + && \
-    find /etc/misp-docker -type d -exec chmod 0550 {} + && \
+RUN find /etc/misp-docker /etc/caddy -type f -exec chmod 0440 {} + && \
+    find /etc/misp-docker /etc/caddy -type d -exec chmod 0550 {} + && \
     install -d -o ${MISP_UID} -g ${MISP_GID} -m 0700 /etc/misp-docker/gnupg
 
 ENV PYTHONPATH=/opt PYTHONUNBUFFERED=1
@@ -305,48 +311,12 @@ ENV PYTHONPATH=/opt PYTHONUNBUFFERED=1
 WORKDIR /var/www/MISP
 USER ${MISP_UID}
 
-EXPOSE 9002
-
 ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["python3", "-m", "misp_container.web"]
 
 # =============================================================================
-# Stage 8: caddy - Static files + FastCGI reverse proxy (scratch image)
-# =============================================================================
-# Build with: docker build --target caddy -t misp-caddy .
-# caddy:2.11.3
-FROM caddy:2@sha256:cb9d71ad83182011b79355cd57692686374bd78d6fe327efe0ff8507da03ab13 AS caddy-bin
-# Strip cap_net_bind_service from the binary -- we listen on 8080 (unprivileged),
-# and Kubernetes securityContext allowPrivilegeEscalation:false (no_new_privs)
-# blocks execve on binaries with file capabilities.
-RUN setcap -r /usr/bin/caddy
-
-FROM scratch AS caddy
-
-# Caddy binary (capabilities stripped)
-COPY --from=caddy-bin /usr/bin/caddy /usr/bin/caddy
-
-# CA certificates for HTTPS upstream connections
-COPY --from=caddy-bin /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
-
-# MISP static files (CSS, JS, images)
-COPY --from=misp-source --chown=1000:1000 /var/www/MISP/app/webroot /var/www/MISP/app/webroot
-
-# Caddyfile
-COPY --chown=1000:1000 files/Caddyfile /etc/caddy/Caddyfile
-
-ENV PHP_FPM_HOST=127.0.0.1
-
-USER 1000
-
-EXPOSE 8080
-
-CMD ["caddy", "run", "--config", "/etc/caddy/Caddyfile"]
-
-# =============================================================================
 # Stage 9: modules - MISP enrichment/import/export/action modules
 # =============================================================================
-# Build with: docker build --target modules -t misp-modules .
 # Distroless Python on Debian 13 (trixie). No shell, no package manager.
 #
 # Edit files/requirements-modules.txt to change the version or extras:

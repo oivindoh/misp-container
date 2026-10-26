@@ -16,6 +16,8 @@ from .log import get as getlog, setup as setup_logging
 
 log = getlog("web")
 
+PHP_INI_DIR = "/etc/misp-docker/php.d"
+
 
 def set_session_save_path():
     """SESSION_SAVE_PATH for php.ini: PHP keeps the sessions in Redis."""
@@ -49,11 +51,13 @@ def main():
     db.wait_for_db()
     db.wait_for_live()
     start_log_relay()
-    log.info("starting PHP-FPM on port 9002")
+    log.info("starting PHP-FPM on 127.0.0.1:9002")
+    # Debian's production php.ini first, then our overrides: a leading colon appends
+    # the directory to PHP's own scan path
+    os.environ["PHP_INI_SCAN_DIR"] = f":{PHP_INI_DIR}"
     os.execvp(
         "/usr/sbin/php-fpm8.4",
-        ["/usr/sbin/php-fpm8.4", "--fpm-config", "/etc/misp-docker/php-fpm-pool.conf", "-c",
-         "/etc/misp-docker/php.ini", "-F"],
+        ["/usr/sbin/php-fpm8.4", "--fpm-config", "/etc/misp-docker/php-fpm-pool.conf", "-F"],
     )
 
 

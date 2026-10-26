@@ -19,12 +19,16 @@ on:
 # Drop all permissions by default. Grant per-job.
 permissions: {}
 
+# A new push to a pull request cancels its running run; a tag or master run is never cancelled
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 env:
   # The images are in docker, which also runs the suites' k3s
   CONTAINER_CMD: docker
   REGISTRY: ghcr.io
   IMAGE_MISP: ghcr.io/${{ github.repository }}
-  IMAGE_CADDY: ghcr.io/${{ github.repository }}-caddy
   IMAGE_MODULES: ghcr.io/${{ github.repository }}-modules
 
 jobs:
@@ -47,7 +51,6 @@ jobs:
       build: ${{ steps.plan.outputs.build }}
       unit: ${{ steps.plan.outputs.unit }}
       stack: ${{ steps.plan.outputs.stack }}
-      suites: ${{ steps.plan.outputs.suites }}
       publish: ${{ steps.plan.outputs.publish }}
     steps:
       - name: Plan the run
@@ -76,32 +79,27 @@ jobs:
           if [ "$build" = true ] && [ "$GITHUB_REF_TYPE" = tag ]; then
             publish=release
           fi
-          # name is the check name; id names the report
-          suites='[
-            {"name": "integration", "id": "integration", "timeout": 15,
-             "tests": "tests/e2e/test_upstream.py tests/e2e/test_integration.py"},
-            {"name": "hub-spoke", "id": "sync", "timeout": 15, "tests": "tests/e2e/test_sync.py"},
-            {"name": "migration", "id": "migration", "timeout": 20, "tests": "tests/e2e/test_migration.py"},
-            {"name": "lifecycle", "id": "lifecycle", "timeout": 25, "tests": "tests/e2e/test_lifecycle.py"}]'
           {
             echo "build=$build"
             echo "unit=$unit"
             echo "stack=$stack"
             echo "publish=$publish"
-            echo "suites=$(jq -c . <<<"$suites")"
           } >> "$GITHUB_OUTPUT"
 
-  # Builds each image into its own layer cache scope, in parallel. The suite
-  # jobs rebuild from those caches in seconds and run against the images they
-  # loaded. The misp image's final stage never comes from the cache: its apt
-  # layer takes the current Debian packages, security updates included, which
-  # the suites, the scan and the release then all use.
+  # Builds each image into its own layer cache scope, in parallel, and scans it.
+  # The suite jobs rebuild from those caches in seconds and run against the
+  # images they loaded. Two stages never come from the cache: the misp image's
+  # final stage, whose apt layer takes the current Debian packages, security
+  # updates included, and the modules image's Python install, whose transitive
+  # packages are not pinned. The suites, the scan and the release then all use
+  # those layers.
   build:
     needs: gate
     if: needs.gate.outputs.build == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      security-events: write
     strategy:
       matrix:
         include:
@@ -110,14 +108,11 @@ jobs:
             image: ghcr.io/oivindoh/misp-container
             scope: misp
             no-cache-filters: final
-          - name: caddy
-            target: caddy
-            image: ghcr.io/oivindoh/misp-container-caddy
-            scope: caddy
           - name: modules
             target: modules
             image: ghcr.io/oivindoh/misp-container-modules
             scope: modules
+            no-cache-filters: modules-build
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
@@ -133,6 +128,40 @@ jobs:
             type=gha,scope=misp
             type=gha,scope=${{ matrix.scope }}
           cache-to: type=gha,mode=max,scope=${{ matrix.scope }}
+
+      # CRITICAL and HIGH findings with a fix, for the Security tab and for the
+      # check below; one scan, so one download of Trivy's database
+      - name: Trivy vulnerability scan (${{ matrix.name }})
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ matrix.image }}:ci
+          format: sarif
+          output: trivy-results.sarif
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+
+      - name: Upload scan results
+        uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4
+        if: always()
+        with:
+          sarif_file: trivy-results.sarif
+          category: ${{ matrix.target }}
+
+      # The report above never fails the job; this check does, on a CRITICAL
+      # finding with a fix, so publish, which needs this job, is gated
+      - name: Fail on a fixable CRITICAL finding (${{ matrix.name }})
+        run: |
+          set -euo pipefail
+          found=$(jq -r '.runs[0] as $run
+            | [$run.tool.driver.rules[] | select(.properties.tags | index("CRITICAL")) | .id] as $critical
+            | $run.results[] | select(.ruleId as $id | $critical | index($id))
+            | "\(.ruleId): \(.message.text | split("\n")[0])"' trivy-results.sarif)
+          if [ -n "$found" ]; then
+            echo "CRITICAL findings with a fix:"
+            echo "$found"
+            exit 1
+          fi
+          echo "No CRITICAL finding with a fix."
 
   unit:
     needs: gate
@@ -155,8 +184,9 @@ jobs:
           PYTHONPATH=files .venv/bin/python -m pytest tests/ -v --ignore=tests/e2e
 
   # The stack suites, one job each, in parallel, each on a k3s cluster in
-  # docker, against the images from build. The gate lists them; the upload
-  # keeps the JUnit report and, after a failure, the cluster's logs.
+  # docker, against the images from build. The upload keeps the JUnit report
+  # and, after a failure, the cluster's logs. name is the check name; id names
+  # the report.
   suite:
     name: ${{ matrix.name }}
     needs: [gate, build]
@@ -167,7 +197,23 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJSON(needs.gate.outputs.suites) }}
+        include:
+          - name: integration
+            id: integration
+            timeout: 15
+            tests: tests/e2e/test_upstream.py tests/e2e/test_integration.py
+          - name: hub-spoke
+            id: sync
+            timeout: 15
+            tests: tests/e2e/test_sync.py
+          - name: migration
+            id: migration
+            timeout: 20
+            tests: tests/e2e/test_migration.py
+          - name: lifecycle
+            id: lifecycle
+            timeout: 25
+            tests: tests/e2e/test_lifecycle.py
     env:
       MISP_IMAGE_TAG: ci
     steps:
@@ -176,7 +222,6 @@ jobs:
         uses: ./.github/actions/load-images
         with:
           misp: ${{ env.IMAGE_MISP }}
-          caddy: ${{ env.IMAGE_CADDY }}
           modules: ${{ env.IMAGE_MODULES }}
 
       - name: Install helm and kubectl
@@ -204,78 +249,10 @@ jobs:
             ${{ runner.temp }}/*-cluster-logs.txt
           if-no-files-found: ignore
 
-  scan:
-    needs: [gate, build]
-    if: needs.gate.outputs.build == 'true'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      security-events: write
-    strategy:
-      matrix:
-        include:
-          - target: final
-            tag: ghcr.io/oivindoh/misp-container:scan
-            scope: misp
-          - target: caddy
-            tag: ghcr.io/oivindoh/misp-container-caddy:scan
-            scope: caddy
-          - target: modules
-            tag: ghcr.io/oivindoh/misp-container-modules:scan
-            scope: modules
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
-
-      - name: Build ${{ matrix.target }} image (from cache)
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
-        with:
-          context: .
-          target: ${{ matrix.target }}
-          load: true
-          tags: ${{ matrix.tag }}
-          cache-from: |
-            type=gha,scope=misp
-            type=gha,scope=${{ matrix.scope }}
-
-      # CRITICAL and HIGH findings with a fix, for the Security tab and for the
-      # check below; one scan, so one download of Trivy's database
-      - name: Trivy vulnerability scan (${{ matrix.target }})
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        with:
-          image-ref: ${{ matrix.tag }}
-          format: sarif
-          output: trivy-results.sarif
-          severity: CRITICAL,HIGH
-          ignore-unfixed: true
-
-      - name: Upload scan results
-        uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4
-        if: always()
-        with:
-          sarif_file: trivy-results.sarif
-          category: ${{ matrix.target }}
-
-      # The report above never fails the job; this check does, on a CRITICAL
-      # finding with a fix, so publish, which needs this job, is gated
-      - name: Fail on a fixable CRITICAL finding (${{ matrix.target }})
-        run: |
-          set -euo pipefail
-          found=$(jq -r '.runs[0] as $run
-            | [$run.tool.driver.rules[] | select(.properties.tags | index("CRITICAL")) | .id] as $critical
-            | $run.results[] | select(.ruleId as $id | $critical | index($id))
-            | "\(.ruleId): \(.message.text | split("\n")[0])"' trivy-results.sarif)
-          if [ -n "$found" ]; then
-            echo "CRITICAL findings with a fix:"
-            echo "$found"
-            exit 1
-          fi
-          echo "No CRITICAL finding with a fix."
-
   # The one required check: it fails on any failed or cancelled job, and on a
   # draft, whose run skips the stack suites. Every other skip is the gate's.
   ci-ok:
-    needs: [gate, build, unit, suite, scan]
+    needs: [gate, build, unit, suite]
     if: always()
     runs-on: ubuntu-latest
     permissions: {}
@@ -297,83 +274,26 @@ jobs:
   # Publishes a tag after every other job: the images under the tag without its
   # v, the chart at the version of Chart.yaml, and a GitHub Release that names
   # the MISP commit. The unit tests and the suites may be skipped only where the
-  # gate skipped them.
-  # The arm64 images of a release, on an arm64 runner and without the layer
-  # cache: the cache holds 10 GB per repository, and the amd64 layers fill it.
-  # They go to GHCR by digest; publish tags them with the amd64 images.
-  publish-arm64:
-    needs: [gate, build, unit, suite, scan]
+  # gate skipped them. The plan comes first, so a tag that cannot be published
+  # fails before any image is pushed.
+  publish-plan:
+    needs: [gate, build, unit, suite]
     if: >-
       always() && needs.gate.outputs.publish != '' &&
-      needs.build.result == 'success' && needs.scan.result == 'success' &&
-      !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') &&
-      (needs.gate.outputs.unit != 'true' || needs.unit.result == 'success') &&
-      (needs.gate.outputs.stack != 'true' || needs.suite.result == 'success')
-    runs-on: ubuntu-24.04-arm
-    permissions:
-      contents: read
-      packages: write
-    outputs:
-      misp: ${{ steps.misp.outputs.digest }}
-      caddy: ${{ steps.caddy.outputs.digest }}
-      modules: ${{ steps.modules.outputs.digest }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
-      - name: Log in to GHCR
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Build and push misp for arm64
-        id: misp
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
-        with:
-          context: .
-          target: final
-          platforms: linux/arm64
-          outputs: type=image,name=${{ env.IMAGE_MISP }},push-by-digest=true,name-canonical=true,push=true
-          provenance: true
-          sbom: true
-      - name: Build and push caddy for arm64
-        id: caddy
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
-        with:
-          context: .
-          target: caddy
-          platforms: linux/arm64
-          outputs: type=image,name=${{ env.IMAGE_CADDY }},push-by-digest=true,name-canonical=true,push=true
-          provenance: true
-          sbom: true
-      - name: Build and push modules for arm64
-        id: modules
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
-        with:
-          context: .
-          target: modules
-          platforms: linux/arm64
-          outputs: type=image,name=${{ env.IMAGE_MODULES }},push-by-digest=true,name-canonical=true,push=true
-          provenance: true
-          sbom: true
-
-  publish:
-    needs: [gate, build, unit, suite, scan, publish-arm64]
-    if: >-
-      always() && needs.gate.outputs.publish != '' &&
-      needs.build.result == 'success' && needs.scan.result == 'success' &&
+      needs.build.result == 'success' &&
       !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') &&
       (needs.gate.outputs.unit != 'true' || needs.unit.result == 'success') &&
       (needs.gate.outputs.stack != 'true' || needs.suite.result == 'success')
     runs-on: ubuntu-latest
     permissions:
-      contents: write
-      packages: write
-      id-token: write
-
+      contents: read
+      packages: read
+    outputs:
+      tag: ${{ steps.plan.outputs.tag }}
+      chart: ${{ steps.plan.outputs.chart }}
+      misp_version: ${{ steps.plan.outputs.misp_version }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       - name: Install helm
         uses: ./.github/actions/install-helm
@@ -425,7 +345,7 @@ jobs:
         run: |
           set -euo pipefail
           TAG="${{ steps.plan.outputs.tag }}"
-          for image in "${{ env.IMAGE_MISP }}" "${{ env.IMAGE_CADDY }}" "${{ env.IMAGE_MODULES }}"; do
+          for image in "${{ env.IMAGE_MISP }}" "${{ env.IMAGE_MODULES }}"; do
             if out=$(docker manifest inspect "${image}:${TAG}" 2>&1); then
               echo "ERROR: ${image}:${TAG} exists in GHCR. Tags are immutable: mise run release makes the next tag."
               exit 1
@@ -435,6 +355,87 @@ jobs:
               exit 1
             fi
           done
+
+  # The arm64 images of a release, on an arm64 runner and without the layer
+  # cache: the cache holds 10 GB per repository, and the amd64 layers fill it.
+  # They go to GHCR by digest and pass the same CRITICAL gate as the amd64 build;
+  # publish tags them with the amd64 images.
+  publish-arm64:
+    needs: publish-plan
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      misp: ${{ steps.misp.outputs.digest }}
+      modules: ${{ steps.modules.outputs.digest }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push misp for arm64
+        id: misp
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          target: final
+          platforms: linux/arm64
+          outputs: type=image,name=${{ env.IMAGE_MISP }},push-by-digest=true,name-canonical=true,push=true
+          provenance: true
+          sbom: true
+      - name: Build and push modules for arm64
+        id: modules
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          target: modules
+          platforms: linux/arm64
+          outputs: type=image,name=${{ env.IMAGE_MODULES }},push-by-digest=true,name-canonical=true,push=true
+          provenance: true
+          sbom: true
+      - name: Fail on a fixable CRITICAL finding (misp, arm64)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ env.IMAGE_MISP }}@${{ steps.misp.outputs.digest }}
+          severity: CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+      - name: Fail on a fixable CRITICAL finding (modules, arm64)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ env.IMAGE_MODULES }}@${{ steps.modules.outputs.digest }}
+          severity: CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+          skip-setup-trivy: true
+
+  publish:
+    needs: [publish-plan, publish-arm64]
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: write
+      packages: write
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Install helm
+        uses: ./.github/actions/install-helm
+
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push misp for amd64 (from cache)
         id: misp
@@ -447,20 +448,6 @@ jobs:
           provenance: true
           sbom: true
           cache-from: type=gha,scope=misp
-
-      - name: Build and push caddy for amd64 (from cache)
-        id: caddy
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
-        with:
-          context: .
-          target: caddy
-          platforms: linux/amd64
-          outputs: type=image,name=${{ env.IMAGE_CADDY }},push-by-digest=true,name-canonical=true,push=true
-          provenance: true
-          sbom: true
-          cache-from: |
-            type=gha,scope=misp
-            type=gha,scope=caddy
 
       - name: Build and push modules for amd64 (from cache)
         id: modules
@@ -478,34 +465,42 @@ jobs:
       - name: Tag the images for amd64 and arm64
         run: |
           set -euo pipefail
-          TAG="${{ steps.plan.outputs.tag }}"
+          TAG="${{ needs.publish-plan.outputs.tag }}"
           docker buildx imagetools create -t "${{ env.IMAGE_MISP }}:${TAG}" \
             "${{ env.IMAGE_MISP }}@${{ steps.misp.outputs.digest }}" "${{ env.IMAGE_MISP }}@${{ needs.publish-arm64.outputs.misp }}"
-          docker buildx imagetools create -t "${{ env.IMAGE_CADDY }}:${TAG}" \
-            "${{ env.IMAGE_CADDY }}@${{ steps.caddy.outputs.digest }}" "${{ env.IMAGE_CADDY }}@${{ needs.publish-arm64.outputs.caddy }}"
           docker buildx imagetools create -t "${{ env.IMAGE_MODULES }}:${TAG}" \
             "${{ env.IMAGE_MODULES }}@${{ steps.modules.outputs.digest }}" "${{ env.IMAGE_MODULES }}@${{ needs.publish-arm64.outputs.modules }}"
 
       - name: Push the chart
+        env:
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          helm package deploy/chart --version "${{ steps.plan.outputs.chart }}" \
-            --app-version "${{ steps.plan.outputs.tag }}" --destination "$RUNNER_TEMP"
-          helm push "$RUNNER_TEMP/misp-${{ steps.plan.outputs.chart }}.tgz" "oci://ghcr.io/${{ github.repository_owner }}/charts"
+          echo "$REGISTRY_TOKEN" | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
+          helm package deploy/chart --version "${{ needs.publish-plan.outputs.chart }}" \
+            --app-version "${{ needs.publish-plan.outputs.tag }}" --destination "$RUNNER_TEMP"
+          helm push "$RUNNER_TEMP/misp-${{ needs.publish-plan.outputs.chart }}.tgz" "oci://ghcr.io/${{ github.repository_owner }}/charts"
 
       - name: Create GitHub Release
         run: |
           TAG="${GITHUB_REF#refs/tags/}"
-          VER="${{ steps.plan.outputs.tag }}"
+          VER="${{ needs.publish-plan.outputs.tag }}"
           gh release create "${TAG}" \
             --title "${TAG}" \
-            --notes "MISP ${{ steps.plan.outputs.misp_version }}
+            --notes "MISP ${{ needs.publish-plan.outputs.misp_version }}
 
           Images:
           - \`${{ env.IMAGE_MISP }}:${VER}\`
-          - \`${{ env.IMAGE_CADDY }}:${VER}\`
           - \`${{ env.IMAGE_MODULES }}:${VER}\`
 
-          Helm chart: \`oci://ghcr.io/${{ github.repository_owner }}/charts/misp\`, version \`${{ steps.plan.outputs.chart }}\`"
+          Helm chart: \`oci://ghcr.io/${{ github.repository_owner }}/charts/misp\`, version \`${{ needs.publish-plan.outputs.chart }}\`"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # The tag run's layer caches serve this run only; left, they push master's out
+      - name: Delete the tag run's caches
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh cache list --repo "$GITHUB_REPOSITORY" --ref "$GITHUB_REF" --limit 1000 --json id --jq '.[].id' |
+            while read -r id; do gh cache delete --repo "$GITHUB_REPOSITORY" "$id"; done

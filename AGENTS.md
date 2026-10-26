@@ -25,13 +25,13 @@ The `Dockerfile` builds the images from these stages:
 | Stage | What it holds |
 |---|---|
 | php-base | Common runtime packages |
+| misp-source | Clone MISP, set permissions |
 | composer | PHP dependencies, pinned by files/composer.lock |
 | php-build | Native PHP extensions, built from pinned sources |
-| misp-source | Clone MISP, set permissions |
 | uv | Python package installer (pinned) |
 | python | Python packages of misp_container and of MISP's scripts |
+| caddy-bin | The caddy binary for the web pod's caddy container |
 | final | Runtime image (non-root) |
-| caddy | Static files + FastCGI reverse proxy (scratch image) |
 | modules | MISP enrichment/import/export/action modules |
 
 Each role of the main image is a module of the package, run under the image's tini entrypoint; the chart's workloads start them so:
@@ -109,7 +109,7 @@ Values of the misp chart. The comment above each top-level key describes it; doc
 | `cronjobs.yaml` | CronJob `cache-feeds`, CronJob `cache-servers`, CronJob `fetch-feeds`, CronJob `periodic-summary`, CronJob `pull-servers`, CronJob `push-servers`, CronJob `push-taxii`, CronJob `sharing-group-blueprints`, CronJob `update-galaxies`, CronJob `update-noticelists`, CronJob `update-object-templates`, CronJob `update-taxonomies`, CronJob `update-warninglists` | The cronjobs component: the periodic tasks, run by the task runner in the main image (python3 -m misp_container.task <task>), one CronJob per entry of cronjobs.tasks with a schedule and one per workflow ID in cronjobs.workflows. Each runs MISP's console in its pod, so the periodic work never waits in the workers' queues. |
 | `deployment-metrics.yaml` | Deployment `metrics` | Prometheus exporter on port 9191: MISP's database, the job queues in Redis and the sync partners (docs/metrics.md). It reads MISP's data and never changes it. |
 | `deployment-modules.yaml` | Deployment `modules` | misp-modules: the enrichment, import, export and action modules MISP calls over HTTP on port 6666. A distroless image without a shell, as UID 65532. |
-| `deployment-web.yaml` | Deployment `web` | MISP's web tier: PHP-FPM (port 9002) and a caddy sidecar that serves the static files and passes the rest to PHP-FPM over FastCGI (port 8080). Replicas scale freely: each pod renders its own app/Config and waits for the configure Job. |
+| `deployment-web.yaml` | Deployment `web` | MISP's web tier: PHP-FPM (127.0.0.1:9002) and a caddy sidecar that serves the static files and passes the rest to PHP-FPM over FastCGI (port 8080). Replicas scale freely: each pod renders its own app/Config and waits for the configure Job. |
 | `deployment-worker.yaml` | Deployment `worker` | Scalable job workers -- safe to run multiple replicas. MISP's own scheduler never runs: periodic tasks are Kubernetes CronJobs (the cronjobs component). |
 | `httproute.yaml` | HTTPRoute `misp` | The httpRoute component: an HTTPRoute for a Gateway API implementation, in place of the ingress. caddy takes the client address from X-Forwarded-For, right to left, past TRUSTED_PROXY_CIDR: set that in env to the Gateway's proxy pods. |
 | `ingress.yaml` | Ingress `misp` | The ingress component: an Ingress to the web Service. The default annotation makes the haproxy ingress replace X-Forwarded-For with the address it sees, so only that address reaches caddy (docs/kubernetes.md, Client addresses). Behind another load balancer, that is the balancer's address unless it speaks the PROXY protocol to HAProxy. |
@@ -130,7 +130,7 @@ Values:
 
 | Value | Is |
 |---|---|
-| `image` | The three images, all with one tag. An empty tag is the chart's appVersion. |
+| `image` | The two images, with one tag. An empty tag is the chart's appVersion. The web pod's caddy container runs the misp image. |
 | `imagePullSecrets` | Secrets with the registry credentials for the images, by name. |
 | `nodeSelector` | Node selection for every pod of the release. |
 | `tolerations` | Tolerations for every pod of the release. |
@@ -193,12 +193,10 @@ Fail when MISP no longer matches what this image patches or depends on. A failur
 | `console-commands` | app/Console/Command | files/misp_container/task.py TASKS |
 | `api-routes` | app/Controller | the file and line named in each problem |
 | `attachment-keys` | app/Lib/Tools/AttachmentTool.php, app/Lib/Tools/AWSS3Client.php | files/misp_container/migrate.py attachment_key(), files/misp_container/s3.py |
-| `cakeresque` | app/Config/bootstrap.default.php | Dockerfile stage composer-prep |
 | `cakelog-streams` | app/Config/bootstrap.default.php | files/misp_container/init.py LOG_BLOCK |
 | `shell-streams` | app/Lib/cakephp/lib/Cake/Console/Shell.php | files/misp_container/init.py LOG_BLOCK |
 | `relayed-files` | app/Model, app/Lib, app/Controller, app/Console, app/Plugin | files/misp_container/logrelay.py FILES |
 | `image-paths` | app/Model/Server.php, app/View/Helper/OrgImgHelper.php | deploy/chart/templates/_helpers.tpl misp.appVolumeMounts |
-| `python-requirements` | requirements.txt | files/requirements-misp.txt |
 | `log-block-php` | php | files/misp_container/init.py LOG_BLOCK |
 
 ## Patches to MISP: `patches/`
@@ -214,7 +212,7 @@ Apply this repository's patches to a MISP tree, and fail when one no longer fits
 | Script | Does |
 |---|---|
 | `apply_patches.py` | Apply this repository's patches to a MISP tree, and fail when one no longer fits. |
-| `build.py` | Build the three images of this tree under one tag: misp, caddy and modules. |
+| `build.py` | Build the two images of this tree under one tag: misp and modules. |
 | `chart.py` | Render the Helm chart in deploy/chart for the doc generators and the tests. |
 | `check_upstream.py` | Fail when MISP no longer matches what this image patches or depends on. |
 | `generate_agents_md.py` | Write AGENTS.md: a map of the repository, read from the tree itself. |
@@ -265,6 +263,7 @@ Unit tests (`tests/`, no containers):
 | `test_metrics.py` | Unit tests for the Prometheus metrics exporter. |
 | `test_migrate.py` | Unit tests for the migration Job (misp_container.migrate). |
 | `test_release.py` | Unit tests for the release tool (scripts/release.py): the next tag and chart version. |
+| `test_requirements.py` | files/requirements-misp.txt was resolved for the MISP the Dockerfile pins. |
 | `test_s3.py` | Unit tests for the minimal S3 client (misp_container.s3). |
 | `test_sync.py` | Unit tests for the org sync engine. |
 | `test_task.py` | Unit tests for the periodic task runner. |
@@ -290,7 +289,7 @@ Values and manifests of the stack suites:
 | Command | Does |
 |---|---|
 | `mise run test` | Run unit tests |
-| `mise run build` | Build the misp, caddy and modules images under MISP_IMAGE_TAG, else the chart's appVersion |
+| `mise run build` | Build the misp and modules images under MISP_IMAGE_TAG, else the chart's appVersion |
 | `mise run test-integration` | Run the upstream guard and the integration suite (k3s in podman) |
 | `mise run test-sync` | Run the hub-spoke sync suite (2 MISP instances and a MISP 2.5 partner) |
 | `mise run test-migration` | Run the migration suite (a MISP 2.5 database on MariaDB into PostgreSQL) |
@@ -309,17 +308,18 @@ Values and manifests of the stack suites:
 | Job | Needs | Steps |
 |---|---|---|
 | `gate` |  | Plan the run |
-| `build` | `gate` | Build ${{ matrix.name }} image |
+| `build` | `gate` | Build ${{ matrix.name }} image; Trivy vulnerability scan (${{ matrix.name }}); Upload scan results; Fail on a fixable CRITICAL finding (${{ matrix.name }}) |
 | `unit` | `gate` | Install helm and kubeconform; Unit tests |
 | `suite` | `gate`, `build` | Load the images; Install helm and kubectl; Run the suite; Upload the test report and the cluster logs |
-| `scan` | `gate`, `build` | Build ${{ matrix.target }} image (from cache); Trivy vulnerability scan (${{ matrix.target }}); Upload scan results; Fail on a fixable CRITICAL finding (${{ matrix.target }}) |
-| `ci-ok` | `gate`, `build`, `unit`, `suite`, `scan` | Check the jobs |
-| `publish-arm64` | `gate`, `build`, `unit`, `suite`, `scan` | Log in to GHCR; Build and push misp for arm64; Build and push caddy for arm64; Build and push modules for arm64 |
-| `publish` | `gate`, `build`, `unit`, `suite`, `scan`, `publish-arm64` | Install helm; Plan the publication; Log in to GHCR; Check tag immutability; Build and push misp for amd64 (from cache); Build and push caddy for amd64 (from cache); Build and push modules for amd64 (from cache); Tag the images for amd64 and arm64; Push the chart; Create GitHub Release |
+| `ci-ok` | `gate`, `build`, `unit`, `suite` | Check the jobs |
+| `publish-plan` | `gate`, `build`, `unit`, `suite` | Install helm; Plan the publication; Log in to GHCR; Check tag immutability |
+| `publish-arm64` | `publish-plan` | Log in to GHCR; Build and push misp for arm64; Build and push modules for arm64; Fail on a fixable CRITICAL finding (misp, arm64); Fail on a fixable CRITICAL finding (modules, arm64) |
+| `publish` | `publish-plan`, `publish-arm64` | Install helm; Log in to GHCR; Build and push misp for amd64 (from cache); Build and push modules for amd64 (from cache); Tag the images for amd64 and arm64; Push the chart; Create GitHub Release; Delete the tag run's caches |
 
 ## Workflows: `.github/workflows/`
 
 | Workflow | Runs on | Does |
 |---|---|---|
+| `.github/workflows/cache-cleanup.yaml` | pull_request | Deletes a pull request's Actions caches when it closes: nothing reads them again, and at the repository's 10 GB limit GitHub evicts the least recently used entries, master's layers among them. |
 | `.github/workflows/ci.yaml` | push (master, tag v*), pull_request (master) | Tests, scans and releases the images and the Helm chart: unit tests, the chart renders, the stack suites on k3s and Trivy; on a tag, pushes the images for amd64 and arm64 and the chart and creates the release (tests/README.md, CI). |
-| `.github/workflows/track-misp-releases.yaml` | schedule, workflow_dispatch | Opens a pull request for each new MISP release of the major version the Dockerfile pins: bumps CORE_TAG, clears a CORE_COMMIT pin, resolves files/composer.lock and files/requirements-misp.txt, and regenerates the settings catalogue (DEVELOPING.md, New MISP releases). While the pin is a work-in-progress branch such as 3.0_wip, the first release of that major version replaces it. |
+| `.github/workflows/track-misp-releases.yaml` | schedule, workflow_dispatch | Opens a draft pull request for each new MISP release of the major version the Dockerfile pins: bumps CORE_TAG, clears a CORE_COMMIT pin, and resolves files/composer.lock and files/requirements-misp.txt (DEVELOPING.md, New MISP releases). While the pin is a work-in-progress branch such as 3.0_wip, the first release of that major version replaces it. |

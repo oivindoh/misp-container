@@ -64,7 +64,6 @@
       "additionalProperties": false,
       "properties": {
         "misp": {"type": "string"},
-        "caddy": {"type": "string"},
         "modules": {"type": "string"},
         "tag": {"type": ["string", "number"]},
         "pullPolicy": {"type": "string", "enum": ["Always", "IfNotPresent", "Never"]}

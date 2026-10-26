@@ -25,7 +25,7 @@ K3S_IMAGE = ("docker.io/rancher/k3s:v1.37.1-k3s1"
 REPO = Path(__file__).resolve().parents[2]
 CHART = REPO / "deploy" / "chart"
 IMAGES = tuple(yaml.safe_load((CHART / "values.yaml").read_text())["image"][name]
-               for name in ("misp", "caddy", "modules"))
+               for name in ("misp", "modules"))
 
 
 def scratch_dir() -> Path:

@@ -57,12 +57,10 @@ revisit.
 | `console-commands` | app/Console/Command | files/misp_container/task.py TASKS | renames or drops a console command a task runs |
 | `api-routes` | app/Controller | the file and line named in each problem | drops a controller or an action the image calls |
 | `attachment-keys` | app/Lib/Tools/AttachmentTool.php, app/Lib/Tools/AWSS3Client.php | files/misp_container/migrate.py attachment_key(), files/misp_container/s3.py | keys attachments another way, or stops sending path-style S3 requests |
-| `cakeresque` | app/Config/bootstrap.default.php | Dockerfile stage composer-prep | loads CakeResque while SimpleBackgroundJobs is on |
 | `cakelog-streams` | app/Config/bootstrap.default.php | files/misp_container/init.py LOG_BLOCK | configures a CakeLog file stream that the logging block does not drop |
 | `shell-streams` | app/Lib/cakephp/lib/Cake/Console/Shell.php | files/misp_container/init.py LOG_BLOCK | checks other stream names before it adds its console streams |
 | `relayed-files` | app/Model, app/Lib, app/Controller, app/Console, app/Plugin | files/misp_container/logrelay.py FILES | writes a new file under app/tmp/logs, or stops writing one the relay follows |
 | `image-paths` | app/Model/Server.php, app/View/Helper/OrgImgHelper.php | deploy/chart/templates/_helpers.tpl misp.appVolumeMounts | uploads org logos or custom images to, or reads them from, a directory the volumes do not mount |
-| `python-requirements` | requirements.txt | files/requirements-misp.txt | needs a Python package, or a version of one, that the pins do not give (mise run misp-requirements) |
 | `log-block-php` | php | files/misp_container/init.py LOG_BLOCK | cannot run the logging block, in either format |
 <!-- end generated -->
 

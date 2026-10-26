@@ -1,7 +1,7 @@
 """Unit tests for the upstream guard (scripts/check_upstream.py).
 
 The fixture is a MISP tree reduced to the lines the guard reads, in the shape
-of MISP 2.5.47. Each test changes one of them the way a MISP release could.
+of the pinned MISP. Each test changes one of them the way a MISP release could.
 """
 
 import json
@@ -16,7 +16,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 import check_upstream as cu  # noqa: E402
 from misp_container import task  # noqa: E402
 
-# The shape of MISP 2.5.47's SchedulerWorkerShell.php, reduced to the lines the
+# The shape of MISP's SchedulerWorkerShell.php, reduced to the lines the
 # guard reads
 SCHEDULER_SHELL = """<?php
 class SchedulerWorkerShell extends AppShell
@@ -208,7 +208,7 @@ class AWSS3Client
 }
 """
 
-# The files MISP writes under app/tmp/logs directly, one line each, as 2.5.47 writes them
+# The files MISP writes under app/tmp/logs directly, one line each, as MISP writes them
 LOG_WRITERS = {
     "app/Lib/Tools/ServerSyncTool.php":
         "<?php file_put_contents(APP . 'tmp/logs/server-sync.log', $logEntry, FILE_APPEND | LOCK_EX);",
@@ -257,20 +257,6 @@ class OrgImgHelper extends AppHelper
 }
 """
 
-REQUIREMENTS = """jsonschema>=4.19.1
-misp-stix>=2026.10.12
-pymisp==2.5.34.4
-python-magic>=0.4.27
-"""
-
-PINS = """# a comment
-jsonschema==4.26.0
-misp-stix==2026.10.12
-pymisp==2.5.34.4
-python_magic==0.4.27
-cffi==2.1.1 ; implementation_name == 'pypy'
-"""
-
 
 def write(root, rel, text):
     path = root / rel
@@ -279,12 +265,9 @@ def write(root, rel, text):
 
 
 @pytest.fixture
-def misp(tmp_path, monkeypatch):
-    """A MISP tree that passes every check, with pins that meet its requirements."""
-    write(tmp_path, "requirements-misp.txt", PINS)
-    monkeypatch.setattr(cu, "OUR_REQUIREMENTS", tmp_path / "requirements-misp.txt")
+def misp(tmp_path):
+    """A MISP tree that passes every check."""
     root = tmp_path / "MISP"
-    write(root, cu.MISP_REQUIREMENTS, REQUIREMENTS)
     write(root, cu.BACKGROUND_JOBS, BACKGROUND_JOBS)
     write(root, cu.SCHEDULER_SHELL, SCHEDULER_SHELL)
     for shell, methods in SHELLS.items():
@@ -321,7 +304,7 @@ def problems(misp, name):
     return cu.run(misp)[name]
 
 
-class TestShapeOf2547:
+class TestTheFixture:
     def test_every_check_passes(self, misp):
         assert cu.run(misp) == {check.name: [] for check in cu.CHECKS}
 
@@ -421,10 +404,6 @@ class TestAttachmentKeys:
 
 
 class TestBootstrap:
-    def test_cakeresque_loaded_always(self, misp):
-        edit(misp, cu.BOOTSTRAP, "if (empty(Configure::read('SimpleBackgroundJobs.enabled'))) {", "{")
-        assert "MissingPluginException" in problems(misp, "cakeresque")[0]
-
     def test_a_new_file_stream(self, misp):
         write(misp, cu.BOOTSTRAP, BOOTSTRAP + "CakeLog::config('audit', array('engine' => 'FileLog', 'file' => 'audit'));\n")
         [problem] = problems(misp, "cakelog-streams")
@@ -504,30 +483,6 @@ class TestImagePaths:
     def test_rules_gone(self, misp):
         edit(misp, cu.SERVER_MODEL, "function getFileRules(", "function getUploadRules(")
         assert any("no getFileRules()" in p for p in problems(misp, "image-paths"))
-
-
-class TestPythonRequirements:
-    def test_a_raised_floor(self, misp):
-        edit(misp, cu.MISP_REQUIREMENTS, "misp-stix>=2026.10.12", "misp-stix>=2026.11.2")
-        [problem] = problems(misp, "python-requirements")
-        assert "need misp-stix>=2026.11.2, the pin is 2026.10.12" in problem
-
-    def test_a_new_exact_pin(self, misp):
-        edit(misp, cu.MISP_REQUIREMENTS, "pymisp==2.5.34.4", "pymisp==2.5.35")
-        assert any("need pymisp==2.5.35" in p for p in problems(misp, "python-requirements"))
-
-    def test_a_new_package(self, misp):
-        edit(misp, cu.MISP_REQUIREMENTS, "pymisp==2.5.34.4", "pymisp==2.5.34.4\nlief>=0.13.1")
-        assert any("need lief>=0.13.1, which no pin covers" in p for p in problems(misp, "python-requirements"))
-
-    def test_extras_markers_and_trailing_zeros(self, misp):
-        edit(misp, cu.MISP_REQUIREMENTS, "jsonschema>=4.19.1",
-             "jsonschema[format]>=4.26 ; python_version >= '3.10'")
-        assert problems(misp, "python-requirements") == []
-
-    def test_a_version_with_letters_is_checked_by_hand(self, misp):
-        edit(misp, cu.MISP_REQUIREMENTS, "jsonschema>=4.19.1", "jsonschema>=4.27rc1")
-        assert any("cannot compare the pin jsonschema==4.26.0" in p for p in problems(misp, "python-requirements"))
 
 
 class TestOffered:

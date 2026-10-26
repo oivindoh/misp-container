@@ -1,15 +1,18 @@
 [project]
 name = "misp-container"
 version = "0.1.0"
-requires-python = ">=3.12"
+requires-python = ">=3.13"
 
 [dependency-groups]
 dev = [
-    # The database drivers and bcrypt at the versions files/requirements-final.txt pins in
-    # the image: the unit tests run the org sync's authkey check for real
+    # The database drivers, bcrypt and redis at the versions files/requirements-final.txt
+    # pins in the image: the unit tests run the org sync's authkey check for real
     "bcrypt==5.0.0",
     "pg8000==1.31.5",
     "pymysql==1.2.3",
+    "redis==8.1.0",
+    # The reference parser of the exposition format, for the exporter's tests
+    "prometheus-client",
     "pytest",
     "pyyaml",
 ]

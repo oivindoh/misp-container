@@ -42,6 +42,7 @@ Tests of the Python entrypoint library (`files/misp_container/`), the scripts an
 | `test_metrics.py` | Unit tests for the Prometheus metrics exporter. |
 | `test_migrate.py` | Unit tests for the migration Job (misp_container.migrate). |
 | `test_release.py` | Unit tests for the release tool (scripts/release.py): the next tag and chart version. |
+| `test_requirements.py` | files/requirements-misp.txt was resolved for the MISP the Dockerfile pins. |
 | `test_s3.py` | Unit tests for the minimal S3 client (misp_container.s3). |
 | `test_sync.py` | Unit tests for the org sync engine. |
 | `test_task.py` | Unit tests for the periodic task runner. |

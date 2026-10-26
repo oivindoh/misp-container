@@ -19,7 +19,7 @@ description = "Run unit tests"
 run = "python -m pytest tests/ -v --ignore=tests/e2e"
 
 [tasks.build]
-description = "Build the misp, caddy and modules images under MISP_IMAGE_TAG, else the chart's appVersion"
+description = "Build the misp and modules images under MISP_IMAGE_TAG, else the chart's appVersion"
 run = "python scripts/build.py ${@}"
 
 [tasks.test-integration]

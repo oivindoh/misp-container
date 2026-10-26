@@ -61,7 +61,7 @@ below come from them.
 <!-- generated: values -->
 | Value | Is |
 |---|---|
-| `image` | The three images, all with one tag. An empty tag is the chart's appVersion. |
+| `image` | The two images, with one tag. An empty tag is the chart's appVersion. The web pod's caddy container runs the misp image. |
 | `imagePullSecrets` | Secrets with the registry credentials for the images, by name. |
 | `nodeSelector` | Node selection for every pod of the release. |
 | `tolerations` | Tolerations for every pod of the release. |
