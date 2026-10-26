@@ -1,25 +1,28 @@
 """Unit tests for the Prometheus metrics exporter."""
 
-import io
+import base64
 import os
+import ssl
 import sys
 import time
 from unittest.mock import MagicMock, patch, PropertyMock
 
 import pytest
+import redis
+from prometheus_client.parser import text_string_to_metric_families
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "files"))
 
 from misp_container.metrics import (
+    ENCRYPTED_MAGIC,
     _escape_label,
     _metric,
     _collect_db_metrics,
     _collect_network_metrics,
     _collect_queue_metrics,
-    _Redis,
-    RedisError,
-    _check_server_auth,
-    _check_tls_cert,
+    _check_partner,
+    _partner_tls,
+    _proxy,
     collect_all,
     network_metrics,
     refresh_network_metrics,
@@ -37,54 +40,14 @@ def _reset_caches():
 
 
 def _parse_metrics(text):
-    """Parse Prometheus text into {metric_name: [(labels_dict, value), ...]}."""
+    """{sample name: [(labels, value as the exposition writes it)]}, read by the reference parser."""
     result = {}
-    current = None
-    for line in text.strip().splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        if line.startswith("# HELP"):
-            current = line.split()[2]
-            result.setdefault(current, [])
-        elif line.startswith("# TYPE"):
-            continue
-        elif current and not line.startswith("#"):
-            # "name{k1="v1",k2="v2"} 42" or "name 42"
-            if "{" in line:
-                name_labels, value = line.rsplit("} ", 1)
-                name, labels_str = name_labels.split("{", 1)
-                labels = {}
-                for pair in _split_label_pairs(labels_str):
-                    k, v = pair.split("=", 1)
-                    labels[k] = v.strip('"')
-            else:
-                parts = line.split()
-                name = parts[0]
-                value = parts[1]
-                labels = {}
-            result.setdefault(name, []).append((labels, value))
+    for family in text_string_to_metric_families(text):
+        for sample in family.samples:
+            value = float(sample.value)
+            result.setdefault(sample.name, []).append(
+                (sample.labels, str(int(value)) if value.is_integer() else str(value)))
     return result
-
-
-def _split_label_pairs(s):
-    """Split 'k1="v1",k2="v2"' respecting escaped quotes."""
-    pairs = []
-    current = []
-    in_quotes = False
-    prev = None
-    for ch in s:
-        if ch == '"' and prev != '\\':
-            in_quotes = not in_quotes
-        if ch == ',' and not in_quotes:
-            pairs.append("".join(current))
-            current = []
-        else:
-            current.append(ch)
-        prev = ch
-    if current:
-        pairs.append("".join(current))
-    return pairs
 
 
 # ---------------------------------------------------------------------------
@@ -391,8 +354,7 @@ class TestCollectDbMetrics:
         assert "misp_server_info" not in parsed
 
     @patch("misp_container.metrics._connect")
-    def test_job_counters(self, mock_connect):
-        """All jobs fetched in one query; split into server vs non-server counters."""
+    def test_jobs_and_the_last_sync_jobs_per_server(self, mock_connect):
         mock_connect.return_value = _make_conn({
             "system_settings": [],
             "pg_stat_user_tables": [],
@@ -402,39 +364,26 @@ class TestCollectDbMetrics:
                 "sharing_groups": 0, "tags": 0,
             },
             "FROM servers": [],
-            "LEFT JOIN servers": [
-                # Server jobs (server_id is not None)
-                {"worker": "default", "job_type": "pull", "status": 4, "server_id": 1, "server_name": "Partner A", "cnt": 8},
-                {"worker": "default", "job_type": "pull", "status": 3, "server_id": 1, "server_name": "Partner A", "cnt": 1},
-                {"worker": "default", "job_type": "push", "status": 4, "server_id": 2, "server_name": "Partner B", "cnt": 3},
-                # Non-server jobs (server_id is None)
-                {"worker": "default", "job_type": "publish", "status": 4, "server_id": None, "server_name": None, "cnt": 15},
-                {"worker": "cache", "job_type": "cache_feeds", "status": 4, "server_id": None, "server_name": None, "cnt": 7},
-                {"worker": "default", "job_type": "publish", "status": 3, "server_id": None, "server_name": None, "cnt": 2},
-                {"worker": "prio", "job_type": "publish_event", "status": 0, "server_id": None, "server_name": None, "cnt": 4},
+            "FROM jobs GROUP BY": [
+                {"worker": "default", "job_type": "pull", "status": 4, "cnt": 8},
+                {"worker": "default", "job_type": "publish", "status": 3, "cnt": 2},
+                {"worker": "prio", "job_type": "publish_event", "status": 0, "cnt": 4},
+            ],
+            "JOIN servers": [
+                {"id": 1, "name": "Partner A", "job_type": "pull", "status": 4, "last": 1761480000.0},
+                {"id": 1, "name": "Partner A", "job_type": "pull", "status": 3, "last": 1761483600.0},
             ],
         })
-        output, _ = _collect_db_metrics()
-        parsed = _parse_metrics(output)
+        parsed = _parse_metrics(_collect_db_metrics()[0])
 
-        # Server sync job counters
-        server_jobs = parsed["misp_server_jobs_total"]
-        by_key = {(s[0]["id"], s[0]["job_type"], s[0]["status"]): s[1] for s in server_jobs}
-        assert by_key[("1", "pull", "completed")] == "8"
-        assert by_key[("1", "pull", "failed")] == "1"
-        assert by_key[("2", "push", "completed")] == "3"
-        names = {s[0]["id"]: s[0]["name"] for s in server_jobs}
-        assert names["1"] == "Partner A"
-        assert names["2"] == "Partner B"
-
-        # Non-server job counters
-        jobs = parsed["misp_jobs_total"]
-        by_key = {(s[0]["worker"], s[0]["job_type"], s[0]["status"]): s[1] for s in jobs}
-        assert by_key[("default", "publish", "completed")] == "15"
-        assert by_key[("cache", "cache_feeds", "completed")] == "7"
-        assert by_key[("default", "publish", "failed")] == "2"
+        jobs = {(l["worker"], l["job_type"], l["status"]): v for l, v in parsed["misp_jobs"]}
         # MISP leaves a job at 0 while it waits and runs
-        assert by_key[("prio", "publish_event", "unfinished")] == "4"
+        assert jobs == {("default", "pull", "completed"): "8", ("default", "publish", "failed"): "2",
+                        ("prio", "publish_event", "unfinished"): "4"}
+        last = {(l["id"], l["name"], l["job_type"], l["status"]): v
+                for l, v in parsed["misp_server_job_last_timestamp_seconds"]}
+        assert last == {("1", "Partner A", "pull", "completed"): "1761480000",
+                        ("1", "Partner A", "pull", "failed"): "1761483600"}
         assert "misp_jobs_queued" not in parsed
 
     @patch("misp_container.metrics._connect")
@@ -536,83 +485,45 @@ class TestCollectDbMetrics:
 
 
 class TestCollectNetworkMetrics:
-    """Network reachability and TLS cert checks with mocked I/O."""
+    """The partner block from _check_partner's answers."""
 
     def setup_method(self):
         _reset_caches()
 
     def test_empty_server_list(self):
-        """No output when no servers are configured."""
-        output = _collect_network_metrics([])
-        assert output == ""
+        assert _collect_network_metrics([]) == ""
 
-    @patch("misp_container.metrics._check_tls_cert")
-    @patch("misp_container.metrics._check_server_auth")
-    def test_reachable_server(self, mock_auth, mock_tls):
-        """Reachable server produces reachable=1 and cert expiry metric."""
-        mock_auth.return_value = True
-        mock_tls.return_value = 1750000000.0
+    @patch("misp_container.metrics._check_partner", return_value=(True, 1750000000.0))
+    def test_reachable_server(self, mock_check):
         servers = [{"id": 1, "name": "Test", "url": "https://misp.test", "authkey": "key"}]
-        output = _collect_network_metrics(servers)
-        parsed = _parse_metrics(output)
-
+        parsed = _parse_metrics(_collect_network_metrics(servers))
         assert parsed["misp_server_reachable"][0][1] == "1"
         assert parsed["misp_server_tls_expiry_timestamp_seconds"][0][1] == "1750000000"
 
-    @patch("misp_container.metrics._check_tls_cert")
-    @patch("misp_container.metrics._check_server_auth")
-    def test_unreachable_server(self, mock_auth, mock_tls):
-        """Unreachable server produces reachable=0."""
-        mock_auth.return_value = False
-        mock_tls.return_value = None
+    @patch("misp_container.metrics._check_partner", return_value=(False, None))
+    def test_unreachable_server(self, mock_check):
         servers = [{"id": 1, "name": "Test", "url": "https://misp.test", "authkey": "key"}]
-        output = _collect_network_metrics(servers)
-        parsed = _parse_metrics(output)
-
+        parsed = _parse_metrics(_collect_network_metrics(servers))
         assert parsed["misp_server_reachable"][0][1] == "0"
         assert "misp_server_tls_expiry_timestamp_seconds" not in parsed
 
-    @patch("misp_container.metrics._check_tls_cert")
-    @patch("misp_container.metrics._check_server_auth")
-    def test_http_server_no_tls_check(self, mock_auth, mock_tls):
-        """HTTP (non-TLS) server skips certificate check."""
-        mock_auth.return_value = True
-        servers = [{"id": 1, "name": "Test", "url": "http://misp.test", "authkey": "key"}]
-        output = _collect_network_metrics(servers)
-        mock_tls.assert_not_called()
-        parsed = _parse_metrics(output)
-        assert "misp_server_tls_expiry_timestamp_seconds" not in parsed
-
-    @patch("misp_container.metrics._check_tls_cert")
-    @patch("misp_container.metrics._check_server_auth")
-    def test_multiple_servers(self, mock_auth, mock_tls):
-        """Multiple servers each get their own reachability sample."""
-        mock_auth.side_effect = [True, False]
-        mock_tls.side_effect = [1750000000.0, None]
+    @patch("misp_container.metrics._check_partner", side_effect=[(True, 1750000000.0), (False, None)])
+    def test_multiple_servers(self, mock_check):
         servers = [
             {"id": 1, "name": "A", "url": "https://a.test", "authkey": "k1"},
             {"id": 2, "name": "B", "url": "https://b.test", "authkey": "k2"},
         ]
-        output = _collect_network_metrics(servers)
-        parsed = _parse_metrics(output)
+        parsed = _parse_metrics(_collect_network_metrics(servers))
+        assert {l["id"]: v for l, v in parsed["misp_server_reachable"]} == {"1": "1", "2": "0"}
 
-        reachable = {s[0]["id"]: s[1] for s in parsed["misp_server_reachable"]}
-        assert reachable["1"] == "1"
-        assert reachable["2"] == "0"
+    @patch("misp_container.metrics._check_partner")
+    def test_server_with_empty_url_skipped(self, mock_check):
+        assert _collect_network_metrics([{"id": 1, "name": "Bad", "url": "", "authkey": "key"}]) == ""
+        mock_check.assert_not_called()
 
-    @patch("misp_container.metrics._check_tls_cert")
-    @patch("misp_container.metrics._check_server_auth")
-    def test_server_with_empty_url_skipped(self, mock_auth, mock_tls):
-        """Servers with no URL are skipped."""
-        servers = [{"id": 1, "name": "Bad", "url": "", "authkey": "key"}]
-        output = _collect_network_metrics(servers)
-        mock_auth.assert_not_called()
-        assert output == ""
-
-    @patch("misp_container.metrics._check_tls_cert", return_value=1750000000.0)
-    @patch("misp_container.metrics._check_server_auth", return_value=True)
+    @patch("misp_container.metrics._check_partner", return_value=(True, 1750000000.0))
     @patch("misp_container.metrics._connect")
-    def test_refresh_stores_the_block_for_the_scrape(self, mock_connect, mock_auth, mock_tls):
+    def test_refresh_stores_the_block_for_the_scrape(self, mock_connect, mock_check):
         """The check thread reads the servers itself and leaves the block for collect_all."""
         mock_connect.return_value = _make_conn({"FROM servers": [
             {"id": 1, "name": "A", "url": "https://a.test", "authkey": "k"}]})
@@ -627,69 +538,129 @@ class TestCollectNetworkMetrics:
 
 
 # ---------------------------------------------------------------------------
-# Server auth check
+# The partner check, connected as MISP connects
 # ---------------------------------------------------------------------------
 
-
-class TestCheckServerAuth:
-    """_check_server_auth probes /servers/getVersion with the authkey."""
-
-    @patch("misp_container.metrics.urllib.request.urlopen")
-    def test_success(self, mock_urlopen):
-        mock_resp = MagicMock()
-        mock_resp.status = 200
-        mock_resp.__enter__ = MagicMock(return_value=mock_resp)
-        mock_resp.__exit__ = MagicMock(return_value=False)
-        mock_urlopen.return_value = mock_resp
-
-        assert _check_server_auth("https://misp.test", "mykey") is True
-
-    @patch("misp_container.metrics.urllib.request.urlopen")
-    def test_connection_error(self, mock_urlopen):
-        mock_urlopen.side_effect = ConnectionError("refused")
-        assert _check_server_auth("https://misp.test", "mykey") is False
-
-    @patch("misp_container.metrics.urllib.request.urlopen")
-    def test_timeout(self, mock_urlopen):
-        import socket
-        mock_urlopen.side_effect = socket.timeout("timed out")
-        assert _check_server_auth("https://misp.test", "mykey") is False
+# A self-signed certificate for misp.test that expires 2036-10-23 13:00:51 UTC
+PARTNER_DER = base64.b64decode(
+    "MIIBWzCCAQKgAwIBAgIUVPqfBYDuBpb+YlS2lkeSsbsQS9MwCgYIKoZIzj0EAwIwFDESMBAGA1UEAwwJbWlzcC50ZXN0MB4XDTI2"
+    "MTAyNjEzMDA1MVoXDTM2MTAyMzEzMDA1MVowFDESMBAGA1UEAwwJbWlzcC50ZXN0MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE"
+    "33g7X3foNXzMtdg5l7IC3hXNWZ+XMSOaaz0sIybTeXUXjnIxaIozdKMz4hshsk1Q8DN9uEitNBeUoRTwya0bqqMyMDAwHQYDVR0O"
+    "BBYEFPtq6OemKROPidXPUQeZlm76BT8WMA8GA1UdEwEB/wQFMAMBAf8wCgYIKoZIzj0EAwIDRwAwRAIgI2oTjzB/YAjW+wB8A4LW"
+    "T6uGGRtkR2EM9XgHCs/vh/UCIG915f0V1phyhHCTn+L0bSeJwTFnCjPxBwjjwscgUp0F")
+PARTNER_EXPIRY = 2108379651
 
 
-# ---------------------------------------------------------------------------
-# TLS cert check
-# ---------------------------------------------------------------------------
+class FakeHTTP:
+    """Stands in for an http.client connection class: records each connection, answers with a status."""
+
+    def __init__(self, status=200, fail=None):
+        self.status, self.fail = status, fail
+        self.made = []
+
+    def __call__(self, host, port, timeout=None, context=None):
+        conn = MagicMock()
+        conn.target = (host, port)
+        conn.context = context
+        if self.fail:
+            conn.connect.side_effect = self.fail
+        conn.sock.getpeercert.return_value = PARTNER_DER
+        conn.getresponse.return_value.status = self.status
+        self.made.append(conn)
+        return conn
 
 
-class TestCheckTlsCert:
+def check(server, proxy=None, status=200, fail=None):
+    """_check_partner against FakeHTTP connections: its answer and the one connection made."""
+    fake = FakeHTTP(status, fail)
+    with patch("misp_container.metrics.http.client.HTTPSConnection", fake), \
+            patch("misp_container.metrics.http.client.HTTPConnection", fake), \
+            patch("misp_container.metrics._partner_tls", return_value="tls"):
+        answer = _check_partner({"id": 1, "authkey": "a" * 40, **server}, proxy)
+    return answer, fake.made[0]
 
-    @patch("misp_container.metrics.socket.create_connection")
-    def test_valid_cert(self, mock_conn):
-        mock_ssock = MagicMock()
-        mock_ssock.getpeercert.return_value = {"notAfter": "Jan  1 00:00:00 2027 GMT"}
-        mock_ssock.__enter__ = MagicMock(return_value=mock_ssock)
-        mock_ssock.__exit__ = MagicMock(return_value=False)
 
-        mock_sock = MagicMock()
-        mock_sock.__enter__ = MagicMock(return_value=mock_sock)
-        mock_sock.__exit__ = MagicMock(return_value=False)
+PROXY = {"host": "proxy", "port": 3128, "headers": {"Proxy-Authorization": "Basic dTpw"}}
 
-        mock_ctx = MagicMock()
-        mock_ctx.wrap_socket.return_value = mock_ssock
 
-        mock_conn.return_value = mock_sock
+class TestCheckPartner:
+    def test_a_partner_that_answers_is_reachable_with_its_expiry(self):
+        answer, conn = check({"url": "https://misp.test/"})
+        assert answer == (True, PARTNER_EXPIRY)
+        assert conn.target == ("misp.test", 443) and conn.context == "tls"
+        conn.request.assert_called_once_with("GET", "/servers/getVersion",
+                                             headers={"Accept": "application/json", "Authorization": "a" * 40})
 
-        with patch("misp_container.metrics.ssl.create_default_context", return_value=mock_ctx):
-            result = _check_tls_cert("misp.test", 443)
+    def test_a_refused_connection_is_unreachable(self):
+        assert check({"url": "https://misp.test"}, fail=ConnectionRefusedError())[0] == (False, None)
 
-        assert result is not None
-        assert result > 0
+    def test_a_rejected_key_is_unreachable(self):
+        assert check({"url": "https://misp.test"}, status=403)[0][0] is False
 
-    @patch("misp_container.metrics.socket.create_connection")
-    def test_connection_failure(self, mock_conn):
-        mock_conn.side_effect = ConnectionRefusedError("refused")
-        result = _check_tls_cert("misp.test", 443)
-        assert result is None
+    @pytest.mark.parametrize("authkey", [ENCRYPTED_MAGIC + "cipher", (ENCRYPTED_MAGIC + "cipher").encode("latin-1")])
+    def test_an_encrypted_key_is_not_sent_and_any_answer_counts(self, authkey):
+        # With Security.encryption_key set, servers.authkey is ciphertext the check cannot send
+        answer, conn = check({"url": "https://misp.test", "authkey": authkey}, status=403)
+        assert answer[0] is True
+        assert "Authorization" not in conn.request.call_args.kwargs["headers"]
+
+    def test_an_http_partner_has_no_expiry(self):
+        answer, conn = check({"url": "http://misp.test:8080"})
+        assert answer == (True, None) and conn.target == ("misp.test", 8080)
+
+    def test_the_proxy_tunnels_to_the_partner(self):
+        _, conn = check({"url": "https://misp.test"}, PROXY)
+        assert conn.target == ("proxy", 3128)
+        conn.set_tunnel.assert_called_once_with("misp.test", 443, headers=PROXY["headers"])
+
+    def test_skip_proxy_connects_directly(self):
+        _, conn = check({"url": "https://misp.test", "skip_proxy": True}, PROXY)
+        assert conn.target == ("misp.test", 443)
+        conn.set_tunnel.assert_not_called()
+
+    def test_an_http_partner_through_the_proxy_takes_the_absolute_url(self):
+        _, conn = check({"url": "http://misp.test"}, PROXY)
+        assert conn.target == ("proxy", 3128)
+        assert conn.request.call_args.args[1] == "http://misp.test:80/servers/getVersion"
+        assert conn.request.call_args.kwargs["headers"]["Proxy-Authorization"] == "Basic dTpw"
+
+
+class TestPartnerTls:
+    def tls(self, server):
+        ctx = MagicMock(check_hostname=True, verify_mode=ssl.CERT_REQUIRED)
+        with patch("misp_container.metrics.ssl.create_default_context", return_value=ctx) as create, \
+                patch.dict(os.environ, {"MISP_SETTING_MISP__ca_path": "/etc/ssl/certs/ca-certificates.crt"}):
+            assert _partner_tls(server) is ctx
+        return ctx, create.call_args.kwargs["cafile"]
+
+    def test_the_ca_path_of_misp_by_default(self):
+        ctx, cafile = self.tls({})
+        assert cafile == "/etc/ssl/certs/ca-certificates.crt"
+        assert ctx.check_hostname and ctx.verify_mode == ssl.CERT_REQUIRED
+
+    def test_self_signed_without_a_pinned_certificate_checks_none(self):
+        ctx, _ = self.tls({"self_signed": True})
+        assert not ctx.check_hostname and ctx.verify_mode == ssl.CERT_NONE
+
+    def test_a_pinned_certificate_from_the_secret(self):
+        ctx, cafile = self.tls({"self_signed": True, "cert_file": "3.pem"})
+        assert cafile == "/etc/misp-docker/certs/3.pem"
+        assert not ctx.check_hostname and ctx.verify_mode == ssl.CERT_REQUIRED
+
+    def test_a_client_certificate_from_the_secret(self):
+        ctx, _ = self.tls({"client_cert_file": "3_client.pem"})
+        ctx.load_cert_chain.assert_called_once_with("/etc/misp-docker/certs/3_client.pem")
+
+
+class TestProxy:
+    def test_no_host_no_proxy(self):
+        with patch.dict(os.environ, {"MISP_SETTING_Proxy__host": ""}):
+            assert _proxy() is None
+
+    def test_misps_proxy_settings(self):
+        with patch.dict(os.environ, {"MISP_SETTING_Proxy__host": "proxy", "MISP_SETTING_Proxy__port": "",
+                                     "MISP_SETTING_Proxy__user": "u", "MISP_SETTING_Proxy__password": "p"}):
+            assert _proxy() == PROXY
 
 
 # ---------------------------------------------------------------------------
@@ -697,93 +668,24 @@ class TestCheckTlsCert:
 # ---------------------------------------------------------------------------
 
 
-class FakeSocket:
-    """A socket that records what is sent and answers from scripted bytes."""
-
-    def __init__(self, replies: bytes):
-        self.sent = b""
-        self._replies = io.BytesIO(replies)
-        self.closed = False
-
-    def sendall(self, data):
-        self.sent += data
-
-    def makefile(self, mode):
-        return self._replies
-
-    def close(self):
-        self.closed = True
-
-
-class TestRedisClient:
-    """The minimal RESP client the exporter uses for the job queues."""
-
-    def _client(self, replies, **kwargs):
-        sock = FakeSocket(replies)
-        with patch("misp_container.metrics.socket.create_connection", return_value=sock):
-            return _Redis("redis", 6379, **kwargs), sock
-
-    def test_command_encoding_and_integer_reply(self):
-        client, sock = self._client(b":7\r\n")
-        assert client.call("LLEN", "background_jobs:default") == 7
-        assert sock.sent == b"*2\r\n$4\r\nLLEN\r\n$23\r\nbackground_jobs:default\r\n"
-
-    def test_auth_and_select_before_commands(self):
-        client, sock = self._client(b"+OK\r\n+OK\r\n", password="s3cret", database=1)
-        assert sock.sent == (b"*2\r\n$4\r\nAUTH\r\n$6\r\ns3cret\r\n"
-                             b"*2\r\n$6\r\nSELECT\r\n$1\r\n1\r\n")
-
-    def test_no_auth_and_no_select_for_database_zero(self):
-        client, sock = self._client(b"")
-        assert sock.sent == b""
-
-    def test_error_reply_raises(self):
-        client, _ = self._client(b"-NOAUTH Authentication required.\r\n")
-        with pytest.raises(RedisError, match="NOAUTH"):
-            client.call("LLEN", "x")
-
-    def test_closed_connection_raises(self):
-        client, _ = self._client(b"")
-        with pytest.raises(RedisError, match="closed"):
-            client.call("LLEN", "x")
-
-    def test_bulk_null_and_array_replies(self):
-        client, _ = self._client(b"$5\r\nhello\r\n$-1\r\n*2\r\n$1\r\na\r\n:3\r\n")
-        assert client.call("GET", "k") == "hello"
-        assert client.call("GET", "missing") is None
-        assert client.call("X") == ["a", 3]
-
-    def test_scan_follows_the_cursor(self):
-        replies = (b"*2\r\n$2\r\n17\r\n*1\r\n$3\r\nk:1\r\n"
-                   b"*2\r\n$1\r\n0\r\n*2\r\n$3\r\nk:2\r\n$3\r\nk:3\r\n")
-        client, sock = self._client(replies)
-        assert client.scan("k:*") == ["k:1", "k:2", "k:3"]
-        assert sock.sent.count(b"SCAN") == 2
-        assert b"$2\r\n17\r\n" in sock.sent
-
-
 class FakeRedis:
-    """Stands in for _Redis: list lengths and running keys by name."""
+    """Stands in for redis.Redis: list lengths and running keys by name."""
 
     instances = []
+    preset_lists = {}
+    preset_keys = []
 
-    def __init__(self, host, port, password="", database=0, timeout=3):
-        self.args = (host, port, password, database)
-        self.lists = {}
-        self.keys = []
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
         self.closed = False
         FakeRedis.instances.append(self)
-        self.lists.update(FakeRedis.preset_lists)
-        self.keys.extend(FakeRedis.preset_keys)
 
-    def call(self, *args):
-        if args[0] == "LLEN":
-            return self.lists.get(args[1], 0)
-        raise AssertionError(f"unexpected command {args}")
+    def llen(self, name):
+        return FakeRedis.preset_lists.get(name, 0)
 
-    def scan(self, pattern):
-        prefix = pattern.rstrip("*")
-        return [k for k in self.keys if k.startswith(prefix)]
+    def scan_iter(self, match, count):
+        prefix = match.rstrip("*")
+        return iter([k for k in FakeRedis.preset_keys if k.startswith(prefix)])
 
     def close(self):
         self.closed = True
@@ -800,9 +702,9 @@ class TestCollectQueueMetrics:
         FakeRedis.preset_lists = {}
         FakeRedis.preset_keys = []
 
-    def _collect(self, settings=None):
+    def _collect(self, settings=None, client=FakeRedis):
         with patch("misp_container.metrics._job_redis_settings", return_value=settings or self.SETTINGS), \
-             patch("misp_container.metrics._Redis", FakeRedis):
+             patch("misp_container.metrics.redis.Redis", client):
             return _parse_metrics(_collect_queue_metrics())
 
     def test_waiting_plus_running_per_queue(self):
@@ -816,8 +718,14 @@ class TestCollectQueueMetrics:
     def test_connects_with_misp_settings_and_closes(self):
         self._collect()
         client = FakeRedis.instances[0]
-        assert client.args == ("redis", "6379", "pw", "1")
+        assert {k: client.kwargs[k] for k in ("host", "port", "password", "db", "ssl")} == \
+            {"host": "redis", "port": 6379, "password": "pw", "db": 1, "ssl": False}
         assert client.closed
+
+    def test_a_tls_host_connects_over_tls(self):
+        self._collect(dict(self.SETTINGS, host="tls://redis.example"))
+        assert FakeRedis.instances[0].kwargs["host"] == "redis.example"
+        assert FakeRedis.instances[0].kwargs["ssl"] is True
 
     def test_namespace_from_settings(self):
         FakeRedis.preset_lists = {"other:default": 5}
@@ -827,12 +735,10 @@ class TestCollectQueueMetrics:
 
     def test_closes_when_a_call_fails(self):
         class Failing(FakeRedis):
-            def call(self, *args):
-                raise RedisError("boom")
-        with patch("misp_container.metrics._job_redis_settings", return_value=self.SETTINGS), \
-             patch("misp_container.metrics._Redis", Failing):
-            with pytest.raises(RedisError):
-                _collect_queue_metrics()
+            def llen(self, name):
+                raise redis.ConnectionError("boom")
+        with pytest.raises(redis.ConnectionError):
+            self._collect(client=Failing)
         assert FakeRedis.instances[0].closed
 
 
@@ -891,42 +797,7 @@ class TestCollectAll:
         """The scrape includes what the check thread left, and never runs a check itself."""
         mock_db.return_value = ("misp_up 1", 0)
         metrics._net_output = _metric("misp_server_reachable", "r", "gauge", [({"id": "1"}, 1)])
-        with patch("misp_container.metrics._check_server_auth") as check:
+        with patch("misp_container.metrics._check_partner") as check:
             parsed = _parse_metrics(collect_all())
         check.assert_not_called()
         assert parsed["misp_server_reachable"][0] == ({"id": "1"}, "1")
-
-
-class TestCheckServerAuthEncrypted:
-    """With Security.encryption_key set, servers.authkey is ciphertext the probe cannot send."""
-
-    def _http_error(self, code):
-        import urllib.error
-        return urllib.error.HTTPError("https://x", code, "denied", {}, None)
-
-    def test_plain_key_rejected_is_unreachable(self):
-        with patch("misp_container.metrics.urllib.request.urlopen", side_effect=self._http_error(403)):
-            assert _check_server_auth("https://x", "a" * 40) is False
-
-    def test_encrypted_key_counts_http_answer_as_reachable(self):
-        from misp_container.metrics import ENCRYPTED_MAGIC
-        with patch("misp_container.metrics.urllib.request.urlopen", side_effect=self._http_error(403)):
-            assert _check_server_auth("https://x", ENCRYPTED_MAGIC + "cipher") is True
-
-    def test_encrypted_key_is_not_sent(self):
-        from misp_container.metrics import ENCRYPTED_MAGIC
-        seen = {}
-
-        def fake_urlopen(req, timeout=None, context=None):
-            seen["headers"] = dict(req.header_items())
-            raise self._http_error(401)
-
-        with patch("misp_container.metrics.urllib.request.urlopen", side_effect=fake_urlopen):
-            _check_server_auth("https://x", ENCRYPTED_MAGIC + "cipher")
-        assert "Authorization" not in seen["headers"]
-
-    def test_a_bytea_authkey(self):
-        from misp_container.metrics import ENCRYPTED_MAGIC
-        with patch("misp_container.metrics.urllib.request.urlopen", side_effect=self._http_error(403)):
-            assert _check_server_auth("https://x", (ENCRYPTED_MAGIC + "cipher").encode("latin-1")) is True
-            assert _check_server_auth("https://x", b"a" * 40) is False

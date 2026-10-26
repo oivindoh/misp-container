@@ -141,7 +141,7 @@ These Secrets are optional and copied into every pod at start:
 | Secret | Content | Command |
 |--------|---------|---------|
 | `misp-gnupg` | `private.asc`, the instance GPG key (armoured secret key export). `GNUPG_PASSWORD` is its passphrase; set `GNUPG_SIGN=true` once it exists | `kubectl -n misp create secret generic misp-gnupg --from-file=private.asc` |
-| `misp-certs` | `<server id>.pem` files for sync servers that need a pinned certificate | `kubectl -n misp create secret generic misp-certs --from-file=3.pem` |
+| `misp-certs` | The pinned and client certificates of sync servers, by the names MISP keeps in `cert_file` and `client_cert_file` (`<server id>.pem`, `<server id>_client.pem`) | `kubectl -n misp create secret generic misp-certs --from-file=3.pem` |
 
 ```bash
 gpg --batch --passphrase "$GNUPG_PASSWORD" --quick-generate-key "MISP Admin <misp@example.com>" rsa3072 sign never
