@@ -1,8 +1,8 @@
 """Per-pod preparation: tmp directories, app/Config rendering, GPG key import.
 
-Every entrypoint (configure, web, worker) calls prepare() at start. It renders
-every file of app/Config from the image defaults, settings.yaml and env, into
-an emptyDir of the pod. app/files ships in the image; only
+The configure, web, worker and task roles call prepare() at start. It renders
+every file of app/Config from the image defaults and env, into an emptyDir of
+the pod. app/files ships in the image; only
 app/files/{scripts/tmp,certs,terms,img/orgs,img/custom} are volumes.
 """
 
@@ -105,7 +105,7 @@ def purge_model_cache():
 
 
 def prepare_config():
-    """Render app/Config from the image defaults, settings.yaml and env vars."""
+    """Render app/Config from the image defaults and env vars."""
     log.info("rendering app/Config")
     defaults = Path(CONFIG_DEFAULTS)
     config_dst = Path(MISP_CONFIG)
@@ -123,7 +123,7 @@ def prepare_config():
         log.info("  core.php, routes.php and bootstrap.php from this image, logging to stderr (%s)", log_format())
 
     # Rendered on every start: env is the source of truth for these
-    log.info("  config.php from settings.yaml")
+    log.info("  config.php from the MISP_CONFIG_* env")
     _generate_config_php(config_dst)
     log.info("  database.php from env")
     write_database_php(database_fields())
@@ -210,15 +210,14 @@ def check_writable(path, purpose):
 
 
 def _generate_config_php(config_dst):
-    """Render config.php from settings.yaml (bootstrap groups) and env vars.
+    """Render config.php from the MISP_CONFIG_* env the chart renders.
 
     Regenerated on every start in every pod, so all replicas and workers share
-    the same bootstrap and BLOCKED settings (redis, salt, paths).
+    the same bootstrap and BLOCKED settings (redis, salt, paths, auth plugins).
     """
-    from .config import load_settings_yaml, config_php_specs, render_config_php
+    from .config import config_php_values, render_config_php
 
-    specs = config_php_specs(load_settings_yaml())
-    (config_dst / "config.php").write_text(render_config_php(specs))
+    (config_dst / "config.php").write_text(render_config_php(config_php_values()))
 
 
 def database_fields() -> dict:
@@ -263,15 +262,6 @@ def _generate_email_config(config_dst):
     content = f"""<?php
 class EmailConfig {{
     public $default = array(
-        'transport'     => 'Smtp',
-        'from'          => array({email} => 'MISP'),
-        'host'          => {smtp},
-        'port'          => {port},
-        'timeout'       => 30,
-        'client'        => null,
-        'log'           => false,
-    );
-    public $smtp = array(
         'transport'     => 'Smtp',
         'from'          => array({email} => 'MISP'),
         'host'          => {smtp},

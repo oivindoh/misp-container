@@ -136,10 +136,10 @@ def kubernetes() -> str:
 
 
 def settings() -> str:
-    """The groups of settings.yaml with the comment that opens each."""
+    """The groups of the chart's settings.yaml with the comment that opens each."""
     rows: list[list[str]] = []
     current: list[str] | None = None
-    for line in (REPO / "files/misp-config/settings.yaml").read_text().splitlines():
+    for line in (REPO / "deploy/chart/files/settings.yaml").read_text().splitlines():
         group = re.match(r"^  # -- ([\w_]+): (.+)$", line)
         if group:
             current = [f"`{group.group(1)}`", group.group(2).rstrip("- ").strip()]
@@ -151,8 +151,9 @@ def settings() -> str:
             current[1] += joint + piece
         else:
             current = None
-    return ("## Settings: `files/misp-config/settings.yaml`\n\nMISP settings in groups; each setting's env var "
-            "is its name in upper case with dots as underscores (DEVELOPING.md, Settings Engine).\n\n"
+    return ("## Settings: `deploy/chart/files/settings.yaml`\n\nMISP's settings in groups, as the repository "
+            "defines them: each wins over a change in MISP's UI. A setting's env var is its name in upper case "
+            "with dots as underscores (docs/configuration.md, Settings).\n\n"
             + table(("Group", "Holds"), [tuple(r) for r in rows]))
 
 

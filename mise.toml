@@ -61,10 +61,6 @@ read -rsp "API key: " KEY; echo
 python -m pytest tests/e2e/test_smoke.py -v --url "$URL" --key "$KEY"
 """
 
-[tasks.settings-update]
-description = "Regenerate files/misp-config/settings-upstream.yaml from a live MISP (builds the images, installs the chart on k3s)"
-run = "python scripts/update_settings.py --stack --write ${@}"
-
 [tasks.composer-lock]
 description = "Resolve MISP's PHP dependencies for the current CORE_TAG into files/composer.lock"
 run = "scripts/update-composer-lock.sh"

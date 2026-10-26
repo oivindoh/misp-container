@@ -274,9 +274,11 @@ class Release(Misp):
         Raises when the query or the library fails: an error would otherwise
         come back as a traceback string that a negative assertion accepts.
         """
-        rc, out = self.python("import os\nfrom misp_container.env import apply_defaults\n"
-                              "from misp_container import db\napply_defaults()\n"
-                              "print(db.query(os.environ['SQL'], check=True))", workload, env={"SQL": query})
+        rc, out = self.python("import os\n"
+                              "from misp_container import db\n"
+                              "for row in db.dict_query(os.environ['SQL']):\n"
+                              "    print('\\t'.join('NULL' if v is None else str(v) for v in row.values()))",
+                              workload, env={"SQL": query})
         if rc != 0:
             raise RuntimeError(f"query failed in {workload}: {query}\n{out}")
         return "".join(out.split())

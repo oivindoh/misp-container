@@ -15,10 +15,10 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from functools import lru_cache
 
 from . import WORKER_QUEUES, db, exporter
-from .env import apply_defaults
+from .config import SETTING_PREFIX, repository_settings
+from .env import env
 from .log import get as getlog, setup as setup_logging
 
 log = getlog("metrics")
@@ -125,18 +125,16 @@ class _Redis:
         self._sock.close()
 
 
-@lru_cache(maxsize=1)
 def _job_redis_settings() -> dict[str, str]:
-    """The Redis connection MISP uses for background jobs: env over settings.yaml."""
-    from .config import load_settings_yaml
-    wanted = {f"SimpleBackgroundJobs.redis_{k}": k
-              for k in ("host", "port", "password", "database", "namespace")}
-    found = {}
-    for specs in load_settings_yaml().values():
-        for spec in specs:
-            if spec.name in wanted:
-                found[wanted[spec.name]] = spec.effective_value
-    return found
+    """The Redis connection MISP uses for background jobs, from the env the chart renders.
+
+    The password is the job backend's own when a container has it, else MISP_REDIS_PASSWORD,
+    which the chart derives it from.
+    """
+    fallback = {"host": env("MISP_REDIS_HOST"), "port": env("MISP_REDIS_PORT"),
+                "password": env("MISP_REDIS_PASSWORD")}
+    return {key: env(f"{SETTING_PREFIX}SimpleBackgroundJobs__redis_{key}") or fallback.get(key, "")
+            for key in ("host", "port", "password", "database", "namespace")}
 
 
 def _collect_queue_metrics() -> str:
@@ -213,6 +211,9 @@ def _collect_db_metrics() -> tuple[str, int]:
             except Exception as e:
                 log.warning("instance info: %s", e)
                 errors += 1
+            # configure deletes the rows of the settings MISP takes from its env layer
+            for name in ("MISP.uuid", "MISP.baseurl"):
+                info[name] = env(SETTING_PREFIX + name.replace(".", "__")) or info.get(name, "")
             blocks.append(
                 _metric(
                     "misp_instance_info",
@@ -432,6 +433,21 @@ def _collect_db_metrics() -> tuple[str, int]:
                 log.warning("job runs: %s", e)
                 errors += 1
 
+            # Settings changed in MISP that the repository does not carry: the state of
+            # MISP is defined in git, so each one should move there or be undone
+            try:
+                manual = db.manual_settings(repository_settings())
+                blocks.append(_metric("misp_settings_manual",
+                                      "Settings changed in MISP that the repository does not carry", "gauge",
+                                      [({}, len(manual))]))
+                if manual:
+                    blocks.append(_metric("misp_setting_manual",
+                                          "A setting changed in MISP that the repository does not carry", "gauge",
+                                          [({"setting": m["setting"]}, 1) for m in manual]))
+            except Exception as e:
+                log.warning("manual settings: %s", e)
+                errors += 1
+
     except Exception as e:
         log.warning("error collecting DB metrics: %s", e)
         errors += 1
@@ -631,7 +647,6 @@ def main():
     """The metrics role: the exporter (misp_container.exporter)."""
     setup_logging("metrics")
     log.info("MISP metrics exporter starting")
-    apply_defaults()
     db.wait_for_db(retries=30, wait_seconds=5)
 
     # The partner checks take seconds per unreachable server; they run beside the

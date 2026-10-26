@@ -250,6 +250,28 @@ class Server extends AppModel
 }
 """
 
+ENV_SETTING = """<?php
+class EnvSetting
+{
+    const ENV_PREFIX = 'MISP_SETTING_';
+
+    public static function readSettings()
+    {
+        $settingName = str_replace('__', '.', substr($name, strlen(self::ENV_PREFIX)));
+    }
+}
+"""
+
+SYSTEM_SETTING = """<?php
+class SystemSetting extends AppModel
+{
+    const ALLOWED_CATEGORIES = [
+        'SimpleBackgroundJobs', 'MISP', 'Security', 'GnuPG', 'SMIME', 'Proxy', 'SecureAuth',
+        'Session', 'Plugin', 'debug', 'site_admin_debug',
+    ];
+}
+"""
+
 ORG_IMG_HELPER = """<?php
 class OrgImgHelper extends AppHelper
 {
@@ -278,6 +300,8 @@ def misp(tmp_path):
     write(root, cu.AWS_S3_CLIENT, AWS_S3_CLIENT)
     write(root, cu.SERVER_MODEL, SERVER_MODEL)
     write(root, cu.ORG_IMG_HELPER, ORG_IMG_HELPER)
+    write(root, cu.ENV_SETTING, ENV_SETTING)
+    write(root, cu.SYSTEM_SETTING, SYSTEM_SETTING)
     for rel, text in LOG_WRITERS.items():
         write(root, rel, text)
     actions: dict[str, list[str]] = {}
@@ -522,3 +546,14 @@ class TestUncovered:
 
     def test_every_covering_task_exists(self):
         assert set(task.SCHEDULER_COVERAGE.values()) <= set(task.TASKS)
+
+
+class TestEnvSettings:
+    def test_a_new_prefix(self, misp):
+        edit(misp, cu.ENV_SETTING, "'MISP_SETTING_'", "'MISP_CONFIG_'")
+        assert "MISP_SETTING_*" in problems(misp, "env-settings")[0]
+
+    def test_a_category_dropped(self, misp):
+        edit(misp, cu.SYSTEM_SETTING, "'Proxy', ", "")
+        [problem] = problems(misp, "env-settings")
+        assert "no longer holds Proxy" in problem

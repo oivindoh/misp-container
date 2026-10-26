@@ -295,12 +295,11 @@ RUN for dir in app/files/scripts/tmp app/files/certs app/files/terms app/files/i
 # The Python package: each role starts as python3 -m misp_container.<role>
 COPY --chown=${MISP_UID}:${MISP_GID} files/misp_container/ /opt/misp_container/
 
-# Config files and settings. PHP-FPM loads Debian's php.ini, then the files of
-# php.d through PHP_INI_SCAN_DIR (web.py)
+# Config files. PHP-FPM loads Debian's php.ini, then the files of php.d through
+# PHP_INI_SCAN_DIR (web.py). MISP's settings come from the chart (misp-settings).
 COPY --chown=${MISP_UID}:${MISP_GID} files/php-fpm-pool.conf /etc/misp-docker/php-fpm-pool.conf
 COPY --chown=${MISP_UID}:${MISP_GID} files/php.ini /etc/misp-docker/php.d/99-misp.ini
 COPY --chown=${MISP_UID}:${MISP_GID} files/Caddyfile /etc/caddy/Caddyfile
-COPY --chown=${MISP_UID}:${MISP_GID} files/misp-config/ /etc/misp-docker/
 # gnupg/ is the mount point of the instance GPG key (the misp-gnupg Secret)
 RUN find /etc/misp-docker /etc/caddy -type f -exec chmod 0440 {} + && \
     find /etc/misp-docker /etc/caddy -type d -exec chmod 0550 {} + && \

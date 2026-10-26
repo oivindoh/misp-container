@@ -306,7 +306,8 @@ def row_count(table, stack, counts, where):
 
 
 def uuid_carried_over(stack, counts, where):
-    assert MISP_UUID in stack.sql("SELECT value FROM system_settings WHERE setting='MISP.uuid'")
+    # The identity check held the source's UUID to MISP_UUID, which MISP serves from its env layer
+    assert (stack.api("GET", "/servers/getSetting/MISP.uuid", ADMIN_KEY) or {}).get("value") == MISP_UUID
 
 
 def admin_key_logs_in(stack, counts, where):
@@ -470,17 +471,28 @@ def test_s3_copy(stack, counts, s3_copy, check):
     check(stack, counts, s3_copy)
 
 
-def test_s3_new_attachment_goes_to_the_bucket(stack, s3_copy):
-    # The volume still holds a copy of every migrated attachment, so a read through
-    # the API passes from disk as well; only a new upload shows where MISP writes
+@pytest.fixture(scope="module")
+def s3_attachment(stack, s3_copy):
+    """A new attachment on the copy in S3: its object key and its attribute ID."""
     event = stack.api("POST", "/events/add", ADMIN_KEY, {
         "info": "S3 target event", "distribution": "0", "threat_level_id": "4", "analysis": "0"}) or {}
     event_id = event.get("Event", {}).get("id")
     attribute = stack.api("POST", f"/attributes/add/{event_id}", ADMIN_KEY, {
         "event_id": event_id, "category": "Payload delivery", "type": "attachment", "value": "s3.txt",
         "data": base64.b64encode(b"S3 target attachment").decode()}) or {}
-    key = f"{event_id}/{attribute.get('Attribute', {}).get('id')}"
-    assert objects(S3_TARGET["PLUGIN_S3_BUCKET_NAME"]).get(key) == b"S3 target attachment"
+    attribute_id = attribute.get("Attribute", {}).get("id")
+    return f"{event_id}/{attribute_id}", attribute_id
+
+
+def test_s3_new_attachment_goes_to_the_bucket(s3_attachment):
+    # The volume still holds a copy of every migrated attachment, so a read through
+    # the API passes from disk as well; only a new upload shows where MISP writes
+    assert objects(S3_TARGET["PLUGIN_S3_BUCKET_NAME"]).get(s3_attachment[0]) == b"S3 target attachment"
+
+
+def test_s3_new_attachment_downloads(stack, s3_attachment):
+    # Only the bucket holds it
+    assert stack.http("GET", f"/attributes/download/{s3_attachment[1]}", ADMIN_KEY) == (200, "S3 target attachment")
 
 
 # -- bucket to bucket ----------------------------------------------------------------

@@ -1,0 +1,768 @@
+# MISP's settings, as this repository defines them. Every one here wins over a change in
+# MISP's UI or API: the state of MISP is defined in git (docs/configuration.md, Settings).
+#
+# Format:
+#   settings:
+#     <group>:
+#       <Category.key>:
+#         value: <the value>
+#         blank_protection: true  # optional: an empty value leaves MISP's own default
+#
+# The env var of a setting is its name in upper case with dots as underscores
+# (MISP.redis_host -> MISP_REDIS_HOST); set in the chart's env value, it replaces the
+# value here. The chart passes every setting to MISP as MISP_SETTING_<Category>__<key>,
+# MISP's own environment layer, which wins over config.php and the database and makes
+# MISP refuse a change. minimum_config, db_enable and s3 (while PLUGIN_S3_BUCKET_NAME is
+# set) also go into config.php, which MISP reads before that layer, and so do the auth
+# plugin groups while their switch is true (oidc: OIDC_ENABLE, ldap: LDAPAUTH_ENABLE).
+# A name without a category (debug) goes into config.php only.
+
+settings:
+#     <group>:
+#       <MISP.setting.name>:
+#         value: <default value>
+#         force: true          # optional: pass -f to cake
+#         blank_protection: true  # optional: skip if env var is empty
+#
+# Env var override convention:
+#   Any setting can be overridden by an env var derived from the setting name:
+#     MISP.redis_host   -> MISP_REDIS_HOST
+#     Plugin.S3_bucket_name -> PLUGIN_S3_BUCKET_NAME
+#   If the env var exists and is non-empty, the setting is enforced every startup.
+#   If no env var, the default is applied once (then user owns it via the UI).
+#
+# Every pod renders minimum_config and db_enable into config.php, plus s3 while
+# PLUGIN_S3_BUCKET_NAME is set and the auth plugin groups (oidc, ldap,
+# apache_auth) while their switch is true. The configure step applies the other
+# groups to the database, in this order: initialisation, critical, optional,
+# upstream (the generated catalogue), gpg, then proxy, kafka, linotp and
+# custom_auth while their switch is true (misp_container/configure.py).
+
+settings:
+
+  # -- minimum_config: also rendered into config.php, by every pod ----------
+  # MISP never reads SystemSetting::BLOCKED_SETTINGS from the database (salt,
+  # encryption key, password policy, python_bin, ca_path, tmpdir,
+  # attachments_dir, self_update, online_version_check, system_setting_db,
+  # GnuPG.binary, disable_local_feed_access), so those live here.
+  minimum_config:
+
+    # Redis connection
+    MISP.redis_host:
+      value: redis
+    MISP.redis_port:
+      value: 6379
+    MISP.redis_password:
+      value: ""
+    MISP.redis_database:
+      value: 13
+
+    # Redis serializer
+    MISP.redis_serializer:
+      value: JSON
+
+    # ZeroMQ Redis (mirrors MISP Redis by default)
+    Plugin.ZeroMQ_redis_host:
+      value: redis
+    Plugin.ZeroMQ_redis_port:
+      value: 6379
+    Plugin.ZeroMQ_redis_password:
+      value: ""
+    Plugin.ZeroMQ_redis_database:
+      value: 1
+    Plugin.ZeroMQ_redis_namespace:
+      value: mispq
+    Plugin.ZeroMQ_enable:
+      value: false
+    Plugin.ZeroMQ_host:
+      value: "127.0.0.1"
+    Plugin.ZeroMQ_port:
+      value: 50000
+    Plugin.ZeroMQ_password:
+      value: ""
+
+    # Background jobs Redis
+    SimpleBackgroundJobs.redis_host:
+      value: redis
+    SimpleBackgroundJobs.redis_port:
+      value: 6379
+    SimpleBackgroundJobs.redis_password:
+      value: ""
+    SimpleBackgroundJobs.redis_database:
+      value: 1
+    SimpleBackgroundJobs.redis_namespace:
+      value: background_jobs
+    SimpleBackgroundJobs.max_job_history_ttl:
+      value: 86400
+    SimpleBackgroundJobs.redis_serializer:
+      value: JSON
+
+    # Paths and binaries
+    MISP.python_bin:
+      value: /usr/bin/python3
+    GnuPG.binary:
+      value: /usr/bin/gpg
+    MISP.tmpdir:
+      value: /var/www/MISP/app/tmp
+    MISP.attachments_dir:
+      value: /var/www/MISP/app/attachments
+    MISP.ca_path:
+      value: /etc/ssl/certs/ca-certificates.crt
+
+    # Instance identity
+    MISP.osuser:
+      value: misp
+
+    # Security bootstrap (BLOCKED_SETTINGS: only config.php counts)
+    Security.salt:
+      value: ""
+      blank_protection: true
+    Security.encryption_key:
+      value: ""
+      blank_protection: true
+    Security.password_policy_length:
+      value: 12
+    # 12-15 must be "complex" - after 16 characters anything goes
+    Security.password_policy_complexity:
+      value: '/^((?=.*\d)|(?=.*\W+))(?![\n])(?=.*[A-Z])(?=.*[a-z]).*$|.{16,}/'
+    Security.rest_client_enable_arbitrary_urls:
+      value: false
+    Security.disable_local_feed_access:
+      value: false
+    Security.disable_instance_file_uploads:
+      value: false
+
+    # Feature toggles
+    MISP.download_gpg_from_homedir:
+      value: true
+    MISP.background_jobs:
+      value: true
+    MISP.online_version_check:
+      value: false
+    MISP.self_update:
+      value: false
+    MISP.menu_custom_right_link:
+      value: ""
+    MISP.menu_custom_right_link_html:
+      value: ""
+
+  # -- db_enable: toggle system_setting_db -------------------------------------
+  db_enable:
+
+    MISP.system_setting_db:
+      value: true
+
+  # -- initialisation: core instance settings ----------------------------------
+  initialisation:
+
+    # Instance identity and contact
+    debug:
+      value: 0
+    MISP.baseurl:
+      value: https://localhost
+    MISP.email:
+      value: admin@admin.test
+    MISP.contact:
+      value: admin@admin.test
+    # The hosting organisation in e-mail subjects and STIX 1 exports: ADMIN_ORG sets it
+    MISP.org:
+      value: ""
+      blank_protection: true
+    MISP.uuid:
+      value: ""
+      blank_protection: true
+    MISP.language:
+      value: eng
+
+    # Security
+    Security.advanced_authkeys:
+      value: true
+    Security.disable_browser_cache:
+      value: true
+    Security.check_sec_fetch_site_header:
+      value: true
+    Security.username_in_response_header:
+      value: true
+    Security.log_each_individual_auth_fail:
+      value: true
+    Security.alert_on_suspicious_logins:
+      value: false
+    Security.require_password_confirmation:
+      value: true
+    SecureAuth.amount:
+      value: 5
+    SecureAuth.expire:
+      value: 300
+
+    Security.api_key_quick_lookup_expiration:
+      value: 180
+
+    # Email OTP
+    Security.email_otp_length:
+      value: 6
+    Security.email_otp_validity:
+      value: 5
+
+    # Logging
+    Security.syslog_to_stderr:
+      value: true
+
+    # Session
+    Session.defaults:
+      value: php
+    Session.timeout:
+      value: 60
+    Session.cookieTimeout:
+      value: 60
+
+    # Event defaults
+    MISP.showorg:
+      value: true
+    MISP.default_event_distribution:
+      value: 1
+    MISP.default_event_tag_collection:
+      value: 0
+    MISP.default_attribute_distribution:
+      value: event
+    MISP.default_object_distribution:
+      value: event
+    MISP.default_eventreport_distribution:
+      value: event
+    MISP.default_galaxy_distribution:
+      value: 1
+    MISP.default_analyst_data_distribution:
+      value: 1
+    MISP.default_event_threat_level:
+      value: 4
+    MISP.default_publish_alert:
+      value: true
+    MISP.proposals_block_attributes:
+      value: false
+    MISP.tagging:
+      value: true
+    MISP.enableEventBlocklisting:
+      value: true
+    MISP.enableOrgBlocklisting:
+      value: true
+    MISP.incoming_tags_disabled_by_default:
+      value: false
+    MISP.full_tags_on_event_index:
+      value: 1
+    MISP.event_alert_republish_ban:
+      value: true
+    MISP.event_alert_republish_ban_refresh_on_retry:
+      value: true
+    MISP.event_alert_republish_ban_threshold:
+      value: 120
+    MISP.showCorrelationsOnIndex:
+      value: true
+
+    # Misc
+    MISP.store_api_access_time:
+      value: false
+    MISP.log_auth:
+      value: true
+    MISP.log_new_audit:
+      value: true
+    MISP.disable_user_login_change:
+      value: false
+    MISP.server_settings_skip_backup_rotate:
+      value: false
+    MISP.user_email_notification_ban:
+      value: true
+    MISP.delegation:
+      value: true
+    MISP.take_ownership_xml_import:
+      value: false
+    MISP.unpublishedprivate:
+      value: false
+    MISP.terms_download:
+      value: false
+    MISP.disable_emailing:
+      value: true
+    MISP.showorgalternate:
+      value: false
+
+    # Correlation
+    MISP.correlation_limit:
+      value: 20
+    MISP.max_correlations_per_event:
+      value: 5000
+    MISP.correlation_chunk_size:
+      value: 5000
+    MISP.ssdeep_correlation_threshold:
+      value: 40
+
+    # Email subjects
+    MISP.email_subject_tag:
+      value: tlp
+    MISP.email_subject_TLP_string:
+      value: "tlp:amber"
+    MISP.email_subject_include_tag_name:
+      value: true
+    MISP.threatlevel_in_email_subject:
+      value: true
+    MISP.block_event_alert_tag:
+      value: 'no-alerts="true"'
+
+    # Operational
+    MISP.title_text:
+      value: MISP
+    # The worker pods supervise their own workers (misp_container.worker), without supervisord
+    MISP.manage_workers:
+      value: false
+    MISP.disablerestalert:
+      value: true
+    MISP.download_attachments_on_load:
+      value: true
+    MISP.enableSightingBlocklisting:
+      value: true
+    MISP.hide_unknown_cluster:
+      value: true
+    MISP.event_view_filter_fields:
+      value: "id, uuid, value, comment, type, category, Tag.name"
+    # caddy in the same pod is a trusted proxy and forwards the client address
+    MISP.log_client_ip_header:
+      value: HTTP_X_FORWARDED_FOR
+    MISP.attachment_scan_timeout:
+      value: 30
+    MISP.curl_request_timeout:
+      value: 300
+    MISP.updateTimeThreshold:
+      value: 7200
+    MISP.default_attribute_memory_coefficient:
+      value: 50
+    MISP.default_event_memory_divisor:
+      value: 3
+    MISP.user_email_notification_ban_amount_threshold:
+      value: 10
+    MISP.user_email_notification_ban_time_threshold:
+      value: 120
+    MISP.cveurl:
+      value: "https://vulnerability.circl.lu/vuln/"
+    MISP.cweurl:
+      value: "https://vulnerability.circl.lu/cwes/"
+
+  # -- critical: security hardening ------------------------------------------
+  critical:
+
+    MISP.external_baseurl:
+      value: https://localhost
+    Security.rest_client_baseurl:
+      value: https://localhost
+    Plugin.Enrichment_hover_enable:
+      value: false
+    Plugin.Enrichment_hover_popover_only:
+      value: false
+    Security.csp_enforce:
+      value: true
+    Security.do_not_log_authkeys:
+      value: true
+
+  # -- optional: nice-to-have defaults ----------------------------------------
+  optional:
+
+    MISP.enable_themes:
+      value: true
+    MISP.welcome_text_top:
+      value: ""
+      blank_protection: true
+    MISP.welcome_text_bottom:
+      value: ""
+      blank_protection: true
+    MISP.log_client_ip:
+      value: true
+    MISP.log_user_ips:
+      value: true
+    MISP.log_user_ips_authkeys:
+      value: true
+
+    # Module service URLs (all point to modules by default)
+    Plugin.Enrichment_services_url:
+      value: http://modules
+    Plugin.Enrichment_services_port:
+      value: 6666
+    Plugin.Enrichment_services_enable:
+      value: true
+    Plugin.Enrichment_timeout:
+      value: 30
+    Plugin.Enrichment_hover_timeout:
+      value: 5
+    Plugin.Import_services_url:
+      value: http://modules
+    Plugin.Import_services_port:
+      value: 6666
+    Plugin.Import_services_enable:
+      value: true
+    Plugin.Export_services_url:
+      value: http://modules
+    Plugin.Export_services_port:
+      value: 6666
+    Plugin.Export_services_enable:
+      value: true
+    Plugin.Action_services_url:
+      value: http://modules
+    Plugin.Action_services_port:
+      value: 6666
+    Plugin.Action_services_enable:
+      value: true
+    Plugin.Cortex_services_enable:
+      value: false
+    Plugin.Cortex_services_url:
+      value: "http://127.0.0.1"
+    Plugin.Cortex_services_port:
+      value: 9000
+    Plugin.Cortex_timeout:
+      value: 120
+    Plugin.Cortex_ssl_verify_host:
+      value: true
+    Plugin.Cortex_ssl_verify_peer:
+      value: true
+    Plugin.Workflow_enable:
+      value: true
+    Plugin.Workflow_debug_url:
+      value: "http://127.0.0.1:27051"
+
+    # Module timeouts
+    Plugin.Action_timeout:
+      value: 10
+    Plugin.Import_timeout:
+      value: 10
+    Plugin.Export_timeout:
+      value: 10
+
+    # Sightings
+    Plugin.Sightings_policy:
+      value: 2
+    Plugin.Sightings_range:
+      value: 365
+    Plugin.Sightings_anonymise_as:
+      value: 0
+
+    # Benchmarking
+    Plugin.Benchmarking_slow_log_threshold:
+      value: 5000
+    Plugin.Benchmarking_slow_query_retention:
+      value: 259200
+
+    # External lookups
+    Plugin.Geolocation_url:
+      value: "https://geo.circl.lu"
+
+    # RPZ export
+    Plugin.RPZ_policy:
+      value: 1
+    Plugin.RPZ_ns:
+      value: "localhost."
+    Plugin.RPZ_email:
+      value: "root.localhost"
+    Plugin.RPZ_ttl:
+      value: "1w"
+    Plugin.RPZ_refresh:
+      value: "2h"
+    Plugin.RPZ_retry:
+      value: "30m"
+    Plugin.RPZ_expiry:
+      value: "30d"
+    Plugin.RPZ_minimum_ttl:
+      value: "1h"
+    Plugin.RPZ_serial:
+      value: "$date00"
+    Plugin.RPZ_walled_garden:
+      value: "127.0.0.1"
+
+    # S3 TLS verification
+    Plugin.S3_aws_validate_ca:
+      value: true
+
+    # The logout redirect, whichever plugin logs the user in (OIDC_LOGOUT_URL,
+    # CUSTOM_AUTH_CUSTOM_LOGOUT); applied while set
+    Plugin.CustomAuth_custom_logout:
+      value: ""
+      blank_protection: true
+
+  # -- gpg: GnuPG settings ----------------------------------------------------
+  gpg:
+
+    GnuPG.email:
+      value: admin@admin.test
+    GnuPG.homedir:
+      value: /var/www/MISP/.gnupg
+    GnuPG.password:
+      value: ""
+    GnuPG.onlyencrypted:
+      value: false
+    GnuPG.sign:
+      value: false
+    SMIME.enabled:
+      value: false
+    SMIME.cert_public_sign:
+      value: "/var/www/MISP/.smime/email@address.com.pem"
+    SMIME.key_sign:
+      value: "/var/www/MISP/.smime/email@address.com.key"
+    SMIME.password:
+      value: ""
+      blank_protection: true
+
+  # -- s3: S3 attachment storage (only while PLUGIN_S3_BUCKET_NAME is set, which also sets MISP.attachments_dir to s3://)
+  s3:
+
+    Plugin.S3_aws_compatible:
+      value: true
+    Plugin.S3_bucket_name:
+      value: ""
+    Plugin.S3_aws_endpoint:
+      value: ""
+    Plugin.S3_aws_access_key:
+      value: ""
+    Plugin.S3_aws_secret_key:
+      value: ""
+    Plugin.S3_region:
+      value: ""
+
+  # -- proxy: HTTP proxy settings (an empty Proxy.host means no proxy)
+  proxy:
+
+    Proxy.host:
+      value: ""
+      blank_protection: true
+    Proxy.port:
+      value: ""
+      blank_protection: true
+    Proxy.method:
+      value: ""
+      blank_protection: true
+    Proxy.user:
+      value: ""
+      blank_protection: true
+    Proxy.password:
+      value: ""
+      blank_protection: true
+
+  # -- custom_auth: header authentication from a reverse proxy, no directory lookup
+  # (CUSTOM_AUTH_ENABLE=true turns it on; the CUSTOM_AUTH_* names are aliases, below)
+  custom_auth:
+
+    Plugin.CustomAuth_enable:
+      value: false
+    Plugin.CustomAuth_header:
+      value: "X_FORWARDED_EMAIL"
+    Plugin.CustomAuth_use_header_namespace:
+      value: true
+    Plugin.CustomAuth_header_namespace:
+      value: "HTTP_"
+    Plugin.CustomAuth_required:
+      value: false
+    Plugin.CustomAuth_name:
+      value: "External Authentication"
+    Plugin.CustomAuth_disable_logout:
+      value: false
+    Plugin.CustomAuth_only_allow_source:
+      value: ""
+      blank_protection: true
+    Plugin.CustomAuth_custom_password_reset:
+      value: ""
+      blank_protection: true
+
+  # -- kafka: Kafka pub/sub integration (PLUGIN_KAFKA_ENABLE=true turns it on)
+  kafka:
+
+    Plugin.Kafka_enable:
+      value: false
+    Plugin.Kafka_brokers:
+      value: "kafka:9092"
+    Plugin.Kafka_rdkafka_config:
+      value: "/etc/rdkafka.ini"
+    Plugin.Kafka_event_notifications_topic:
+      value: misp_event
+    Plugin.Kafka_event_publish_notifications_topic:
+      value: misp_event_publish
+    Plugin.Kafka_object_notifications_topic:
+      value: misp_object
+    Plugin.Kafka_object_reference_notifications_topic:
+      value: misp_object_reference
+    Plugin.Kafka_attribute_notifications_topic:
+      value: misp_attribute
+    Plugin.Kafka_shadow_attribute_notifications_topic:
+      value: misp_shadow_attribute
+    Plugin.Kafka_tag_notifications_topic:
+      value: misp_tag
+    Plugin.Kafka_sighting_notifications_topic:
+      value: misp_sighting
+    Plugin.Kafka_organisation_notifications_topic:
+      value: misp_organisation
+    Plugin.Kafka_user_notifications_topic:
+      value: misp_user
+    Plugin.Kafka_audit_notifications_topic:
+      value: misp_audit
+
+  # -- oidc: OidcAuth plugin, rendered into config.php when OIDC_ENABLE=true ---
+  # The documented OIDC_* names map onto these (the aliases below). role_mapper and
+  # scopes take JSON in env; scopes also takes a comma-separated list.
+  oidc:
+    Security.auth:
+      value: ["OidcAuth.Oidc"]
+    OidcAuth.provider_url:
+      value: ""
+      blank_protection: true
+    OidcAuth.issuer:
+      value: ""
+      blank_protection: true
+    OidcAuth.client_id:
+      value: ""
+      blank_protection: true
+    OidcAuth.client_secret:
+      value: ""
+      blank_protection: true
+    OidcAuth.role_mapper:
+      value: {}
+    OidcAuth.default_org:
+      value: ""
+      blank_protection: true
+    OidcAuth.scopes:
+      value: ["profile", "email"]
+    OidcAuth.roles_property:
+      value: roles
+    OidcAuth.roles_delimiter:
+      value: ","
+    OidcAuth.organisation_property:
+      value: organization
+    OidcAuth.organisation_uuid_property:
+      value: organization_uuid
+    OidcAuth.authentication_method:
+      value: client_secret_post
+    OidcAuth.code_challenge_method:
+      value: S256
+    OidcAuth.disable_request_object:
+      value: false
+    OidcAuth.disable_pushed_authorization_request:
+      value: false
+    OidcAuth.mixedAuth:
+      value: false
+    OidcAuth.unblock:
+      value: false
+    OidcAuth.skipProxy:
+      value: true
+    OidcAuth.offline_access:
+      value: false
+    OidcAuth.check_user_validity:
+      value: 0
+    OidcAuth.update_user_role:
+      value: true
+    OidcAuth.allow_email_linking:
+      value: false
+    OidcAuth.require_email_verified:
+      value: true
+    OidcAuth.login_button_text:
+      value: "Login with OIDC"
+
+  # -- ldap: LdapAuth plugin, rendered into config.php when LDAPAUTH_ENABLE=true
+  ldap:
+    Security.auth:
+      value: ["LdapAuth.Ldap"]
+    LdapAuth.ldapServer:
+      value: ""
+      blank_protection: true
+    LdapAuth.ldapDn:
+      value: ""
+      blank_protection: true
+    LdapAuth.ldapReaderUser:
+      value: ""
+      blank_protection: true
+    LdapAuth.ldapReaderPassword:
+      value: ""
+      blank_protection: true
+    LdapAuth.ldapSearchFilter:
+      value: ""
+      blank_protection: true
+    LdapAuth.ldapSearchAttribute:
+      value: mail
+    LdapAuth.ldapEmailField:
+      value: mail
+    LdapAuth.ldapDefaultOrgId:
+      value: ""
+      blank_protection: true
+    LdapAuth.ldapDefaultRoleId:
+      value: ""
+      blank_protection: true
+    LdapAuth.ldapRoleField:
+      value: ""
+      blank_protection: true
+    LdapAuth.ldapOrgField:
+      value: ""
+      blank_protection: true
+    LdapAuth.ldapOrgGroupMapping:
+      value: {}
+    LdapAuth.ldapProtocol:
+      value: 3
+    LdapAuth.ldapNetworkTimeout:
+      value: 5
+    LdapAuth.ldapAllowReferrals:
+      value: false
+    LdapAuth.ldapNestedGroups:
+      value: false
+    LdapAuth.ldapCheckUserAccountControl:
+      value: false
+    LdapAuth.ldapEscape:
+      value: true
+    LdapAuth.ldapHeaderAuth:
+      value: false
+    LdapAuth.ldapHeaderAuthHeader:
+      value: ""
+      blank_protection: true
+    LdapAuth.ldapHeaderAuthTrustedProxies:
+      value: []
+    LdapAuth.debug:
+      value: false
+
+# Env vars that take another's value unless set themselves, in this order: set MISP_BASEURL,
+# ADMIN_ORG, ADMIN_EMAIL, MISP_REDIS_* and the module URL once
+derived:
+  - from: MISP_BASEURL
+    to: [MISP_EXTERNAL_BASEURL, SECURITY_REST_CLIENT_BASEURL]
+  # MISP.org names the hosting organisation in e-mail subjects and STIX 1 exports;
+  # MISP 3.0 cannot frame a STIX 1 package for an empty one
+  - from: ADMIN_ORG
+    to: [MISP_ORG]
+  - from: ADMIN_EMAIL
+    to: [MISP_EMAIL]
+  - from: MISP_EMAIL
+    to: [MISP_CONTACT, GNUPG_EMAIL]
+  - from: MISP_REDIS_HOST
+    to: [SIMPLEBACKGROUNDJOBS_REDIS_HOST, PLUGIN_ZEROMQ_REDIS_HOST]
+  - from: MISP_REDIS_PORT
+    to: [SIMPLEBACKGROUNDJOBS_REDIS_PORT, PLUGIN_ZEROMQ_REDIS_PORT]
+  - from: MISP_REDIS_PASSWORD
+    to: [SIMPLEBACKGROUNDJOBS_REDIS_PASSWORD, PLUGIN_ZEROMQ_REDIS_PASSWORD]
+  - from: PLUGIN_ENRICHMENT_SERVICES_URL
+    to: [PLUGIN_IMPORT_SERVICES_URL, PLUGIN_EXPORT_SERVICES_URL, PLUGIN_ACTION_SERVICES_URL]
+
+# Documented short names, mapped onto the env vars of the settings
+# (OidcAuth.provider_url -> OIDCAUTH_PROVIDER_URL)
+aliases:
+  OIDC_PROVIDER_URL: OIDCAUTH_PROVIDER_URL
+  OIDC_ISSUER: OIDCAUTH_ISSUER
+  OIDC_CLIENT_ID: OIDCAUTH_CLIENT_ID
+  OIDC_CLIENT_SECRET: OIDCAUTH_CLIENT_SECRET
+  OIDC_ROLES_PROPERTY: OIDCAUTH_ROLES_PROPERTY
+  OIDC_ROLES_MAPPING: OIDCAUTH_ROLE_MAPPER
+  OIDC_DEFAULT_ORG: OIDCAUTH_DEFAULT_ORG
+  OIDC_SCOPES: OIDCAUTH_SCOPES
+  OIDC_CODE_CHALLENGE_METHOD: OIDCAUTH_CODE_CHALLENGE_METHOD
+  OIDC_AUTH_METHOD: OIDCAUTH_AUTHENTICATION_METHOD
+  OIDC_MIXEDAUTH: OIDCAUTH_MIXEDAUTH
+  OIDC_DISABLE_REQUEST_OBJECT: OIDCAUTH_DISABLE_REQUEST_OBJECT
+  OIDC_SKIP_PROXY: OIDCAUTH_SKIPPROXY
+  # The logout redirect is one setting whichever plugin logs the user in
+  OIDC_LOGOUT_URL: PLUGIN_CUSTOMAUTH_CUSTOM_LOGOUT
+  # Header authentication (the custom_auth group)
+  CUSTOM_AUTH_ENABLE: PLUGIN_CUSTOMAUTH_ENABLE
+  CUSTOM_AUTH_HEADER: PLUGIN_CUSTOMAUTH_HEADER
+  CUSTOM_AUTH_USE_HEADER_NAMESPACE: PLUGIN_CUSTOMAUTH_USE_HEADER_NAMESPACE
+  CUSTOM_AUTH_REQUIRED: PLUGIN_CUSTOMAUTH_REQUIRED
+  CUSTOM_AUTH_HEADER_NAMESPACE: PLUGIN_CUSTOMAUTH_HEADER_NAMESPACE
+  CUSTOM_AUTH_NAME: PLUGIN_CUSTOMAUTH_NAME
+  CUSTOM_AUTH_DISABLE_LOGOUT: PLUGIN_CUSTOMAUTH_DISABLE_LOGOUT
+  CUSTOM_AUTH_ONLY_ALLOW_SOURCE: PLUGIN_CUSTOMAUTH_ONLY_ALLOW_SOURCE
+  CUSTOM_AUTH_CUSTOM_PASSWORD_RESET: PLUGIN_CUSTOMAUTH_CUSTOM_PASSWORD_RESET
+  CUSTOM_AUTH_CUSTOM_LOGOUT: PLUGIN_CUSTOMAUTH_CUSTOM_LOGOUT

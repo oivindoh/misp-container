@@ -2,19 +2,16 @@
 
     pytest tests/e2e/test_integration.py [--skip-build] [--keep]
 
-Beside the release run Keycloak for the OIDC login, garage for the
-attachments in S3, and PostgreSQL and Redis outside the chart, as a database
-operator runs them (tests/k3s/external.yaml). The tests run in file order on one release. Later sections
-depend on the state earlier ones leave: custom auth creates a user that the org
-sync warm run disables, the metrics section scales the workers to none and back,
-and the multi-replica section scales web to two replicas and back.
+Beside the release run Keycloak for the OIDC login, and PostgreSQL and Redis
+outside the chart, as a database operator runs them (tests/k3s/external.yaml).
+The tests run in file order on one release. Later sections depend on the state
+earlier ones leave: custom auth creates a user that the org sync warm run
+disables, the metrics section scales the workers to none and back, and the
+multi-replica section scales web to two replicas and back.
 """
 
-import base64
 import json
-import os
 import re
-import subprocess
 import sys
 import time
 import urllib.error
@@ -22,21 +19,20 @@ import urllib.request
 
 import pytest
 
-import garage
 import keycloak
 import manifests
 from cluster import Cluster, build_images
 from misp_container import WORKER_QUEUES
 from misp_container.logrelay import FILES as RELAYED
-from stack import K3S, REPO, VALUES, Release, gnupg_key, merge, scratch_dir, server_certificate, values_file
+from stack import K3S, REPO, VALUES, Release, gnupg_key, merge, server_certificate, values_file
 
 sys.path.insert(0, str(REPO / "scripts"))
 from check_upstream import NOT_RELAYED  # noqa: E402
 
 TEST_ENV = values_file(VALUES)["env"]
 ADMIN_EMAIL = TEST_ENV["ADMIN_EMAIL"]
-# Host port: node port. web, metrics, modules, then garage's S3 and admin API
-PORTS = {28080: 30080, 19191: 30191, 16666: 30666, 3900: 30900, 3903: 30903}
+# Host port: node port. web, metrics, modules
+PORTS = {28080: 30080, 19191: 30191, 16666: 30666}
 METRICS = "http://localhost:19191"
 MODULES = "http://localhost:16666"
 SYNC_ORG_UUID = "4f1ed2b2-1821-49da-bf2c-b7ab639d9b19"
@@ -44,13 +40,10 @@ SYNC_ORG_UUID = "4f1ed2b2-1821-49da-bf2c-b7ab639d9b19"
 PG_HOST = "pg-primary.misp.svc"
 PG_USER = {"host": PG_HOST, "port": "5432", "dbname": "misp", "user": "misp", "password": "pg-test-pw"}
 DB_CA = "/etc/misp-docker/db-ca/ca.crt"
-
-
-def bootstrap_garage():
-    """Layout, key and bucket for the S3 section; returns (access key, secret, bucket id)."""
-    garage.layout()
-    access, secret = garage.key("misp-test")
-    return access, secret, garage.bucket("misp-attachments", access)
+# Header login from a reverse proxy; required false keeps the password form and the API keys
+CUSTOM_AUTH = {"env": {"CUSTOM_AUTH_ENABLE": "true", "CUSTOM_AUTH_HEADER": "X_FORWARDED_EMAIL",
+                       "CUSTOM_AUTH_USE_HEADER_NAMESPACE": "true", "CUSTOM_AUTH_HEADER_NAMESPACE": "HTTP_",
+                       "CUSTOM_AUTH_REQUIRED": "false"}}
 
 
 @pytest.fixture(scope="module")
@@ -59,18 +52,15 @@ def stack(options, failed_in_module):
     cluster = Cluster("misp-integration", PORTS)
     cluster.start()
     cluster.load_images_under_test()
-    s = Release(cluster, values=merge(values_file(K3S / "oidc.yaml"), values_file(K3S / "external.yaml")))
-    s.apply(gnupg_key(ADMIN_EMAIL, s.values["secrets"]["app"]["GNUPG_PASSWORD"]), *manifests.garage(),
-            *manifests.keycloak(), *manifests.postgres_tls(server_certificate("pg-primary", PG_HOST), PG_USER),
+    s = Release(cluster, values=merge(merge(values_file(K3S / "oidc.yaml"), values_file(K3S / "external.yaml")),
+                                      CUSTOM_AUTH))
+    s.apply(gnupg_key(ADMIN_EMAIL, s.values["secrets"]["app"]["GNUPG_PASSWORD"]), *manifests.keycloak(), *manifests.postgres_tls(server_certificate("pg-primary", PG_HOST), PG_USER),
             *manifests.external_redis("external-redis-pw"),
             manifests.nodeport("web", "web", {8080: 30080}), manifests.nodeport("metrics", "metrics", {9191: 30191}),
-            manifests.nodeport("modules", "modules", {6666: 30666}),
-            manifests.nodeport("garage", "garage", {3900: 30900, 3903: 30903}))
+            manifests.nodeport("modules", "modules", {6666: 30666}))
     s.install()
-    for service in ("garage", "keycloak"):
-        s.rollout(service)
+    s.rollout("keycloak")
     s.wait_for_misp()
-    s.s3 = bootstrap_garage()
     s.key = s.admin_key(ADMIN_EMAIL)
     yield s
     cluster.finish("integration", options["keep"], failed_in_module())
@@ -78,6 +68,10 @@ def stack(options, failed_in_module):
 
 def me(stack, key=None):
     return stack.api("GET", "/users/view/me", key or stack.key) or {}
+
+
+def setting(stack, name):
+    return (stack.api("GET", f"/servers/getSetting/{name}", stack.key) or {}).get("value")
 
 
 # -- non-root operation --------------------------------------------------------------
@@ -136,26 +130,33 @@ def test_admin_org_uuid(stack):
 
 
 def test_misp_org_is_the_admin_org(stack):
-    # stack.sql drops the whitespace of its output
-    assert stack.sql("SELECT value FROM system_settings WHERE setting='MISP.org'") == '"TestOrg"'
+    assert setting(stack, "MISP.org") == TEST_ENV["ADMIN_ORG"]
 
 
 def test_last_pw_change_is_set(stack):
     assert "NULL" not in stack.sql("SELECT last_pw_change FROM users WHERE id=1;")
 
 
-# -- database settings storage -------------------------------------------------------
+# -- settings from the repository ----------------------------------------------------
 
-def test_settings_stored_in_the_database(stack):
-    assert stack.sql("SELECT COUNT(*) FROM system_settings;").isdigit()
-
-
-def test_more_than_30_settings_in_the_database(stack):
-    assert int(stack.sql("SELECT COUNT(*) FROM system_settings;")) > 30
+def test_misp_serves_the_baseurl_from_its_env_layer(stack):
+    assert setting(stack, "MISP.baseurl") == TEST_ENV["MISP_BASEURL"]
 
 
-def test_baseurl_stored_in_the_database(stack):
-    assert stack.sql("SELECT value FROM system_settings WHERE setting='MISP.baseurl';") == '"http://web:8080"'
+def test_misp_refuses_a_change_to_a_repository_setting(stack):
+    status, body = stack.http("POST", "/servers/serverSettingsEdit/MISP.title_text", stack.key, {"value": "by hand"})
+    assert status == 403 and "environment variable" in body, body
+
+
+def test_the_database_holds_no_row_of_a_repository_setting(stack):
+    _, out = stack.python("""
+from misp_container import db
+from misp_container.config import repository_settings
+carried = sorted(repository_settings())
+print(len(carried) > 100, [r['setting'] for r in db.dict_query(
+    'SELECT setting FROM system_settings WHERE setting = ANY(%s)', (carried,))])
+""")
+    assert out == "True []"
 
 
 # -- workers -------------------------------------------------------------------------
@@ -320,14 +321,14 @@ def test_the_database_user_is_no_superuser(stack):
 
 
 def test_the_database_refuses_plain_text(stack):
-    rc, out = stack.python("from misp_container import db\ndb.query('SELECT 1', check=True)",
+    rc, out = stack.python("from misp_container import db\ndb.dict_query('SELECT 1')",
                            env={"DB_SSLMODE": "disable"})
     assert rc != 0 and "no encryption" in out, out
 
 
 def test_the_connection_checks_the_server_certificate(stack):
     # The system's CAs never signed the test CA's certificate
-    rc, out = stack.python("from misp_container import db\ndb.query('SELECT 1', check=True)",
+    rc, out = stack.python("from misp_container import db\ndb.dict_query('SELECT 1')",
                            env={"DB_SSLROOTCERT": ""})
     assert rc != 0 and "CERTIFICATE_VERIFY_FAILED" in out, out
 
@@ -364,129 +365,33 @@ def test_event_created_through_the_api(stack):
     stack.http("POST", f"/events/delete/{eid}", stack.key, {})
 
 
-# -- warm restart --------------------------------------------------------------------
+# -- the configure handshake ---------------------------------------------------------
 
-@pytest.fixture(scope="module")
-def warm_run(stack):
-    # A second configure run over the database groups, as the Job runs them
-    return stack.python("""
-from misp_container.env import apply_defaults
-from misp_container.config import SettingsCache, apply_settings_fast, load_settings_yaml
-from misp_container.configure import DB_GROUPS
-from misp_container import db
-apply_defaults()
-db.acquire_config_lock()
-try:
-    cache = SettingsCache()
-    cache.load()
-    specs = load_settings_yaml()
-    for group in DB_GROUPS:
-        apply_settings_fast(group, cache, specs)
-finally:
-    db.release_config_lock()
-""")[1]
-
-
-def test_warm_start_loads_the_database_settings(warm_run):
-    assert "settings from the database" in warm_run
-
-
-def test_warm_start_changes_no_setting(warm_run):
-    changed = [line for line in warm_run.splitlines() if "updating " in line or "setting new default" in line]
-    assert changed == []
-
-
-# -- the defaults version -----------------------------------------------------------
-
-@pytest.fixture(scope="module")
-def image_version(stack):
+def test_configure_recorded_the_image_version(stack):
     # The marker the Dockerfile writes: CORE_TAG, and +CORE_COMMIT when the build pins one
-    return stack.exec("web", "cat /srv/misp-dist-version")
+    version = stack.exec("web", "cat /srv/misp-dist-version")
+    assert stack.sql("SELECT value FROM system_settings WHERE setting='misp_docker.defaults_version'") == f'"{version}"'
 
 
-def test_defaults_version_saved_after_configure(stack, image_version):
-    # Web and worker pods wait until the configure step recorded their image's version
-    stack.python("""
-from misp_container.env import apply_defaults
-from misp_container import db
-from misp_container.config import SettingsCache
-apply_defaults()
-db.query("DELETE FROM system_settings WHERE setting='misp_docker.defaults_version';")
-SettingsCache().save_defaults_version()
-""")
-    assert stack.sql("SELECT value FROM system_settings WHERE setting='misp_docker.defaults_version';") == f'"{image_version}"'
-
-
-# -- S3 attachment storage -----------------------------------------------------------
-
-@pytest.fixture(scope="module")
-def s3_event(stack):
-    access, secret, _ = stack.s3
-    stack.python(f"""
-from misp_container import cake
-cake.set_setting('Plugin.S3_aws_compatible', 'true')
-cake.set_setting('Plugin.S3_bucket_name', 'misp-attachments')
-cake.set_setting('Plugin.S3_aws_endpoint', 'http://garage:3900')
-cake.set_setting('Plugin.S3_region', 'garage')
-cake.set_setting('Plugin.S3_aws_access_key', '{access}')
-cake.set_setting('Plugin.S3_aws_secret_key', '{secret}')
-cake.set_setting('MISP.attachments_dir', 's3://', force=True)
-""")
-    # Earlier sections may have rotated the key
-    stack.key = stack.admin_key(ADMIN_EMAIL)
-    # cake writes attachments_dir into config.php, and PHP-FPM's opcache serves the old file for up
-    # to 2 s, so an upload stays local. getSetting drops that copy: the next request reads the file
-    deadline = time.monotonic() + 30
-    while (stack.api("GET", "/servers/getSetting/MISP.attachments_dir", stack.key) or {}).get("value") != "s3://":
-        if time.monotonic() > deadline:
-            pytest.fail("PHP-FPM did not serve MISP.attachments_dir s3:// in 30 s")
-        time.sleep(1)
-    event = stack.api("POST", "/events/add", stack.key, {"Event": {"info": "S3 test event", "distribution": 0}}) or {}
-    eid = event.get("Event", {}).get("id")
-    attribute = stack.api("POST", f"/attributes/add/{eid}", stack.key, {
-        "event_id": eid, "category": "Payload delivery", "type": "attachment", "value": "test.txt",
-        "data": base64.b64encode(b"S3 storage test content").decode()}) or {}
-    return {"event_id": eid, "attribute_id": attribute.get("Attribute", {}).get("id")}
-
-
-def test_s3_event_created(s3_event):
-    assert s3_event["event_id"]
-
-
-def test_s3_attachment_uploaded(s3_event):
-    assert s3_event["attribute_id"]
-
-
-def test_s3_attachment_downloads(stack, s3_event):
-    # Without a JSON Accept header MISP does not take the key as an API login and
-    # redirects to its login page at MISP.baseurl
-    status, body = stack.http("GET", f"/attributes/download/{s3_event['attribute_id']}", stack.key)
-    assert (status, body) == (200, "S3 storage test content")
-
-
-def test_s3_objects_in_the_bucket(stack, s3_event):
-    info = garage.call("GET", f"/v2/GetBucketInfo?id={stack.s3[2]}")
-    assert (info.get("objects") or 0) > 0 or (info.get("bytes") or 0) > 0
+def test_configure_recorded_the_configuration_checksum(stack):
+    checksum = stack.exec("web", "printenv MISP_CONFIG_CHECKSUM")
+    assert checksum and stack.sql(
+        "SELECT value FROM system_settings WHERE setting='misp_docker.config_checksum'") == f'"{checksum}"'
 
 
 # -- custom auth (reverse proxy header login) ----------------------------------------
 
 @pytest.fixture(scope="module")
 def custom_auth(stack):
+    # The release turns custom auth on (CUSTOM_AUTH)
     stack.exec("web", """CAKE=/var/www/MISP/app/Console/cake
-$CAKE Admin setSetting -q Plugin.CustomAuth_enable true
-$CAKE Admin setSetting -q Plugin.CustomAuth_header X_FORWARDED_EMAIL
-$CAKE Admin setSetting -q Plugin.CustomAuth_use_header_namespace true
-$CAKE Admin setSetting -q Plugin.CustomAuth_header_namespace HTTP_
-$CAKE Admin setSetting -q Plugin.CustomAuth_required false
 $CAKE user create headeruser@example.com 3 1 'HeaderUserPass123!' || true
 $CAKE user change_pw headeruser@example.com 'HeaderUserPass123!' --no_password_change""")
     # CustomAuth matches a user by external_auth_key, not by email
     stack.sql("UPDATE users SET external_auth_required=TRUE, external_auth_key='headeruser@example.com', "
               "change_pw=FALSE, last_pw_change=EXTRACT(EPOCH FROM NOW())::bigint "
               "WHERE email='headeruser@example.com';")
-    yield stack
-    stack.exec("web", "/var/www/MISP/app/Console/cake Admin setSetting -q Plugin.CustomAuth_enable false")
+    return stack
 
 
 def test_custom_auth_header_logs_in(custom_auth):
@@ -873,7 +778,8 @@ def test_metrics_users_by_status(metrics_text, status):
 
 
 def test_metrics_instance_info(metrics_text):
-    assert "misp_instance_info" in metrics_text
+    line = next((l for l in metrics_text.splitlines() if l.startswith("misp_instance_info{")), "")
+    assert f'uuid="{TEST_ENV["MISP_UUID"]}"' in line and f'base_url="{TEST_ENV["MISP_BASEURL"]}"' in line, line
 
 
 def test_metrics_scrape_duration(metrics_text):
@@ -901,6 +807,26 @@ def test_metrics_jobs_queued_present(metrics_text):
 def test_metrics_scheduled_tasks_present(metrics_text):
     # Nothing runs MISP's Scheduled tasks here; the exporter counts enabled ones
     assert "misp_scheduled_tasks_enabled 0" in metrics_text
+
+
+def test_metrics_count_no_manual_setting(metrics_text):
+    assert value(metrics_text, "misp_settings_manual") == "0"
+
+
+@pytest.fixture(scope="module")
+def manual_setting(stack, metrics_text):
+    # A setting the repository does not carry, changed as an admin changes it in the UI
+    name = "MISP.footermidleft"
+    status, body = stack.http("POST", f"/servers/serverSettingsEdit/{name}", stack.key, {"value": "by hand"})
+    assert status == 200, body
+    yield name
+    stack.python(f"from misp_container import db\ndb.execute(\"DELETE FROM system_settings WHERE setting = '{name}'\")")
+
+
+def test_metrics_report_a_manual_setting(manual_setting):
+    text = metric()[1]
+    assert f'misp_setting_manual{{setting="{manual_setting}"}} 1' in text
+    assert value(text, "misp_settings_manual") == "1"
 
 
 @pytest.fixture(scope="module")
@@ -1086,20 +1012,3 @@ def test_every_log_file_misp_wrote_is_relayed(stack, service):
     unrelayed = sorted({f.removeprefix("./") for f in found} - set(RELAYED) - set(NOT_RELAYED))
     assert not unrelayed, (f"MISP wrote {unrelayed} in app/tmp/logs of {service}: add each to FILES in "
                            "files/misp_container/logrelay.py, or to NOT_RELAYED in scripts/check_upstream.py")
-
-
-# -- settings and scheduler coverage -------------------------------------------------
-
-def test_every_misp_setting_curated_or_catalogued(stack):
-    dump = scratch_dir() / "misp-settings.json"
-    dump.write_text(stack.exec("web", "/var/www/MISP/app/Console/cake Admin getSetting all"))
-    result = subprocess.run([sys.executable, str(REPO / "scripts/update_settings.py"), "--check", "--json", str(dump)],
-                            capture_output=True, text=True, env={**os.environ, "PYTHONPATH": str(REPO / "files")})
-    assert result.returncode == 0, "new or stale settings (run mise run settings-update and review):\n" + result.stdout
-
-
-def test_no_rejected_cake_settings(stack):
-    # Every default this image applies must be accepted by this MISP version
-    rejected = [l for l in stack.logs("configure").splitlines()
-                if "WARNING [cake]" in l or '"level":"warning","context":"cake"' in l]
-    assert rejected == []

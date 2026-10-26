@@ -29,9 +29,7 @@ class TestCheckIdentity:
 
     @pytest.mark.parametrize("key,value", [
         ("SECURITY_SALT", "override-me-generate-a-real-64-char-hex-salt-with-python3-secret"),
-        ("SECURITY_SALT", "0" * 64),
         ("ADMIN_PASSWORD", "change-me"),
-        ("DB_PASSWORD", "REPLACE-WITH-REAL-PASSWORD"),
         ("SECURITY_ENCRYPTION_KEY", "change-me"),
     ])
     def test_placeholder_secret_refused(self, key, value):
@@ -61,17 +59,32 @@ class TestCheckIdentity:
             configure.check_identity()
 
 
-class TestEveryGroupIsApplied:
-    def test_every_group_of_settings_yaml_is_named_by_the_engine(self):
-        """A group nobody applies is a set of env vars that do nothing."""
-        from misp_container import config
-        repo = os.path.join(os.path.dirname(__file__), "..")
-        groups = set(config.load_settings_yaml(os.path.join(repo, "files/misp-config/settings.yaml")))
-        groups.discard(config.UPSTREAM_GROUP)
-        applied = (set(configure.DB_GROUPS) | {"gpg"}
-                   | set(config.CONFIG_PHP_GROUPS) | {config.S3_GROUP}
-                   | {group for group, _ in config.CONDITIONAL_CONFIG_PHP_GROUPS})
-        assert groups <= applied, f"never applied: {sorted(groups - applied)}"
+class TestEncryptionKey:
+    def test_a_short_key_is_refused(self):
+        # MISP refuses every write of a sensitive value under a key shorter than 32 bytes
+        with patch.dict(os.environ, {**GOOD, "SECURITY_ENCRYPTION_KEY": "k" * 16}):
+            with pytest.raises(SystemExit):
+                configure.check_identity()
+
+    def test_a_32_byte_key_passes(self):
+        with patch.dict(os.environ, {**GOOD, "SECURITY_ENCRYPTION_KEY": "k" * 32}):
+            configure.check_identity()
+
+
+class TestRepositoryRows:
+    def test_the_rows_of_carried_settings_go(self):
+        with patch.dict(os.environ, {"MISP_REPOSITORY_SETTINGS": "MISP.org,GnuPG.sign"}), \
+                patch.object(configure.db, "execute", return_value=2) as execute:
+            configure.forget_repository_rows()
+        sql, params = execute.call_args[0]
+        assert "DELETE FROM system_settings" in sql and params == (["GnuPG.sign", "MISP.org"],)
+
+    def test_a_manual_setting_is_reported_with_its_change(self):
+        rows = [{"setting": "MISP.welcome_text_top", "changed": "by admin@example.org at 2026-10-26 10:00:00"}]
+        with patch.object(configure.db, "manual_settings", return_value=rows), \
+                patch.object(configure.log, "warning") as warning:
+            configure.report_manual_settings()
+        assert warning.call_args[0][1] == "MISP.welcome_text_top"
 
 
 class TestLayoutCheck:

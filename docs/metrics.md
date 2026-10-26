@@ -64,6 +64,12 @@ job at `unfinished` while it waits and runs; a job whose worker died stays `unfi
 | `misp_container_job_runs_total{operation,status}` | counter | Runs of `configure`, `org-sync` and `migrate`, by `success` or `error` |
 | `misp_container_job_last_success_timestamp_seconds{operation}` | gauge | Unix time of the last successful run per job |
 
+**Settings outside git:**
+| Metric | Type | Description |
+|--------|------|-------------|
+| `misp_settings_manual` | gauge | Settings changed in MISP that the repository does not carry ([configuration.md](configuration.md#settings)) |
+| `misp_setting_manual{setting}` | gauge | 1 for each such setting |
+
 **Self-monitoring:**
 | Metric | Type | Description |
 |--------|------|-------------|
@@ -102,6 +108,10 @@ job at `unfinished` while it waits and runs; a job whose worker died stays `unfi
 # A task enabled under MISP's Scheduled tasks never runs here
 - alert: MISPScheduledTaskEnabled
   expr: misp_scheduled_tasks_enabled > 0
+
+# A setting changed in MISP's UI or API that git does not hold
+- alert: MISPSettingChangedOutsideGit
+  expr: misp_settings_manual > 0
 
 # A configure run failed in the last day
 - alert: MISPConfigureFailed

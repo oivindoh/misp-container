@@ -34,7 +34,7 @@ class FakeConsole:
 def run(name, arg="", script=((0, "done\n"),), servers=()):
     """task.run with the pod preparation, the database and the console stubbed: (exit code, console calls)."""
     console = FakeConsole(script)
-    with patch("misp_container.task.prepare"), patch("misp_container.task.apply_defaults"), \
+    with patch("misp_container.task.prepare"), \
             patch("misp_container.task.limit_worker_memory"), patch("misp_container.task.db.wait_for_db"), \
             patch("misp_container.task.db.wait_for_configure") as wait, \
             patch("misp_container.task.db.dict_query", return_value=[{"id": s} for s in servers]), \

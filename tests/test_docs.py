@@ -21,8 +21,7 @@ sys.path.insert(0, str(REPO / "files"))
 sys.path.insert(0, str(REPO / "scripts"))
 
 import chart  # noqa: E402
-from misp_container import env as envmod, task  # noqa: E402
-from misp_container.config import derive_env_var  # noqa: E402
+from misp_container import db, task  # noqa: E402
 
 DOCS = sorted([REPO / "README.md", REPO / "DEVELOPING.md", REPO / "tests" / "README.md",
                *(REPO / "docs").glob("*.md")])
@@ -30,12 +29,8 @@ SKIP_DIRS = {".git", ".venv", "node_modules", "__pycache__", ".pytest_cache"}
 BACKTICKED = re.compile(r"`([^`\n]+)`")
 
 # Upper-case words in backticks that are no env var of this image
-NOT_ENV = {
-    "BRPOP", "LLEN", "GET", "POST", "JSON", "UTF8", "S256", "SIGKILL", "PDO", "TLS", "API", "CIDR",
-    "HTTP_X_FORWARDED_FOR", "REMOTE_ADDR", "NULL", "README", "TODO", "PAR",
-    # The host's proxy variables, which kind copies into its node
-    "HTTP_PROXY", "HTTPS_PROXY",
-}
+NOT_ENV = {"HTTP_X_FORWARDED_FOR", "REMOTE_ADDR"}
+SETTINGS_FILE = yaml.safe_load((REPO / "deploy/chart/files/settings.yaml").read_text())
 # The example of DEVELOPING.md, "Adding a setting"
 EXAMPLES = {"MISP_MY_SETTING", "MISP.my_setting"}
 
@@ -61,13 +56,13 @@ def mentions(pattern: re.Pattern) -> list[tuple[Path, str]]:
 # -- env vars ------------------------------------------------------------------------
 
 def known_env_vars() -> set[str]:
-    names = set(envmod.ALIASES)
+    names = set(SETTINGS_FILE["aliases"])
     text_files = [p for p in repo_files() if p.suffix in (".py", ".sh", ".env", ".yml", ".yaml", ".toml")
                   or p.name in ("Dockerfile", "Caddyfile") or p.name.endswith(".template")]
     for path in text_files:
         text = path.read_text(errors="replace")
         names |= set(re.findall(r"\b([A-Z][A-Z0-9_]{2,})\b", text))
-    names |= {derive_env_var(name) for name in known_settings()}
+    names |= {name.replace(".", "_").upper() for name in known_settings()}
     return names
 
 
@@ -89,20 +84,20 @@ SETTING_TOKEN = re.compile(r"((?:MISP|Plugin|Security|GnuPG|SimpleBackgroundJobs
 
 
 def known_settings() -> set[str]:
-    """Every setting settings.yaml names (in groups) or the catalogue lists (flat)."""
-    curated = yaml.safe_load((REPO / "files/misp-config/settings.yaml").read_text())["settings"]
-    names = {name for group in curated.values() for name in group}
-    names |= set(yaml.safe_load((REPO / "files/misp-config/settings-upstream.yaml").read_text())["settings"])
-    # Settings the configure Job sets itself, which the catalogue leaves out
-    from update_settings import DYNAMIC
-    return names | DYNAMIC
+    """Every setting settings.yaml names, the ones the configure Job or MISP writes itself, and the
+    ones the code reads."""
+    names = {name for group in SETTINGS_FILE["settings"].values() for name in group} | set(db.OWN_SETTINGS)
+    code = [*(REPO / "files/misp_container").glob("*.py"), REPO / "scripts/check_upstream.py"]
+    for path in code:
+        names |= {m.group(1) for m in SETTING_TOKEN.finditer(path.read_text())}
+    return names
 
 
 def test_every_setting_a_doc_names_exists():
     known = known_settings()
     unknown = sorted({(rel(doc), token.split("=")[0]) for doc, token in mentions(SETTING_TOKEN)
                       if token.split("=")[0] not in known | EXAMPLES})
-    assert not unknown, "docs name settings that neither settings.yaml nor settings-upstream.yaml has:\n" + \
+    assert not unknown, "docs name settings that settings.yaml does not have:\n" + \
         "\n".join(f"  {doc}: {name}" for doc, name in unknown)
 
 
@@ -181,15 +176,15 @@ def test_every_chart_value_a_doc_names_exists():
 
 def test_the_oidc_table_lists_every_short_name():
     listed = table_names(REPO / "docs/configuration.md", "| Variable | Setting | Default |", "### OpenID Connect")
-    aliases = {name for name in envmod.ALIASES if name.startswith("OIDC_")}
-    assert aliases <= listed, f"docs/configuration.md lacks the OIDC short names {sorted(aliases - listed)} (env.py ALIASES)"
+    aliases = {name for name in SETTINGS_FILE["aliases"] if name.startswith("OIDC_")}
+    assert aliases <= listed, f"docs/configuration.md lacks the OIDC short names {sorted(aliases - listed)} (settings.yaml aliases)"
 
 
 def test_the_header_auth_table_lists_every_short_name():
     listed = table_names(REPO / "docs/configuration.md", "| Variable | Setting | Default |", "### Header authentication")
     # the switch itself is in the plugins table
-    aliases = {name for name in envmod.ALIASES if name.startswith("CUSTOM_AUTH_")} - {"CUSTOM_AUTH_ENABLE"}
-    assert aliases <= listed, f"docs/configuration.md lacks the header auth names {sorted(aliases - listed)} (env.py ALIASES)"
+    aliases = {name for name in SETTINGS_FILE["aliases"] if name.startswith("CUSTOM_AUTH_")} - {"CUSTOM_AUTH_ENABLE"}
+    assert aliases <= listed, f"docs/configuration.md lacks the header auth names {sorted(aliases - listed)} (settings.yaml aliases)"
 
 
 def exporter_metrics() -> dict[str, str]:

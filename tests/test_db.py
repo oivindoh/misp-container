@@ -234,7 +234,6 @@ class TestCursorHandling:
             return self._Conn(cur)
 
         monkeypatch.setattr(db, "_connect", connect)
-        assert db.query("SELECT 1") == "1"
         assert db.dict_query("SELECT 1 AS n") == [{"n": 1}]
         assert db.execute("UPDATE t SET a = 1") == 1
         assert db.query_ok("SELECT 1") is True

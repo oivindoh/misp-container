@@ -42,6 +42,11 @@ ATTACHMENT_TOOL = "app/Lib/Tools/AttachmentTool.php"
 AWS_S3_CLIENT = "app/Lib/Tools/AWSS3Client.php"
 BOOTSTRAP = "app/Config/bootstrap.default.php"
 SERVER_MODEL = "app/Model/Server.php"
+ENV_SETTING = "app/Lib/Tools/EnvSetting.php"
+SYSTEM_SETTING = "app/Model/SystemSetting.php"
+# The settings the chart passes to MISP's environment layer; the auth plugins go into config.php
+SETTINGS_FILE = SCRIPTS.parent / "deploy" / "chart" / "files" / "settings.yaml"
+CONFIG_PHP_ONLY_GROUPS = {"oidc", "ldap"}
 ORG_IMG_HELPER = "app/View/Helper/OrgImgHelper.php"
 # Where MISP keeps the files of each upload rule of Server::getFileRules(): the
 # chart mounts the attachments claim at these paths
@@ -363,6 +368,31 @@ def image_paths(root: Path) -> list[str]:
     return problems
 
 
+# -- MISP's environment layer --------------------------------------------------------
+
+def env_settings(root: Path) -> list[str]:
+    """MISP still reads MISP_SETTING_<Category>__<key> above config.php and the database, for our categories."""
+    import yaml
+
+    source = strip_php_comments(read(root, ENV_SETTING))
+    problems = []
+    if not re.search(r"ENV_PREFIX\s*=\s*'MISP_SETTING_'", source):
+        problems.append("EnvSetting no longer reads env vars named MISP_SETTING_*: the chart passes every "
+                        "setting of the repository that way (deploy/chart/templates/_settings.tpl)")
+    if not re.search(r"str_replace\(\s*'__'\s*,\s*'\.'", source):
+        problems.append("EnvSetting no longer turns __ into a dot in a setting name: the chart's MISP_SETTING_* "
+                        "names stop matching (deploy/chart/templates/_settings.tpl)")
+    categories = re.search(r"ALLOWED_CATEGORIES\s*=\s*\[(.*?)\]", strip_php_comments(read(root, SYSTEM_SETTING)), re.S)
+    allowed = set(re.findall(r"'([\w]+)'", categories.group(1))) if categories else set()
+    settings = yaml.safe_load(SETTINGS_FILE.read_text())["settings"]
+    ours = {name.split(".")[0] for group, names in settings.items() if group not in CONFIG_PHP_ONLY_GROUPS
+            for name in names if "." in name}
+    for category in sorted(ours - allowed):
+        problems.append(f"SystemSetting::ALLOWED_CATEGORIES no longer holds {category}: MISP drops "
+                        f"MISP_SETTING_{category}__* and the repository's {category} settings stop applying")
+    return problems
+
+
 CHECKS = [
     Check("worker-queues", BACKGROUND_JOBS, "files/misp_container/__init__.py WORKER_QUEUES", worker_queues,
           fails_when="adds or drops a job queue"),
@@ -384,6 +414,9 @@ CHECKS = [
     Check("relayed-files", "app/Model, app/Lib, app/Controller, app/Console, app/Plugin",
           "files/misp_container/logrelay.py FILES", relayed_files,
           fails_when="writes a new file under app/tmp/logs, or stops writing one the relay follows"),
+    Check("env-settings", f"{ENV_SETTING}, {SYSTEM_SETTING}",
+          "deploy/chart/templates/_settings.tpl, deploy/chart/files/settings.yaml", env_settings,
+          fails_when="stops reading MISP_SETTING_* settings, or a category the repository's settings use"),
     Check("image-paths", f"{SERVER_MODEL}, {ORG_IMG_HELPER}",
           "deploy/chart/templates/_helpers.tpl misp.appVolumeMounts", image_paths,
           fails_when="uploads org logos or custom images to, or reads them from, a directory the volumes do not mount"),

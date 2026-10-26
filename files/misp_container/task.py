@@ -14,7 +14,6 @@ import subprocess
 import sys
 
 from . import CAKE, db
-from .env import apply_defaults
 from .init import prepare
 from .log import is_log_line, setup as setup_logging, get as getlog
 from .worker import limit_worker_memory
@@ -131,7 +130,6 @@ def console(args: list[str]) -> bool:
 
 def run(name: str, arg: str = "") -> int:
     """Run one task's console command in this pod: 0 when it succeeded, else 1."""
-    apply_defaults()
     prepare()
     limit_worker_memory()
     db.wait_for_db(retries=60, wait_seconds=5)

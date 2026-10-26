@@ -193,7 +193,7 @@ refuses its configuration never serves.
 {{- if .Values.secrets.create }}
 {{- $secrets = printf "%s%s%s%s" (.Files.Get "files/secrets-db.env") (toJson .Values.secrets.db) (.Files.Get "files/secrets-app.env") (toJson .Values.secrets.app) }}
 {{- end }}
-checksum/config: {{ printf "%s%s" (include (print .Template.BasePath "/configmap-env.yaml") .) $secrets | sha256sum }}
+checksum/config: {{ printf "%s%s%s" (include (print .Template.BasePath "/configmap-env.yaml") .) (include (print .Template.BasePath "/configmap-settings.yaml") .) $secrets | sha256sum }}
 {{- end }}
 
 {{/* The pod's checksum/config annotation as MISP_CONFIG_CHECKSUM; empty in a pod without it */}}
@@ -206,17 +206,37 @@ checksum/config: {{ printf "%s%s" (include (print .Template.BasePath "/configmap
 
 {{/*
 The env of a container of the misp image: the connection Secrets (misp.connectionEnv), the
-misp-env ConfigMap, and the Secrets named. Call it with (list $root "misp-db" ...).
+misp-env ConfigMap, and the Secrets named. A container that gets misp-app runs MISP: it also
+gets the repository's settings (misp-settings, and the settings a Secret holds). Call it
+with (list $root "misp-db" ...).
 */}}
 {{- define "misp.appEnv" -}}
+{{- $root := first . }}
+{{- $misp := has "misp-app" (rest .) }}
 env:
-  {{- include "misp.checksumEnv" (first .) | nindent 2 }}
-  {{- with include "misp.connectionEnv" (concat (list (first .) "misp-env") (rest .)) }}
+  {{- include "misp.checksumEnv" $root | nindent 2 }}
+  {{- with include "misp.connectionEnv" (concat (list $root "misp-env") (rest .)) }}
   {{- . | nindent 2 }}
+  {{- end }}
+  {{- if $misp }}
+  {{- range $var, $entry := include "misp.settings" $root | fromJson }}
+  {{- with $entry.secretKeyRef }}
+  - name: {{ $var }}
+    valueFrom:
+      secretKeyRef:
+        name: {{ .name }}
+        key: {{ .key }}
+        optional: true
+  {{- end }}
+  {{- end }}
   {{- end }}
 envFrom:
   - configMapRef:
       name: misp-env
+  {{- if $misp }}
+  - configMapRef:
+      name: misp-settings
+  {{- end }}
 {{- range rest . }}
   - secretRef:
       name: {{ . }}

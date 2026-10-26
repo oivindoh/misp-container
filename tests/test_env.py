@@ -8,7 +8,7 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "files"))
 
-from misp_container.env import env, apply_defaults
+from misp_container.env import env
 
 
 class TestEnv:
@@ -35,72 +35,3 @@ class TestEnv:
         """Explicit env var takes precedence."""
         with patch.dict(os.environ, {"DB_HOST": "custom-host"}):
             assert env("DB_HOST") == "custom-host"
-
-
-class TestApplyDefaults:
-    """apply_defaults() fills the derived names and the aliases into os.environ."""
-
-    def test_custom_auth_aliases_feed_the_derived_names(self):
-        with patch.dict(os.environ, {"CUSTOM_AUTH_HEADER": "X-User", "OIDC_LOGOUT_URL": "https://idp/logout"}, clear=False):
-            os.environ.pop("PLUGIN_CUSTOMAUTH_HEADER", None)
-            os.environ.pop("PLUGIN_CUSTOMAUTH_CUSTOM_LOGOUT", None)
-            apply_defaults()
-            assert os.environ["PLUGIN_CUSTOMAUTH_HEADER"] == "X-User"
-            assert os.environ["PLUGIN_CUSTOMAUTH_CUSTOM_LOGOUT"] == "https://idp/logout"
-
-
-class TestDerivedDefaults:
-    """Secondary settings inherit from the primary env var unless set."""
-
-    def test_redis_mirrors_inherit(self):
-        env = {"MISP_REDIS_HOST": "cache", "MISP_REDIS_PORT": "6380", "MISP_REDIS_PASSWORD": "pw"}
-        with patch.dict(os.environ, env, clear=False):
-            for key in ("SIMPLEBACKGROUNDJOBS_REDIS_HOST", "SIMPLEBACKGROUNDJOBS_REDIS_PASSWORD",
-                        "PLUGIN_ZEROMQ_REDIS_PORT"):
-                os.environ.pop(key, None)
-            apply_defaults()
-            assert os.environ["SIMPLEBACKGROUNDJOBS_REDIS_HOST"] == "cache"
-            assert os.environ["SIMPLEBACKGROUNDJOBS_REDIS_PASSWORD"] == "pw"
-            assert os.environ["PLUGIN_ZEROMQ_REDIS_PORT"] == "6380"
-
-    def test_explicit_value_wins(self):
-        env = {"MISP_REDIS_HOST": "cache", "SIMPLEBACKGROUNDJOBS_REDIS_HOST": "jobs-cache"}
-        with patch.dict(os.environ, env, clear=False):
-            apply_defaults()
-            assert os.environ["SIMPLEBACKGROUNDJOBS_REDIS_HOST"] == "jobs-cache"
-
-    def test_email_and_baseurl_inherit(self):
-        env = {"MISP_BASEURL": "https://m", "ADMIN_EMAIL": "a@x"}
-        with patch.dict(os.environ, env, clear=False):
-            for key in ("MISP_EXTERNAL_BASEURL", "MISP_CONTACT", "GNUPG_EMAIL", "MISP_EMAIL"):
-                os.environ.pop(key, None)
-            apply_defaults()
-            assert os.environ["MISP_EXTERNAL_BASEURL"] == "https://m"
-            assert os.environ["MISP_CONTACT"] == "a@x"
-            assert os.environ["GNUPG_EMAIL"] == "a@x"
-
-    def test_the_admin_org_names_the_hosting_organisation(self):
-        with patch.dict(os.environ, {"ADMIN_ORG": "Example Org"}, clear=False):
-            os.environ.pop("MISP_ORG", None)
-            apply_defaults()
-            assert os.environ["MISP_ORG"] == "Example Org"
-        with patch.dict(os.environ, {"ADMIN_ORG": "Example Org", "MISP_ORG": "EXAMPLE"}, clear=False):
-            apply_defaults()
-            assert os.environ["MISP_ORG"] == "EXAMPLE"
-
-
-class TestAuthAliases:
-    def test_documented_oidc_names_feed_derived_ones(self):
-        env = {"OIDC_PROVIDER_URL": "https://idp", "OIDC_ROLES_MAPPING": '{"a": 1}', "OIDC_MIXEDAUTH": "true"}
-        with patch.dict(os.environ, env, clear=False):
-            for key in ("OIDCAUTH_PROVIDER_URL", "OIDCAUTH_ROLE_MAPPER", "OIDCAUTH_MIXEDAUTH"):
-                os.environ.pop(key, None)
-            apply_defaults()
-            assert os.environ["OIDCAUTH_PROVIDER_URL"] == "https://idp"
-            assert os.environ["OIDCAUTH_ROLE_MAPPER"] == '{"a": 1}'
-            assert os.environ["OIDCAUTH_MIXEDAUTH"] == "true"
-
-    def test_derived_name_wins_over_alias(self):
-        with patch.dict(os.environ, {"OIDC_CLIENT_ID": "short", "OIDCAUTH_CLIENT_ID": "derived"}):
-            apply_defaults()
-            assert os.environ["OIDCAUTH_CLIENT_ID"] == "derived"

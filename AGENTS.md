@@ -38,7 +38,7 @@ Each role of the main image is a module of the package, run under the image's ti
 
 | Command | Run by, every component on | Does |
 |---|---|---|
-| `python3 -m misp_container.configure` | Job `configure-<revision>` | One-shot MISP configuration: schema, settings, admin user, GPG, auth. |
+| `python3 -m misp_container.configure` | Job `configure-<revision>` | One-shot MISP configuration: schema, updates, admin user and organisation. |
 | `python3 -m misp_container.housekeeping` | CronJob `housekeeping-audit-logs`, CronJob `housekeeping-jobs`, CronJob `housekeeping-logs` | Nightly deletes in MISP's jobs, logs and audit_logs tables. |
 | `python3 -m misp_container.metrics` | Deployment `metrics` | MISP Prometheus metrics exporter. |
 | `python3 -m misp_container.migrate` | Job `configure-<revision>` | Copy an existing MISP database (MySQL or MariaDB) into this deployment's PostgreSQL. |
@@ -57,8 +57,8 @@ The roles, the task runner and the Jobs share this package; it is `/opt/misp_con
 | `admin.py` | Admin user, organisation and API key setup. |
 | `api.py` | Thin MISP REST API client using only urllib (stdlib). |
 | `cake.py` | Thin wrapper around the CakePHP cake CLI. |
-| `config.py` | MISP settings diff engine. |
-| `configure.py` | One-shot MISP configuration: schema, settings, admin user, GPG, auth. |
+| `config.py` | config.php from the MISP_CONFIG_* env vars the chart renders. |
+| `configure.py` | One-shot MISP configuration: schema, updates, admin user and organisation. |
 | `db.py` | Database access for the entrypoints, on PostgreSQL. |
 | `env.py` | Environment variable handling. |
 | `exporter.py` | The metrics exporter's HTTP server: /metrics, and /healthz and /ready for the probes. |
@@ -103,8 +103,9 @@ Values of the misp chart. The comment above each top-level key describes it; doc
 
 | Template | Renders, every component on | Note |
 |---|---|---|
-| `configmap-env.yaml` | ConfigMap `misp-env` | misp-env: files/base.env, then the env value. Every MISP pod reads it; its checksum rolls the Deployments. With databaseCA, DB_SSLROOTCERT names the certificate's mount. |
+| `configmap-env.yaml` | ConfigMap `misp-env` | misp-env: files/base.env, then the env value (misp.envValues). Every MISP pod reads it; its checksum rolls the Deployments. With databaseCA, DB_SSLROOTCERT names the certificate's mount. |
 | `configmap-orgs.yaml` | ConfigMap `misp-orgs` | Declarative org config for the org-sync Job (orgSync.orgs; format: deploy/orgs.yaml.example). |
+| `configmap-settings.yaml` | ConfigMap `misp-settings` | misp-settings: the settings the repository brings (files/settings.yaml, with base.env and the env value on top) as MISP's own env layer and as config.php entries (_settings.tpl). The pods that run MISP read it; a setting a Secret holds is an env entry of their container instead. Its checksum rolls the pods. |
 | `cronjobs-housekeeping.yaml` | CronJob `housekeeping-audit-logs`, CronJob `housekeeping-jobs`, CronJob `housekeeping-logs` | The housekeeping component: nightly batched deletes of old rows in jobs, logs and audit_logs (python3 -m misp_container.housekeeping). Autovacuum reclaims the space. Retention is a policy choice: HOUSEKEEPING_<TABLE>_DAYS in env. |
 | `cronjobs.yaml` | CronJob `cache-feeds`, CronJob `cache-servers`, CronJob `fetch-feeds`, CronJob `periodic-summary`, CronJob `pull-servers`, CronJob `push-servers`, CronJob `push-taxii`, CronJob `update-galaxies`, CronJob `update-noticelists`, CronJob `update-object-templates`, CronJob `update-taxonomies`, CronJob `update-warninglists` | The cronjobs component: the periodic tasks, run by the task runner in the main image (python3 -m misp_container.task <task>), one CronJob per entry of cronjobs.tasks with a schedule and one per workflow ID in cronjobs.workflows. Each runs MISP's console in its pod, so the periodic work never waits in the workers' queues. |
 | `deployment-metrics.yaml` | Deployment `metrics` | Prometheus exporter on port 9191: MISP's database, the job queues in Redis and the sync partners (docs/metrics.md). It reads MISP's data and never changes it. |
@@ -160,26 +161,24 @@ Components, each off by default:
 | `housekeeping` | Nightly deletes of old rows in jobs, logs and audit_logs (HOUSEKEEPING_<TABLE>_DAYS in env, defaults 2, 30 and 90). |
 | `migrate` | A copy of an existing MySQL or MariaDB MISP into the database, before the configure Job runs (docs/migration.md). secret: entries on top of files/secrets-migrate.env for the misp-migrate Secret. volumes and volumeMounts: the source's attachments directory. |
 
-## Settings: `files/misp-config/settings.yaml`
+## Settings: `deploy/chart/files/settings.yaml`
 
-MISP settings in groups; each setting's env var is its name in upper case with dots as underscores (DEVELOPING.md, Settings Engine).
+MISP's settings in groups, as the repository defines them: each wins over a change in MISP's UI. A setting's env var is its name in upper case with dots as underscores (docs/configuration.md, Settings).
 
 | Group | Holds |
 |---|---|
-| `minimum_config` | rendered into config.php by init, in every pod. MISP never reads SystemSetting::BLOCKED_SETTINGS from the database (salt, encryption key, password policy, python_bin, ca_path, tmpdir, attachments_dir, self_update, online_version_check, system_setting_db, GnuPG.binary, disable_local_feed_access), so those live here. |
+| `minimum_config` | also rendered into config.php, by every pod. MISP never reads SystemSetting::BLOCKED_SETTINGS from the database (salt, encryption key, password policy, python_bin, ca_path, tmpdir, attachments_dir, self_update, online_version_check, system_setting_db, GnuPG.binary, disable_local_feed_access), so those live here. |
 | `db_enable` | toggle system_setting_db |
 | `initialisation` | core instance settings |
-| `critical` | always-enforced settings |
+| `critical` | security hardening |
 | `optional` | nice-to-have defaults |
 | `gpg` | GnuPG settings |
-| `s3` | S3 attachment storage (only applied when PLUGIN_S3_BUCKET_NAME is set, which also sets MISP.attachments_dir to s3://, env.py) |
+| `s3` | S3 attachment storage (only while PLUGIN_S3_BUCKET_NAME is set, which also sets MISP.attachments_dir to s3://) |
 | `proxy` | HTTP proxy settings (an empty Proxy.host means no proxy) |
-| `custom_auth` | header authentication from a reverse proxy, no directory lookup (CUSTOM_AUTH_ENABLE=true turns it on; the CUSTOM_AUTH_* names are aliases, env.py) |
+| `custom_auth` | header authentication from a reverse proxy, no directory lookup (CUSTOM_AUTH_ENABLE=true turns it on; the CUSTOM_AUTH_* names are aliases, below) |
 | `kafka` | Kafka pub/sub integration (PLUGIN_KAFKA_ENABLE=true turns it on) |
-| `linotp` | LinOTP two-factor authentication, from env only: MISP refuses these settings while the plugin is off (LINOTPAUTH_ENABLED=true turns it on) |
-| `oidc` | OidcAuth plugin, rendered into config.php when OIDC_ENABLE=true. The documented OIDC_* names map onto these (env.py ALIASES). role_mapper and scopes take JSON in env; scopes also takes a comma-separated list. |
+| `oidc` | OidcAuth plugin, rendered into config.php when OIDC_ENABLE=true. The documented OIDC_* names map onto these (the aliases below). role_mapper and scopes take JSON in env; scopes also takes a comma-separated list. |
 | `ldap` | LdapAuth plugin, rendered into config.php when LDAPAUTH_ENABLE=true |
-| `apache_auth` | ApacheSecureAuth (header auth with LDAP lookup), rendered into config.php when APACHESECUREAUTH_LDAP_ENABLE=true |
 
 ## What the image depends on in MISP
 
@@ -196,6 +195,7 @@ Fail when MISP no longer matches what this image patches or depends on. A failur
 | `cakelog-streams` | app/Config/bootstrap.default.php | files/misp_container/init.py LOG_BLOCK |
 | `shell-streams` | app/Lib/cakephp/lib/Cake/Console/Shell.php | files/misp_container/init.py LOG_BLOCK |
 | `relayed-files` | app/Model, app/Lib, app/Controller, app/Console, app/Plugin | files/misp_container/logrelay.py FILES |
+| `env-settings` | app/Lib/Tools/EnvSetting.php, app/Model/SystemSetting.php | deploy/chart/templates/_settings.tpl, deploy/chart/files/settings.yaml |
 | `image-paths` | app/Model/Server.php, app/View/Helper/OrgImgHelper.php | deploy/chart/templates/_helpers.tpl misp.appVolumeMounts |
 | `log-block-php` | php | files/misp_container/init.py LOG_BLOCK |
 
@@ -220,7 +220,6 @@ Apply this repository's patches to a MISP tree, and fail when one no longer fits
 | `release.py` | Prepare a release. |
 | `update-composer-lock.sh` | Resolve MISP's composer dependencies for the current CORE_TAG plus this image's extra packages, and write the result to files/composer.lock. The image build installs exactly that lock and fails when it is out of date with upstream's composer.json (a new MISP release), so run this on every bump. |
 | `update_misp_requirements.py` | Resolve the packages MISP's own scripts import into files/requirements-misp.txt. |
-| `update_settings.py` | Keep files/misp-config in step with the settings a live MISP knows. |
 
 ## Tests: `tests/`
 
@@ -251,8 +250,7 @@ Unit tests (`tests/`, no containers):
 | `test_chart.py` | The Helm chart renders what the code and the release expect (helm template, no cluster). |
 | `test_chart_schema.py` | helm lint, and every render of the chart validated against the Kubernetes and CRD schemas. |
 | `test_check_upstream.py` | Unit tests for the upstream guard (scripts/check_upstream.py). |
-| `test_config.py` | Unit tests for the config diff engine. |
-| `test_config_php.py` | Unit tests for config.php rendering from settings.yaml. |
+| `test_config.py` | Unit tests for config.php from the MISP_CONFIG_* env (misp_container.config). |
 | `test_configure.py` | Unit tests for the configure step's identity and secret checks. |
 | `test_db.py` | Unit tests for the database layer and housekeeping (no PostgreSQL needed). |
 | `test_docs.py` | The docs name only what the code has. |
@@ -265,9 +263,9 @@ Unit tests (`tests/`, no containers):
 | `test_release.py` | Unit tests for the release tool (scripts/release.py): the next tag and chart version. |
 | `test_requirements.py` | files/requirements-misp.txt was resolved for the MISP the Dockerfile pins. |
 | `test_s3.py` | Unit tests for the minimal S3 client (misp_container.s3). |
+| `test_settings.py` | The repository's settings as the chart renders them (_settings.tpl) and a pod reads them. |
 | `test_sync.py` | Unit tests for the org sync engine. |
 | `test_task.py` | Unit tests for the periodic task runner. |
-| `test_update_settings.py` | Unit tests for the settings catalogue updater (scripts/update_settings.py). |
 | `test_worker.py` | Unit tests for the worker supervisor (misp_container.worker): the programs, restarts and stop. |
 
 Values and manifests of the stack suites:
@@ -298,7 +296,6 @@ Values and manifests of the stack suites:
 | `mise run docs` | Regenerate the generated regions of the docs and AGENTS.md from the code |
 | `mise run test-all` | Run the unit tests, then every stack suite |
 | `mise run smoketest` | Run smoke test against a live MISP instance |
-| `mise run settings-update` | Regenerate files/misp-config/settings-upstream.yaml from a live MISP (builds the images, installs the chart on k3s) |
 | `mise run composer-lock` | Resolve MISP's PHP dependencies for the current CORE_TAG into files/composer.lock |
 | `mise run misp-requirements` | Resolve the Python packages of MISP's own scripts for the current CORE_TAG into files/requirements-misp.txt |
 | `mise run release` | Prepare a release: the next 3.0.0-wip.N while MISP is a work-in-progress pin, else of one kind (hotfix, normal or breaking) |

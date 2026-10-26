@@ -39,7 +39,7 @@ from pathlib import Path
 from typing import Iterator
 
 from . import MISP_BASE, cake, db
-from .env import apply_defaults, env
+from .env import env
 from .init import database_fields, prepare_config, purge_model_cache, setup_tmp, write_database_php
 from .log import setup as setup_logging, get as getlog
 from .s3 import Bucket, S3Error
@@ -488,8 +488,7 @@ def upgrade_source(source: dict) -> None:
     write_database_php(fields)
     purge_model_cache()
     try:
-        # runUpgrade refuses to run unless MISP.osuser names the user it runs as
-        cake.set_setting("MISP.osuser", "misp")
+        # runUpgrade refuses to run unless MISP.osuser (settings.yaml) names the user it runs as
         cake.run_checked("Admin", "runUpgrade")
     finally:
         write_database_php(database_fields())
@@ -625,7 +624,6 @@ def run() -> None:
 
 def main() -> None:
     setup_logging("migrate")
-    apply_defaults()
     run()
 
 

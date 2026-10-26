@@ -117,37 +117,6 @@ def _fetch_rows(cur):
     return list(cur.fetchall())
 
 
-def query(sql: str, *, check: bool = False) -> str:
-    """Run a statement. Returns rows as tab-separated columns, newline-separated rows."""
-    conn = _connect()
-    try:
-        with _cursor(conn) as cur:
-            cur.execute(sql)
-            rows = _fetch_rows(cur)
-            if not rows:
-                return ""
-            lines = []
-            for row in rows:
-                cols = []
-                for val in row:
-                    if val is None:
-                        cols.append("NULL")
-                    elif isinstance(val, (bytes, bytearray, memoryview)):
-                        cols.append(bytes(val).decode())
-                    elif isinstance(val, bool):
-                        cols.append("1" if val else "0")
-                    else:
-                        cols.append(str(val))
-                lines.append("\t".join(cols))
-            return "\n".join(lines)
-    except Exception as e:
-        if check:
-            raise RuntimeError(f"query failed: {e}") from e
-        return ""
-    finally:
-        conn.close()
-
-
 def dict_query(sql: str, params=None) -> list[dict]:
     """Run a statement, return rows as dicts keyed by column name."""
     conn = _connect()
@@ -329,6 +298,31 @@ def wait_for_configure(retries: int = 120, wait_seconds: int = 3) -> None:
     log.error("no configure run for %s within the timeout; is the configure Job running, or did it fail?",
               ", ".join(f"{k}={v}" for k, v in wanted.items()) or "this pod")
     sys.exit(1)
+
+
+# Rows of system_settings that this image or MISP itself writes: no change by hand
+OWN_PREFIX = "misp_docker."
+OWN_SETTINGS = ("MISP.live", "MISP.host_org_id", "MISP.uuid")
+
+
+def manual_settings(carried: set[str]) -> list[dict]:
+    """The settings a person changed in MISP that the repository does not carry.
+
+    [{"setting", "changed"}]: changed names who and when from MISP's log of the edit,
+    or is empty once housekeeping deleted it, or for an edit through the console.
+    """
+    names = [row["setting"] for row in dict_query("SELECT setting FROM system_settings ORDER BY setting")
+             if not row["setting"].startswith(OWN_PREFIX) and row["setting"] not in OWN_SETTINGS
+             and row["setting"] not in carried]
+    if not names:
+        return []
+    changed = {}
+    for row in dict_query("SELECT change, email, created FROM logs WHERE action = 'serverSettingsEdit' "
+                          "ORDER BY id DESC LIMIT 1000"):
+        name = (row["change"] or "").split(" ", 1)[0]
+        if name in names and name not in changed:
+            changed[name] = f"by {row['email']} at {row['created']}"
+    return [{"setting": name, "changed": changed.get(name, "")} for name in names]
 
 
 def init_schema() -> None:

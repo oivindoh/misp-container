@@ -34,6 +34,9 @@ spec:
           envFrom:
             - configMapRef:
                 name: misp-env
+            # The job backend's Redis, and the settings the repository carries
+            - configMapRef:
+                name: misp-settings
           # The database credentials and the Redis password only: the exporter
           # never needs the admin secrets or the other application secrets
           env:

@@ -9,11 +9,12 @@ migrate Job. See [docs/misp-3.md](docs/misp-3.md).
 
 ## TL;DR
 
-- One image, one module per role: a `configure` Job sets the database and settings up,
-  then web and worker pods start and scale freely. Two small extra images: caddy and modules.
+- One image, one module per role: a `configure` Job sets the database up, then web and
+  worker pods start and scale freely. One more image: misp-modules.
 - Non-root (UID 1000), read-only root filesystem, all capabilities dropped, sessions in Redis.
-- Every MISP setting has an env var (`MISP.redis_host` -> `MISP_REDIS_HOST`). Curated defaults
-  live in `files/misp-config/settings.yaml`; every other setting is catalogued.
+- The settings in git win over MISP's UI: the chart passes each one to MISP's own environment
+  layer. Every setting has an env var (`MISP.redis_host` -> `MISP_REDIS_HOST`); the repository's
+  live in `deploy/chart/files/settings.yaml`.
 - Kubernetes: the Helm chart `deploy/chart` renders MISP itself; components switch on the
   optional parts (database, cache, ingress or HTTPRoute, network policies, CronJobs for all
   periodic work, PDBs). Each release publishes it to GHCR.
@@ -22,16 +23,12 @@ migrate Job. See [docs/misp-3.md](docs/misp-3.md).
 
 ## Images
 
-One Dockerfile, three targets:
+One Dockerfile, two targets:
 
-| Target | Image | On disk | Pull (compressed) | Purpose |
-|--------|-------|---------|-------------------|---------|
-| `final` | `misp-container` | 980 MB | 270 MB | PHP-FPM, workers, configure, org sync, metrics exporter, task runner, migrate, and the Python packages MISP's own scripts import (STIX, TAXII, ZeroMQ, sample extraction); `app/files` (360 MB of lists, galaxies and geolocation data) ships in the image |
-| `caddy` | `misp-container-caddy` | 84 MB | 31 MB | Static files and FastCGI reverse proxy (scratch image) |
-| `modules` | `misp-container-modules` | 360 MB | 98 MB | MISP enrichment, import, export and action modules (distroless) |
-
-Sizes are arm64 builds of MISP `3.0_wip` at commit 8888b98; the compressed size is the gzip of
-the image's layers.
+| Target | Image | Purpose |
+|--------|-------|---------|
+| `final` | `misp-container` | PHP-FPM and caddy (the web pod runs both from it), workers, configure, org sync, metrics exporter, task runner, migrate, and the Python packages MISP's own scripts import (STIX, TAXII, ZeroMQ, sample extraction); `app/files` (lists, galaxies and geolocation data) ships in the image |
+| `modules` | `misp-container-modules` | MISP enrichment, import, export and action modules (distroless) |
 
 Image tags are the release versions, `3.0.0-wip.N` while MISP 3.0 is a work in progress. See
 [DEVELOPING.md](DEVELOPING.md) for releases.

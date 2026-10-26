@@ -201,8 +201,22 @@ def _make_conn(query_results):
 class TestCollectDbMetrics:
     """DB metrics collection with mocked database."""
 
+    @pytest.fixture(autouse=True)
+    def no_manual_settings(self):
+        with patch("misp_container.metrics.db.manual_settings", return_value=[]) as manual:
+            yield manual
+
     def setup_method(self):
         _reset_caches()
+
+    @patch("misp_container.metrics._connect")
+    def test_manual_settings(self, mock_connect, no_manual_settings):
+        """Each setting changed outside the repository is a series, with their count."""
+        no_manual_settings.return_value = [{"setting": "MISP.welcome_text_top", "changed": ""}]
+        mock_connect.return_value = _make_conn({"FROM servers": [], "FROM jobs": []})
+        parsed = _parse_metrics(_collect_db_metrics()[0])
+        assert parsed["misp_settings_manual"] == [({}, "1")]
+        assert parsed["misp_setting_manual"] == [({"setting": "MISP.welcome_text_top"}, "1")]
 
     @patch("misp_container.metrics._connect")
     def test_db_unreachable(self, mock_connect):
@@ -268,6 +282,24 @@ class TestCollectDbMetrics:
         labels, val = parsed["misp_instance_info"][0]
         assert labels["uuid"] == "test-uuid"
         assert labels["base_url"] == "https://misp.test"
+
+    @patch("misp_container.metrics._connect")
+    def test_instance_info_from_the_env_layer(self, mock_connect, monkeypatch):
+        monkeypatch.setenv("MISP_SETTING_MISP__uuid", "env-uuid")
+        monkeypatch.setenv("MISP_SETTING_MISP__baseurl", "https://env.test")
+        mock_connect.return_value = _make_conn({
+            "system_settings": [],
+            "pg_stat_user_tables": [],
+            "organisations": {
+                "orgs": 0, "orgs_local": 0,
+                "users_active": 0, "users_disabled": 0,
+                "sharing_groups": 0, "tags": 0,
+            },
+            "FROM servers": [],
+            "FROM jobs": [],
+        })
+        labels, _ = _parse_metrics(_collect_db_metrics()[0])["misp_instance_info"][0]
+        assert (labels["uuid"], labels["base_url"]) == ("env-uuid", "https://env.test")
 
     @patch("misp_container.metrics._connect")
     def test_user_status_labels(self, mock_connect):

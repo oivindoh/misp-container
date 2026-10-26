@@ -18,7 +18,7 @@ import yaml
 from misp_container import db
 from misp_container.admin import has_authkey, has_password
 from misp_container.api import MISPClient, APIError
-from misp_container.env import apply_defaults, env
+from misp_container.env import env
 from misp_container.log import get as getlog, setup as setup_logging
 
 log = getlog("sync")
@@ -929,7 +929,6 @@ def main(argv: list[str]) -> None:
     """
     setup_logging("sync")
     log.info("MISP org sync starting")
-    apply_defaults()
     base_url = env("SYNC_BASE_URL", env("MISP_BASEURL"))
     api_key = env("ADMIN_KEY")
     if not api_key:
