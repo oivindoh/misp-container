@@ -177,7 +177,7 @@ RUN cp "/usr/lib/$(gcc -dumpmachine)"/libfuzzy.* /usr/lib && \
 # =============================================================================
 # Stage 5: uv - Python package installer (pinned)
 # =============================================================================
-FROM ghcr.io/astral-sh/uv:latest@sha256:b46b03ddfcfbf8f547af7e9eaefdf8a39c8cebcba7c98858d3162bd28cf536f6 AS uv
+FROM ghcr.io/astral-sh/uv:latest@sha256:32a7bb39b496babbd997b0a39a4d66c126bdaf5661b302bf6f06abda8deca6ff AS uv
 
 # =============================================================================
 # Stage 6: python - Python packages of misp_container and of MISP's scripts
@@ -204,7 +204,7 @@ RUN --mount=type=bind,from=uv,source=/uv,target=/tmp/uv \
 # =============================================================================
 # Stage 7: caddy-bin - The caddy binary for the web pod's caddy container
 # =============================================================================
-FROM caddy:2@sha256:cb9d71ad83182011b79355cd57692686374bd78d6fe327efe0ff8507da03ab13 AS caddy-bin
+FROM caddy:2@sha256:504a44d7d74bd2bc28a66afc4774912fc21223ca8a67734af1c54ab2f999b489 AS caddy-bin
 # Kubernetes' allowPrivilegeEscalation: false (no_new_privs) blocks execve of a
 # binary with file capabilities, and caddy listens on 8080, so it needs none
 RUN setcap -r /usr/bin/caddy
@@ -340,7 +340,7 @@ RUN /tmp/uv pip install --system --break-system-packages --no-cache -r /tmp/requ
     && rm /tmp/requirements.txt /tmp/uv
 
 # gcr.io/distroless/python3-debian13 (Python 3.13, nonroot UID 65532)
-FROM gcr.io/distroless/python3-debian13:nonroot@sha256:614040f7f08b3f0dca943ea54eae94ea555ea2b9ca83d1acda1b7e4238ce91fb AS modules
+FROM gcr.io/distroless/python3-debian13:nonroot@sha256:64e54c4b1200da244d80181d98e86fc01d73c8101f107d5baf472152d8e119a2 AS modules
 COPY --from=modules-build /usr/local/lib/python3.13/dist-packages /usr/local/lib/python3.13/dist-packages
 
 EXPOSE 6666
