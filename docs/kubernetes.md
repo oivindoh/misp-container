@@ -67,8 +67,8 @@ below come from them.
 | `nodeSelector` | Node selection for every pod of the release. |
 | `tolerations` | Tolerations for every pod of the release. |
 | `affinity` | Affinity for every pod of the release. |
-| `env` | The misp-env ConfigMap: these entries on top of files/base.env. Every MISP pod reads it. |
-| `secrets` | The misp-db, misp-app and misp-admin Secrets: these entries on top of files/secrets-*.env, whose placeholders the configure Job refuses. With create: false the chart renders none of them: supply Secrets with the same names and keys (SOPS, External Secrets, Sealed Secrets). |
+| `env` | The misp-env ConfigMap, which every MISP pod reads. A release sets an entry to change it, or null to drop it. The settings of MISP itself are in files/settings.yaml. |
+| `secrets` | The misp-db, misp-app and misp-admin Secrets. The configure Job refuses their placeholders: a release sets every value marked change-me or override-me. With create: false the chart renders none of them: supply Secrets with the same names and keys (SOPS, External Secrets, Sealed Secrets). |
 | `connectionSecrets` | The connection to PostgreSQL and Redis from Secrets the release does not make, such as the ones a database operator keeps (docs/kubernetes.md, External PostgreSQL and Redis): each Secret by name, with the env var that each of its keys fills. They replace the same entries of misp-env, misp-db and misp-app in every pod, the postgres and redis components included. |
 | `databaseCA` | The CA certificate of the PostgreSQL server, from a Secret: a name and a key. Every pod that connects mounts it at DB_SSLROOTCERT, for DB_SSLMODE verify-ca or verify-full in env. |
 | `configure` | The configure Job: schema, MISP's updates, admin user and organisation, on every install and upgrade. |
@@ -94,7 +94,7 @@ Each component is off by default:
 | `networkPolicy` | NetworkPolicies for the release's pods, for any CNI that enforces the NetworkPolicy API, Cilium included: ingress from the release's own pods, DNS, HTTPS out, SMTP and LDAP. ingressNamespace holds the ingress or Gateway proxies, monitoringNamespace Prometheus; egress adds rules for the MISP pods, by default an external PostgreSQL and Redis. |
 | `cronjobs` | The periodic tasks as CronJobs, each running MISP's console in its pod: tasks maps a task to its schedule, workflows a workflow ID to its schedule. The pod's PHP process has the workers' memory ceiling (WORKER_MEMORY_LIMIT, else PHP_MEMORY_LIMIT), which resources must hold. |
 | `housekeeping` | Nightly deletes of old rows in jobs, logs and audit_logs (HOUSEKEEPING_<TABLE>_DAYS in env, defaults 2, 30 and 90). |
-| `migrate` | A copy of an existing MySQL or MariaDB MISP into the database, before the configure Job runs (docs/migration.md). secret: entries on top of files/secrets-migrate.env for the misp-migrate Secret. volumes and volumeMounts: the source's attachments directory. |
+| `migrate` | A copy of an existing MySQL or MariaDB MISP into the database, before the configure Job runs (docs/migration.md). secret: the misp-migrate Secret. volumes and volumeMounts: the source's attachments directory. |
 <!-- end generated -->
 
 ## Client addresses
@@ -116,17 +116,17 @@ set `networkPolicy.ingressNamespace` to the namespace of the Gateway's proxies.
 
 ## Secrets
 
-The chart makes its Secrets from the `.env` files in `deploy/chart/files`, with the `secrets`
-value on top; the `migrate` component adds `misp-migrate`, with `migrate.secret` on top. A
-workload gets a whole Secret, or only the keys the table names:
+The chart makes its Secrets from the `secrets` value, whose defaults hold the keys and their
+placeholders; the `migrate` component adds `misp-migrate` from `migrate.secret`. A workload
+gets a whole Secret, or only the keys the table names:
 
 <!-- generated: secrets -->
-| Secret | File | Keys | Read by |
+| Secret | Value | Keys | Read by |
 |---|---|---|---|
-| `misp-db` | `deploy/chart/files/secrets-db.env` | `DB_USER`, `DB_PASSWORD` | configure, cronjobs, housekeeping, metrics (`DB_PASSWORD`, `DB_USER`), migrate, org-sync, postgres (`DB_PASSWORD`, `DB_USER`), web, worker |
-| `misp-app` | `deploy/chart/files/secrets-app.env` | `MISP_REDIS_PASSWORD`, `GNUPG_PASSWORD`, `SECURITY_ENCRYPTION_KEY`, `SECURITY_SALT` | configure, cronjobs, metrics (`MISP_REDIS_PASSWORD`), migrate, redis (`MISP_REDIS_PASSWORD`), web, worker |
-| `misp-admin` | `deploy/chart/files/secrets-admin.env` | `ADMIN_PASSWORD`, `ADMIN_KEY` | configure, misp-test (`ADMIN_KEY`), org-sync |
-| `misp-migrate` | `deploy/chart/files/secrets-migrate.env` | `MIGRATE_SOURCE_HOST`, `MIGRATE_SOURCE_USER`, `MIGRATE_SOURCE_PASSWORD`, `MIGRATE_FORCE`, `MIGRATE_REPLACE_COPY`, `MIGRATE_SOURCE_FILES`, `MIGRATE_SOURCE_S3_BUCKET`, `MIGRATE_SOURCE_S3_ENDPOINT`, `MIGRATE_SOURCE_S3_REGION`, `MIGRATE_SOURCE_S3_ACCESS_KEY`, `MIGRATE_SOURCE_S3_SECRET_KEY` | migrate |
+| `misp-db` | `secrets.db` | `DB_USER`, `DB_PASSWORD` | configure, cronjobs, housekeeping, metrics (`DB_PASSWORD`, `DB_USER`), migrate, org-sync, postgres (`DB_PASSWORD`, `DB_USER`), web, worker |
+| `misp-app` | `secrets.app` | `MISP_REDIS_PASSWORD`, `GNUPG_PASSWORD`, `SECURITY_ENCRYPTION_KEY`, `SECURITY_SALT` | configure, cronjobs, metrics (`MISP_REDIS_PASSWORD`), migrate, redis (`MISP_REDIS_PASSWORD`), web, worker |
+| `misp-admin` | `secrets.admin` | `ADMIN_PASSWORD`, `ADMIN_KEY` | configure, misp-test (`ADMIN_KEY`), org-sync |
+| `misp-migrate` | `migrate.secret` | `MIGRATE_SOURCE_HOST`, `MIGRATE_SOURCE_USER`, `MIGRATE_SOURCE_PASSWORD`, `MIGRATE_FORCE`, `MIGRATE_REPLACE_COPY`, `MIGRATE_SOURCE_FILES`, `MIGRATE_SOURCE_S3_BUCKET`, `MIGRATE_SOURCE_S3_ENDPOINT`, `MIGRATE_SOURCE_S3_REGION`, `MIGRATE_SOURCE_S3_ACCESS_KEY`, `MIGRATE_SOURCE_S3_SECRET_KEY` | migrate |
 <!-- end generated -->
 
 With `ADMIN_KEY` empty, MISP generates a key, and org-sync exits without changes.

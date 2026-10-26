@@ -1,7 +1,9 @@
+# CI installs the same tools, checked against mise.lock. After a version change here:
+#   mise lock --platform linux-x64,linux-arm64,macos-arm64,macos-x64
 [tools]
 python = "3.13"
-uv = "latest"
-# The chart checks and the stack suites; CI downloads the same versions (.github/actions/install-helm)
+uv = "0.13.0"
+# The chart checks and the stack suites
 helm = "4.3.0"
 kubeconform = "0.8.0"
 kubectl = "1.37.1"

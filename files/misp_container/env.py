@@ -1,8 +1,8 @@
 """Environment variable handling.
 
-The chart sets every env var a pod reads: the misp-env ConfigMap (base.env with
-the env value on top), the Secrets, and misp-settings, which carries MISP's
-settings (deploy/chart/templates/_settings.tpl).
+The chart sets every env var a pod reads: the misp-env ConfigMap (the env
+value), the Secrets, and misp-settings, which carries MISP's settings
+(deploy/chart/templates/_settings.tpl).
 """
 
 import os

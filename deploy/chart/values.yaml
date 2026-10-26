@@ -22,19 +22,99 @@ tolerations: []
 # Affinity for every pod of the release.
 affinity: {}
 
-# The misp-env ConfigMap: these entries on top of files/base.env. Every MISP pod reads it.
-env: {}
-  # MISP_BASEURL: https://misp.example.com
-  # ADMIN_EMAIL: admin@example.com
+# The misp-env ConfigMap, which every MISP pod reads. A release sets an entry to change it, or
+# null to drop it. The settings of MISP itself are in files/settings.yaml.
+env:
+  # -- Instance
+  # MISP_EXTERNAL_BASEURL and SECURITY_REST_CLIENT_BASEURL take MISP_BASEURL unless set
+  MISP_BASEURL: "https://misp.example.com"
+  TZ: "UTC"
+  # -- Instance identity
+  # MISP_EMAIL takes ADMIN_EMAIL, and MISP_CONTACT and GNUPG_EMAIL take MISP_EMAIL, unless set
+  MISP_UUID: ""
+  # -- Admin
+  ADMIN_EMAIL: "admin@admin.test"
+  ADMIN_ORG: "ORGNAME"
+  # -- Database: PostgreSQL; DB_HOST postgres is the Service of the postgres component
+  DB_HOST: "postgres"
+  DB_PORT: "5432"
+  DB_NAME: "misp"
+  # TLS in libpq's terms: disable, prefer, require, verify-ca or verify-full
+  DB_SSLMODE: "prefer"
+  # -- Redis
+  MISP_REDIS_HOST: "redis"
+  MISP_REDIS_PORT: "6379"
+  # -- Email
+  SMTP_FQDN: "mail"
+  SMTP_PORT: "25"
+  # -- GPG: every pod imports the instance key from the misp-gnupg Secret (docs/kubernetes.md, Secrets)
+  GNUPG_HOMEDIR: "/var/www/MISP/.gnupg"
+  # -- Client addresses: the ingress or Gateway proxy pods, whose X-Forwarded-For caddy follows
+  # (docs/kubernetes.md, Client addresses). Unset, caddy trusts every private range, and a
+  # client with a private address is logged as the proxy.
+  # TRUSTED_PROXY_CIDR: "10.244.0.0/16"
+  # -- Logging. json: one JSON object per line, for a log collector; text: for a terminal
+  LOG_FORMAT: "json"
+  # -- Paths
+  MISP_ATTACHMENTS_DIR: "/var/www/MISP/app/attachments"
+  # -- Auth plugins: true turns one on. Their settings are the groups oidc and ldap of
+  # files/settings.yaml, rendered into config.php (docs/configuration.md)
+  OIDC_ENABLE: "false"
+  LDAPAUTH_ENABLE: "false"
+  # -- Org sync
+  ORG_CONFIG_FILE: "/etc/misp-docker/orgs.yaml"
+  # -- PHP
+  PHP_MEMORY_LIMIT: "2048M"
+  PHP_MAX_EXECUTION_TIME: "300"
+  PHP_UPLOAD_MAX_FILESIZE: "50M"
+  PHP_POST_MAX_SIZE: "50M"
+  PHP_MAX_INPUT_TIME: "300"
+  PHP_MAX_FILE_UPLOADS: "50"
+  # -- PHP-FPM pool
+  PHP_FCGI_CHILDREN: "5"
+  PHP_FCGI_START_SERVERS: "2"
+  PHP_FCGI_SPARE_SERVERS: "1"
+  PHP_FCGI_MAX_REQUESTS: "0"
+  # -- Workers
+  NUM_WORKERS_DEFAULT: "5"
+  NUM_WORKERS_PRIO: "5"
+  NUM_WORKERS_EMAIL: "5"
+  NUM_WORKERS_UPDATE: "1"
+  NUM_WORKERS_CACHE: "5"
+  # Per worker process; a job past it fails alone instead of the kubelet killing the pod
+  # (docs/kubernetes.md, Sizing). Unset: PHP_MEMORY_LIMIT.
+  # WORKER_MEMORY_LIMIT: "2048M"
 
-# The misp-db, misp-app and misp-admin Secrets: these entries on top of files/secrets-*.env,
-# whose placeholders the configure Job refuses. With create: false the chart renders none of
-# them: supply Secrets with the same names and keys (SOPS, External Secrets, Sealed Secrets).
+# The misp-db, misp-app and misp-admin Secrets. The configure Job refuses their placeholders:
+# a release sets every value marked change-me or override-me. With create: false the chart
+# renders none of them: supply Secrets with the same names and keys (SOPS, External Secrets,
+# Sealed Secrets).
 secrets:
   create: true
-  db: {}
-  app: {}
-  admin: {}
+  # misp-db: configure and its migrate container, web, worker, the task CronJobs, org-sync, the
+  # postgres component, housekeeping; metrics gets both keys. connectionSecrets can map an
+  # operator's Secret onto them instead.
+  db:
+    DB_USER: "misp"
+    DB_PASSWORD: "change-me"
+  # misp-app: configure and its migrate container, web, worker, the redis component, the task
+  # CronJobs; metrics gets MISP_REDIS_PASSWORD and PROXY_PASSWORD. A key named after a setting
+  # is that setting's value (Security.salt -> SECURITY_SALT): the chart passes it to MISP by
+  # reference, so it never lands in a ConfigMap. A secret setting without a key here
+  # (OIDC_CLIENT_SECRET, PROXY_PASSWORD) goes here the same way.
+  app:
+    MISP_REDIS_PASSWORD: "change-me"
+    GNUPG_PASSWORD: "change-me"
+    SECURITY_ENCRYPTION_KEY: ""
+    # 32 characters or more, identical on every replica:
+    # python3 -c "import secrets; print(secrets.token_hex(32))"
+    SECURITY_SALT: "override-me-generate-a-real-64-char-hex-salt-with-python3-secret"
+  # misp-admin: configure, org-sync, the helm test pod; web and worker pods never see it
+  admin:
+    ADMIN_PASSWORD: "change-me"
+    # The admin's API key, 40 characters; the org sync and the helm test's API checks need it.
+    # Empty: the admin keeps the key MISP made at its first start, which nobody reads.
+    ADMIN_KEY: ""
 
 # The connection to PostgreSQL and Redis from Secrets the release does not make, such as the
 # ones a database operator keeps (docs/kubernetes.md, External PostgreSQL and Redis): each Secret
@@ -206,11 +286,31 @@ housekeeping:
     limits: {cpu: 500m, memory: 256Mi}
 
 # A copy of an existing MySQL or MariaDB MISP into the database, before the configure Job runs
-# (docs/migration.md). secret: entries on top of files/secrets-migrate.env for the misp-migrate
-# Secret. volumes and volumeMounts: the source's attachments directory.
+# (docs/migration.md). secret: the misp-migrate Secret. volumes and volumeMounts: the source's
+# attachments directory.
 migrate:
   enabled: false
-  secret: {}
+  secret:
+    # The source database; a read-only user is enough. MIGRATE_SOURCE_PORT defaults to 3306,
+    # MIGRATE_SOURCE_NAME to misp; MIGRATE_SOURCE_TLS: "true" for a TLS connection.
+    MIGRATE_SOURCE_HOST: "change-me.example.com"
+    MIGRATE_SOURCE_USER: "misp"
+    MIGRATE_SOURCE_PASSWORD: "change-me"
+    # "true" drops a non-empty target database first. A copy this Job made stays unless
+    # MIGRATE_REPLACE_COPY is "true" as well.
+    MIGRATE_FORCE: "false"
+    MIGRATE_REPLACE_COPY: "false"
+    # The source's attachments, from one of two places. A mounted copy of its attachments
+    # directory (volumes, docs/migration.md):
+    MIGRATE_SOURCE_FILES: ""
+    # Or its S3 bucket. The endpoint is for an AWS-compatible store; empty for AWS. The Job
+    # signs with the access key. MIGRATE_SOURCE_S3_VALIDATE_CA defaults to true;
+    # MIGRATE_SOURCE_S3_CA names a CA bundle.
+    MIGRATE_SOURCE_S3_BUCKET: ""
+    MIGRATE_SOURCE_S3_ENDPOINT: ""
+    MIGRATE_SOURCE_S3_REGION: ""
+    MIGRATE_SOURCE_S3_ACCESS_KEY: ""
+    MIGRATE_SOURCE_S3_SECRET_KEY: ""
   volumes: []
   volumeMounts: []
   resources:
