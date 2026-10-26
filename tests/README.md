@@ -55,9 +55,10 @@ Run with: `mise run test` or `PYTHONPATH=files python -m pytest tests/ -v --igno
 **Render check** (`test_chart_schema.py`): runs `helm lint --strict`, renders the chart with
 the default values, with each component on, with every component on, and with supplied
 Secrets, attachments in S3 and a workflow CronJob. It validates each render with
-`kubeconform -strict` against the Kubernetes schemas and, for the HTTPRoute, the copy of the
-datree CRD catalog in `tests/schemas/`. It needs `helm` and `kubeconform` (`mise install` in
-the repository); without `kubeconform` the render tests skip, and in CI they fail.
+`kubeconform -strict` against the Kubernetes schemas and, for the HTTPRoute, the datree CRD
+catalog at a pinned commit; the first run downloads both into a cache. It needs `helm` and
+`kubeconform` (`mise install` in the repository); without `kubeconform` the render tests skip,
+and in CI they fail.
 `test_chart.py` checks what the renders hold.
 
 ## Upstream guard

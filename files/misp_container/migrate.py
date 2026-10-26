@@ -596,9 +596,9 @@ def run() -> None:
             record(False)
             sys.exit(EXIT_COPY)
         log.info("database copied: %d rows", rows)
-        # Web and worker pods wait for MISP.live; the configure step sets it
-        # again once the copy is upgraded and configured.
-        db.set_system_setting("MISP.live", "false")
+        # The copy replaced the database: the pods wait for the configure run that
+        # upgrades and configures it
+        db.clear_configured()
 
         if files_from is None:
             log.info("neither MIGRATE_SOURCE_FILES nor MIGRATE_SOURCE_S3_BUCKET is set; attachments are not copied")

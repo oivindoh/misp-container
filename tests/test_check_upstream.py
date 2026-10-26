@@ -317,9 +317,9 @@ class TestTheFixture:
 
 class TestConsoleCommands:
     def test_a_renamed_command_fails_its_task(self, misp):
-        edit(misp, f"{cu.CONSOLE_COMMANDS}/ServerShell.php", "function pullAll()", "function pullEverything()")
+        edit(misp, f"{cu.CONSOLE_COMMANDS}/ServerShell.php", "function pull()", "function pullEverything()")
         [problem] = problems(misp, "console-commands")
-        assert "pull-servers" in problem and "pullAll()" in problem
+        assert "pull-servers" in problem and "pull()" in problem
 
     def test_a_missing_shell_fails_its_tasks(self, misp):
         (misp / cu.CONSOLE_COMMANDS / "WorkflowShell.php").unlink()

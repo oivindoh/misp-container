@@ -2,79 +2,58 @@
 
     pytest tests/e2e/test_lifecycle.py [--skip-build] [--keep]
 
-The release starts as the newest published release of this major version
-(chart from GHCR, its own images) and upgrades to this tree's chart and images;
-without such a release, or without its images for the node's architecture, it
-installs this tree. Then the chart's helm test runs,
-two tasks and a housekeeping run start from their CronJobs, an upgrade changes
-a value, and a rollback returns to the revision before it. The smoke test
-(tests/e2e/test_smoke.py) runs after each install, upgrade and rollback.
+The release starts as the newest published chart of this major version (from
+GHCR, with its own images) and upgrades to this tree's chart and images; without
+such a chart, it installs this tree. This tree runs with the network policies on.
+Then the chart's helm test runs, two tasks and a housekeeping run start from their
+CronJobs, an upgrade changes a value, and a rollback returns to the revision before
+it. The smoke test (tests/e2e/test_smoke.py) runs after each install, upgrade and
+rollback.
 """
 
 import json
 import os
-import re
 import subprocess
 import sys
-import urllib.request
 
 import pytest
 import yaml
 
 import manifests
-from cluster import CHART, IMAGES, REPO, Cluster, build_images
+from cluster import CHART, REPO, Cluster, build_images
 from stack import Release
 
 PORTS = {28080: 30080}
-# The chart of every release; a release vX.Y.Z publishes chart version X.Y.Z
+# The chart of every release
 REGISTRY_CHART = "oci://ghcr.io/oivindoh/charts/misp"
 ADMIN_KEY = "lifecycleKEY0123456789abcdefghijklmnopqr"
-# On top of tests/k3s/values.yaml for this tree's chart: the CronJobs, and the admin key the
-# smoke test and the helm test call the API with
-VALUES = {"cronjobs": {"enabled": True}, "housekeeping": {"enabled": True},
+# On top of tests/k3s/values.yaml for this tree's chart: the CronJobs, the network policies,
+# and the admin key the smoke test and the helm test call the API with
+VALUES = {"cronjobs": {"enabled": True}, "housekeeping": {"enabled": True}, "networkPolicy": {"enabled": True},
           "secrets": {"admin": {"ADMIN_KEY": ADMIN_KEY}}}
-
-
-def version_key(version: str) -> tuple:
-    """A SemVer version as a sort key: a pre-release sorts before its release."""
-    core, _, pre = version.partition("-")
-    numbers = tuple(int(n) for n in core.split("."))
-    parts = tuple((0, int(p), "") if p.isdigit() else (1, 0, p) for p in pre.split(".")) if pre else ()
-    return numbers, not pre, parts
+# The suite reaches web through a NodePort from the host, from no namespace the chart's
+# policies name: the policies add up, so this one lets it in
+NODEPORT_POLICY = {
+    "apiVersion": "networking.k8s.io/v1", "kind": "NetworkPolicy", "metadata": {"name": "suite-nodeport"},
+    "spec": {"podSelector": {"matchLabels": {"app.kubernetes.io/name": "web"}}, "policyTypes": ["Ingress"],
+             "ingress": [{"from": [{"ipBlock": {"cidr": "0.0.0.0/0"}}],
+                          "ports": [{"port": 8080, "protocol": "TCP"}]}]}}
 
 
 def newest_release() -> str:
-    """The version of the newest release tag of this tree's major version, other than HEAD's; "" for none."""
+    """The newest published chart of this tree's major version; "" while there is none.
+
+    A tree's own chart reaches GHCR only after its suites pass, so the newest one is
+    always an earlier release. Every published chart's images carry amd64 and arm64.
+    """
     major = yaml.safe_load((CHART / "Chart.yaml").read_text())["version"].split(".")[0]
-    listing = subprocess.run(["git", "ls-remote", "--tags", "origin", f"v{major}.*"], cwd=REPO,
-                             capture_output=True, text=True, timeout=60)
-    if listing.returncode != 0:
-        pytest.fail(f"cannot list the release tags: {listing.stderr}")
-    head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=REPO, capture_output=True, text=True).stdout.strip()
-    commits = {}
-    for line in listing.stdout.splitlines():
-        sha, ref = line.split("\t")
-        tag = ref.removeprefix("refs/tags/").removesuffix("^{}")
-        # An annotated tag lists its own object, then the commit it points at (^{})
-        if ref.endswith("^{}") or tag not in commits:
-            commits[tag] = sha
-    versions = [tag[1:] for tag, sha in commits.items() if sha != head and re.fullmatch(r"v[0-9.]+(-[\w.]+)?", tag)]
-    return max(versions, key=version_key, default="")
-
-
-def architectures(image: str, tag: str) -> set[str]:
-    """The Linux architectures of a public image in GHCR, from its image index."""
-    repository = image.removeprefix("ghcr.io/")
-    with urllib.request.urlopen(f"https://ghcr.io/token?scope=repository:{repository}:pull", timeout=30) as r:
-        token = json.load(r)["token"]
-    request = urllib.request.Request(f"https://ghcr.io/v2/{repository}/manifests/{tag}", headers={
-        "Authorization": f"Bearer {token}",
-        "Accept": "application/vnd.oci.image.index.v1+json, application/vnd.oci.image.manifest.v1+json"})
-    with urllib.request.urlopen(request, timeout=30) as r:
-        manifest = json.load(r)
-    if "manifests" not in manifest:
-        pytest.fail(f"{image}:{tag} is no image index: the publish job of CI pushes one per image")
-    return {m["platform"]["architecture"] for m in manifest["manifests"] if m.get("platform", {}).get("os") == "linux"}
+    shown = subprocess.run(["helm", "show", "chart", REGISTRY_CHART, "--version", f"^{major}.0.0-0"],
+                           capture_output=True, text=True, timeout=120)
+    if shown.returncode != 0:
+        if "could not locate a version" in shown.stderr:
+            return ""
+        pytest.fail(f"cannot read the published charts of {REGISTRY_CHART}: {shown.stderr}")
+    return yaml.safe_load(shown.stdout)["version"]
 
 
 def smoke(release):
@@ -98,7 +77,7 @@ def stack(options, failed_in_module):
     cluster.start()
     cluster.load_images_under_test()
     s = Release(cluster)
-    s.apply(manifests.nodeport("web", "web", {8080: 30080}))
+    s.apply(manifests.nodeport("web", "web", {8080: 30080}), NODEPORT_POLICY)
     yield s
     cluster.finish("lifecycle", options["keep"], failed_in_module())
 
@@ -108,17 +87,7 @@ def published(stack):
     """The newest release, installed from GHCR: its version and the smoke test's result, else why not."""
     version = newest_release()
     if not version:
-        return {"skip": "no release of this major version yet: the suite starts from this tree"}
-    chart = subprocess.run(["helm", "show", "chart", REGISTRY_CHART, "--version", version],
-                           capture_output=True, text=True, timeout=120)
-    if chart.returncode != 0:
-        pytest.fail(f"release v{version} has no chart {version} in GHCR: {chart.stderr}")
-    node = stack.kubectl("get", "nodes", "-o", "jsonpath={.items[0].status.nodeInfo.architecture}").stdout.strip()
-    for image in IMAGES:
-        published_for = architectures(image, version)
-        if node not in published_for:
-            return {"skip": f"v{version} has no {node} image of {image} ({', '.join(sorted(published_for))} only): "
-                            "the suite starts from this tree"}
+        return {"skip": "no chart of this major version in GHCR yet: the suite starts from this tree"}
     stack.install({"secrets": {"admin": {"ADMIN_KEY": ADMIN_KEY}}}, chart=REGISTRY_CHART, version=version, tag="")
     stack.wait_for_misp()
     return {"version": version, "smoke": smoke(stack)}

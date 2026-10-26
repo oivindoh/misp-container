@@ -935,6 +935,10 @@ def main(argv: list[str]) -> None:
     if not api_key:
         log.info("ADMIN_KEY not set, skipping org sync")
         sys.exit(0)
+    # The web pods of an older revision may still serve: apply orgs.yaml only once
+    # this revision's configure run finished
+    db.wait_for_db()
+    db.wait_for_configure()
     try:
         config = load_config(file_path=argv[0] if argv else None)
     except (ConfigError, ValueError) as e:

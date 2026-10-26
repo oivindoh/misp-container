@@ -1,4 +1,4 @@
-{{/* The tag of the three images: image.tag, else the chart's appVersion */}}
+{{/* The tag of the two images: image.tag, else the chart's appVersion */}}
 {{- define "misp.tag" -}}
 {{- .Values.image.tag | default .Chart.AppVersion -}}
 {{- end }}
@@ -13,8 +13,19 @@ app.kubernetes.io/version: {{ include "misp.tag" .root | quote }}
 helm.sh/chart: {{ printf "%s-%s" .root.Chart.Name .root.Chart.Version | replace "+" "_" }}
 {{- end }}
 
-{{/* Scheduling and pull secrets of every pod */}}
+{{/*
+Labels of a pod template. The network policies select a release's pods by
+app.kubernetes.io/instance and part-of; the Services and Deployments by name.
+*/}}
+{{- define "misp.podLabels" -}}
+app.kubernetes.io/name: {{ .name }}
+app.kubernetes.io/instance: {{ .root.Release.Name }}
+app.kubernetes.io/part-of: misp
+{{- end }}
+
+{{/* Scheduling and pull secrets of every pod. No pod talks to the Kubernetes API. */}}
 {{- define "misp.podScheduling" -}}
+automountServiceAccountToken: false
 {{- with .Values.imagePullSecrets }}
 imagePullSecrets:
   {{- range . }}
@@ -41,6 +52,9 @@ securityContext:
   runAsUser: 1000
   runAsGroup: 1000
   fsGroup: 1000
+  # Without it the kubelet changes the owner of every file on the attachments claim
+  # at each pod start, on a CSI driver with fsGroupPolicy File such as CephFS
+  fsGroupChangePolicy: OnRootMismatch
   runAsNonRoot: true
   seccompProfile:
     type: RuntimeDefault
@@ -156,22 +170,6 @@ worker and the task CronJobs. Each pod renders its own app/Config.
 {{- end }}
 {{- end }}
 
-{{/* LOG_FORMAT and TZ from misp-env, for a pod that does not read the whole ConfigMap */}}
-{{- define "misp.logEnv" -}}
-- name: LOG_FORMAT
-  valueFrom:
-    configMapKeyRef:
-      name: misp-env
-      key: LOG_FORMAT
-      optional: true
-- name: TZ
-  valueFrom:
-    configMapKeyRef:
-      name: misp-env
-      key: TZ
-      optional: true
-{{- end }}
-
 {{/* The attachments volume: the shared claim, or an emptyDir per pod when attachments are in S3 */}}
 {{- define "misp.attachmentsVolume" -}}
 - name: attachments
@@ -184,12 +182,26 @@ worker and the task CronJobs. Each pod renders its own app/Config.
   {{- end }}
 {{- end }}
 
-{{/* Checksums of misp-env, misp-db and misp-app, so a change rolls the pods that read them */}}
+{{/*
+The checksum of the configuration a pod runs with: misp-env, and misp-db and misp-app when
+the chart makes them. A change rolls the pods, and each pod waits for a configure run of the
+same checksum (MISP_CONFIG_CHECKSUM, misp.checksumEnv), so a revision whose configure Job
+refuses its configuration never serves.
+*/}}
 {{- define "misp.checksums" -}}
-checksum/env: {{ include (print .Template.BasePath "/configmap-env.yaml") . | sha256sum }}
+{{- $secrets := "" }}
 {{- if .Values.secrets.create }}
-checksum/secrets: {{ printf "%s%s%s%s" (.Files.Get "files/secrets-db.env") (toJson .Values.secrets.db) (.Files.Get "files/secrets-app.env") (toJson .Values.secrets.app) | sha256sum }}
+{{- $secrets = printf "%s%s%s%s" (.Files.Get "files/secrets-db.env") (toJson .Values.secrets.db) (.Files.Get "files/secrets-app.env") (toJson .Values.secrets.app) }}
 {{- end }}
+checksum/config: {{ printf "%s%s" (include (print .Template.BasePath "/configmap-env.yaml") .) $secrets | sha256sum }}
+{{- end }}
+
+{{/* The pod's checksum/config annotation as MISP_CONFIG_CHECKSUM; empty in a pod without it */}}
+{{- define "misp.checksumEnv" -}}
+- name: MISP_CONFIG_CHECKSUM
+  valueFrom:
+    fieldRef:
+      fieldPath: metadata.annotations['checksum/config']
 {{- end }}
 
 {{/*
@@ -197,10 +209,11 @@ The env of a container of the misp image: the connection Secrets (misp.connectio
 misp-env ConfigMap, and the Secrets named. Call it with (list $root "misp-db" ...).
 */}}
 {{- define "misp.appEnv" -}}
-{{- with include "misp.connectionEnv" (concat (list (first .) "misp-env") (rest .)) -}}
 env:
+  {{- include "misp.checksumEnv" (first .) | nindent 2 }}
+  {{- with include "misp.connectionEnv" (concat (list (first .) "misp-env") (rest .)) }}
   {{- . | nindent 2 }}
-{{ end -}}
+  {{- end }}
 envFrom:
   - configMapRef:
       name: misp-env
@@ -302,13 +315,19 @@ spec:
   failedJobsHistoryLimit: 3
   jobTemplate:
     spec:
-      backoffLimit: {{ ternary 0 2 (eq .task "periodic-summary") }}
+      # A retry would mail the summaries twice, or repeat every server of a run
+      # because one partner did not answer
+      backoffLimit: {{ ternary 0 2 (has .task (list "periodic-summary" "pull-servers" "push-servers" "cache-servers")) }}
       activeDeadlineSeconds: 3600
       template:
         metadata:
           labels:
-            app.kubernetes.io/name: {{ .name }}
+            {{- include "misp.podLabels" (dict "root" $root "name" .name) | nindent 12 }}
             app.kubernetes.io/component: {{ $component }}
+          {{- if $task }}
+          annotations:
+            {{- include "misp.checksums" $root | nindent 12 }}
+          {{- end }}
         spec:
           restartPolicy: {{ ternary "Never" "OnFailure" $task }}
           {{- include "misp.podSecurityContext" $root | nindent 10 }}

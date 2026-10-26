@@ -1,5 +1,6 @@
 """Unit tests for the database layer and housekeeping (no PostgreSQL needed)."""
 
+import json
 import os
 import ssl
 import sys
@@ -278,46 +279,40 @@ class TestRunRecords:
         assert db.parse_run_records(rows) == {"migrate": {"success": 1, "last_success": 5}}
 
 
-class TestWaitForLive:
-    """Pods wait for MISP.live and for the configure run of their own image version."""
+class TestWaitForConfigure:
+    """Pods wait for the configure run of their own image version and configuration checksum."""
 
-    def _rows(self, live, version):
-        rows = []
-        if live is not None:
-            rows.append(("MISP.live", live))
-        if version is not None:
-            rows.append(("misp_docker.defaults_version", version))
-        return rows
-
-    def _run(self, tmp_path, monkeypatch, sequences, image_version="v2.5.47"):
+    def _run(self, tmp_path, monkeypatch, sequences, image_version="3.0_wip+abc", checksum="c1"):
         marker = tmp_path / "version"
         marker.write_text(image_version)
         monkeypatch.setattr("misp_container.DIST_VERSION_FILE", str(marker))
+        monkeypatch.setenv("MISP_CONFIG_CHECKSUM", checksum)
         calls = iter(sequences)
-        outputs = []
-        def fake_query(sql, check=False):
-            rows = next(calls)
-            return "\n".join(f"{k}\t{v}" for k, v in rows)
-        monkeypatch.setattr(db, "query", fake_query)
-        monkeypatch.setattr(db.time, "sleep", lambda s: None)
-        return db.wait_for_live(retries=len(sequences), wait_seconds=0)
 
-    def test_waits_for_own_version(self, tmp_path, monkeypatch):
+        def fake_dict_query(sql, params=None):
+            return [{"setting": k, "value": json.dumps(v)} for k, v in next(calls).items()]
+
+        monkeypatch.setattr(db, "dict_query", fake_dict_query)
+        monkeypatch.setattr(db.time, "sleep", lambda s: None)
+        return db.wait_for_configure(retries=len(sequences), wait_seconds=0)
+
+    def test_waits_for_its_own_version_and_checksum(self, tmp_path, monkeypatch):
         self._run(tmp_path, monkeypatch, [
-            self._rows('"true"', '"v2.5.37"'),   # old configure run: keep waiting
-            self._rows('"true"', '"v2.5.47"'),   # this image's run: go
+            {db.VERSION_ROW: "3.0_wip+old", db.CHECKSUM_ROW: "c1"},   # an older image's run
+            {db.VERSION_ROW: "3.0_wip+abc", db.CHECKSUM_ROW: "c0"},   # an older configuration's run
+            {db.VERSION_ROW: "3.0_wip+abc", db.CHECKSUM_ROW: "c1"},   # its own run: go
         ])
 
-    def test_live_alone_is_not_enough(self, tmp_path, monkeypatch):
+    def test_gives_up_without_its_own_run(self, tmp_path, monkeypatch):
         with pytest.raises(SystemExit):
-            self._run(tmp_path, monkeypatch, [self._rows('"true"', '"v2.5.37"')] * 2)
+            self._run(tmp_path, monkeypatch, [{db.VERSION_ROW: "3.0_wip+abc", db.CHECKSUM_ROW: "c0"}] * 2)
 
-    def test_unknown_image_version_waits_for_live_only(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("misp_container.DIST_VERSION_FILE", str(tmp_path / "absent"))
-        outputs = iter([self._rows('"true"', '"v2.5.37"')])
-        monkeypatch.setattr(db, "query", lambda sql, check=False: "\n".join(f"{k}\t{v}" for k, v in next(outputs)))
-        monkeypatch.setattr(db.time, "sleep", lambda s: None)
-        db.wait_for_live(retries=1, wait_seconds=0)
+    def test_misp_live_plays_no_part(self, tmp_path, monkeypatch):
+        # MISP.live is MISP's maintenance switch; a pod restarted during maintenance still starts
+        self._run(tmp_path, monkeypatch, [{db.VERSION_ROW: "3.0_wip+abc", db.CHECKSUM_ROW: "c1", "MISP.live": False}])
+
+    def test_without_a_checksum_the_version_decides(self, tmp_path, monkeypatch):
+        self._run(tmp_path, monkeypatch, [{db.VERSION_ROW: "3.0_wip+abc"}], checksum="")
 
 
 class TestHasColumn:

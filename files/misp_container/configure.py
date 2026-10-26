@@ -72,37 +72,31 @@ def check_layout() -> None:
 
 
 def configure_misp() -> None:
-    """Run the full MISP configuration (settings, admin, GPG, auth) under the lock."""
-    db.acquire_config_lock()
-    try:
-        cake.set_setting("MISP.osuser", "misp")
-        cake.run_updates()
-        cake.run_db_script("highPerformance")
+    """Run the full MISP configuration (settings, admin, GPG, auth); the caller holds the lock."""
+    cake.set_setting("MISP.osuser", "misp")
+    cake.run_updates()
 
-        cache = SettingsCache()
-        cache.load()
+    cache = SettingsCache()
+    cache.load()
 
-        all_specs = load_settings_yaml()
+    all_specs = load_settings_yaml()
 
-        log.info("core settings")
-        for group in DB_GROUPS:
-            apply_settings_fast(group, cache, all_specs)
+    log.info("core settings")
+    for group in DB_GROUPS:
+        apply_settings_fast(group, cache, all_specs)
 
-        log.info("admin user")
-        admin.setup_admin()
+    log.info("admin user")
+    admin.setup_admin()
 
-        log.info("GPG")
-        apply_settings_fast("gpg", cache, all_specs)
+    log.info("GPG")
+    apply_settings_fast("gpg", cache, all_specs)
 
-        log.info("plugins")
-        for group, switch in CONDITIONAL_CONFIG_PHP_GROUPS:
-            if env(switch) == "true":
-                log.info("%s enabled (in config.php)", group)
+    log.info("plugins")
+    for group, switch in CONDITIONAL_CONFIG_PHP_GROUPS:
+        if env(switch) == "true":
+            log.info("%s enabled (in config.php)", group)
 
-        cache.save_defaults_version()
-        log.info("configuration complete")
-    finally:
-        db.release_config_lock()
+    log.info("configuration complete")
 
 
 def record_run(ok: bool) -> None:
@@ -116,16 +110,23 @@ def record_run(ok: bool) -> None:
 def run() -> None:
     check_identity()
     db.wait_for_db()
-    db.init_schema()
-    check_layout()
-
+    # Two configure runs at once, or a migrate Job beside one, would import the
+    # schema twice: the whole run holds the lock
+    db.acquire_config_lock()
     try:
+        db.init_schema()
+        check_layout()
         configure_misp()
-        log.info("setting MISP.live = true")
-        cake.set_setting("MISP.live", "true")
+        # MISP.live is MISP's own maintenance switch: set once, then the admin's
+        if db.get_system_setting("MISP.live") is None:
+            log.info("setting MISP.live = true")
+            cake.set_setting("MISP.live", "true")
+        db.record_configured()
     except BaseException:
         record_run(False)
         raise
+    finally:
+        db.release_config_lock()
     record_run(True)
 
 

@@ -53,8 +53,7 @@
         "enabled": {"type": "boolean"},
         "ingressNamespace": {"type": "string"},
         "monitoringNamespace": {"type": "string"},
-        "databaseEgress": {"type": "array", "items": {"type": "object"}},
-        "redisEgress": {"type": "array", "items": {"type": "object"}}
+        "egress": {"type": "array", "items": {"type": "object"}}
       }
     }
   },
@@ -169,6 +168,7 @@
       "properties": {
         "enabled": {"type": "boolean"},
         "image": {"type": "string"},
+        "maxmemory": {"type": "string"},
         "resources": {"$ref": "#/definitions/resources"}
       }
     },
@@ -198,7 +198,8 @@
       "additionalProperties": false,
       "properties": {
         "enabled": {"type": "boolean"},
-        "tasks": {"type": "object", "additionalProperties": {"type": "string"}},
+        "tasks": {"type": "object", "additionalProperties": {"type": "string"},
+                  "propertyNames": {"enum": ["block-invalid-users", "cache-feeds", "cache-servers", "check-user-validity", "fetch-feeds", "periodic-summary", "pull-servers", "push-servers", "push-taxii", "sharing-group-blueprints", "update-galaxies", "update-noticelists", "update-object-templates", "update-taxonomies", "update-warninglists"]}},
         "workflows": {"type": "object", "additionalProperties": {"type": "string"}},
         "resources": {"$ref": "#/definitions/resources"}
       }

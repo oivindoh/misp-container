@@ -14,7 +14,7 @@ spec:
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: modules
+        {{- include "misp.podLabels" (dict "root" . "name" "modules") | nindent 8 }}
     spec:
       securityContext:
         runAsUser: 65532

@@ -14,7 +14,7 @@ spec:
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: metrics
+        {{- include "misp.podLabels" (dict "root" . "name" "metrics") | nindent 8 }}
       annotations:
         prometheus.io/scrape: "true"
         prometheus.io/port: "9191"

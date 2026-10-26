@@ -271,38 +271,63 @@ def run_records() -> dict[str, dict]:
                                         (RUNS_PREFIX + "%",)))
 
 
-def wait_for_live(retries: int = 120, wait_seconds: int = 3) -> None:
-    """Wait for the configure step of this image version.
+# The configure run's record of what it configured: the image version and the checksum of the
+# chart's configuration (the pods' checksum/config annotation, MISP_CONFIG_CHECKSUM)
+VERSION_ROW = "misp_docker.defaults_version"
+CHECKSUM_ROW = "misp_docker.config_checksum"
 
-    The step sets MISP.live=true and records the image version it configured
-    (misp_docker.defaults_version). A pod of a newer image waits for its own
-    configure run, whatever tool applied the manifests and in whatever order.
-    """
+
+def image_version() -> str:
+    """The MISP version of this image, as the build recorded it; "" when unknown."""
     from . import DIST_VERSION_FILE
     try:
-        image_version = open(DIST_VERSION_FILE).read().strip()
+        return open(DIST_VERSION_FILE).read().strip()
     except OSError:
-        image_version = ""
-    log.info("waiting for the configure step of image %s", image_version or "unknown")
+        return ""
+
+
+def configured_for() -> dict[str, str]:
+    """{VERSION_ROW, CHECKSUM_ROW: what this pod's configure run must have recorded}; empty values dropped."""
+    wanted = {VERSION_ROW: image_version(), CHECKSUM_ROW: envmod.env("MISP_CONFIG_CHECKSUM")}
+    return {row: value for row, value in wanted.items() if value}
+
+
+def record_configured() -> None:
+    """Record that a configure run finished for this image and this configuration."""
+    for row, value in configured_for().items():
+        set_system_setting(row, value)
+
+
+def clear_configured() -> None:
+    """Forget the last configure run: the pods wait for the next one."""
+    execute("DELETE FROM system_settings WHERE setting IN (%s, %s)", (VERSION_ROW, CHECKSUM_ROW))
+
+
+def wait_for_configure(retries: int = 120, wait_seconds: int = 3) -> None:
+    """Wait for the configure run of this image and this configuration.
+
+    A pod of a newer image or of a changed configuration waits for its own
+    configure run, whatever tool applied the manifests and in whatever order.
+    MISP.live is MISP's own maintenance switch: the wait ignores it.
+    """
+    wanted = configured_for()
+    log.info("waiting for the configure run of %s", ", ".join(f"{k}={v}" for k, v in wanted.items()) or "anything")
     for i in range(retries, 0, -1):
-        rows = query(
-            "SELECT setting, value FROM system_settings "
-            "WHERE setting IN ('MISP.live', 'misp_docker.defaults_version');"
-        )
-        state = {}
-        for line in rows.splitlines():
-            key, _, value = line.partition("\t")
-            state[key] = value.strip().strip('"')
-        live = state.get("MISP.live") == "true"
-        configured = state.get("misp_docker.defaults_version", "")
-        if live and (not image_version or configured == image_version):
-            log.info("MISP is live and configured for %s", configured or "this image")
+        found = {}
+        for row in dict_query("SELECT setting, value FROM system_settings WHERE setting IN (%s, %s)",
+                              (VERSION_ROW, CHECKSUM_ROW)):
+            try:
+                found[row["setting"]] = json.loads(row["value"])
+            except (TypeError, ValueError):
+                found[row["setting"]] = row["value"]
+        if all(found.get(row) == value for row, value in wanted.items()) and (wanted or found):
+            log.info("configured for %s", ", ".join(f"{k}={v}" for k, v in found.items()))
             return
-        log.info("waiting: live=%s, configured for %s, this image is %s (%d retries left)",
-                 live, configured or "nothing", image_version or "unknown", i)
+        log.info("waiting: configured for %s (%d retries left)",
+                 ", ".join(f"{k}={v}" for k, v in found.items()) or "nothing", i)
         time.sleep(wait_seconds)
-    log.error("the configure step for image %s did not finish within the timeout; "
-              "is the configure job running?", image_version or "unknown")
+    log.error("no configure run for %s within the timeout; is the configure Job running, or did it fail?",
+              ", ".join(f"{k}={v}" for k, v in wanted.items()) or "this pod")
     sys.exit(1)
 
 

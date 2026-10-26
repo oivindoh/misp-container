@@ -17,7 +17,7 @@ spec:
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: postgres
+        {{- include "misp.podLabels" (dict "root" . "name" "postgres") | nindent 8 }}
     spec:
       securityContext:
         runAsUser: 999
@@ -29,7 +29,7 @@ spec:
       {{- include "misp.podScheduling" . | nindent 6 }}
       initContainers:
         # A claim from chart 1.x holds its cluster in pgdata/, where the image does not
-        # look for older data: without this check a new cluster starts empty beside it.
+        # look for older data: without this check a new, empty cluster starts beside it.
         - name: check-data
           image: {{ .Values.postgres.image }}
           command:
@@ -37,7 +37,7 @@ spec:
             - -c
             - |
               if [ -s /var/lib/postgresql/pgdata/PG_VERSION ]; then
-                echo "PostgreSQL $(cat /var/lib/postgresql/pgdata/PG_VERSION) data in /var/lib/postgresql/pgdata, and this image runs PostgreSQL $PG_MAJOR: dump it and restore it into an empty claim (docs/operations.md, A new PostgreSQL major version)" >&2
+                echo "A chart 1.x database (MISP 2.5, PostgreSQL $(cat /var/lib/postgresql/pgdata/PG_VERSION)) is in /var/lib/postgresql/pgdata: MISP 3.0 cannot use a MISP 2.5 database on PostgreSQL. Install on a new claim (docs/misp-3.md)" >&2
                 exit 1
               fi
           volumeMounts:
@@ -58,7 +58,10 @@ spec:
               protocol: TCP
           env:
             - name: POSTGRES_DB
-              value: misp
+              valueFrom:
+                configMapKeyRef:
+                  name: misp-env
+                  key: DB_NAME
             - name: POSTGRES_USER
               valueFrom:
                 secretKeyRef:
@@ -76,16 +79,16 @@ spec:
             {{- toYaml .Values.postgres.resources | nindent 12 }}
           startupProbe:
             exec:
-              command: ["pg_isready", "-U", "misp", "-d", "misp"]
+              command: ["sh", "-c", 'pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"']
             failureThreshold: 30
             periodSeconds: 5
           readinessProbe:
             exec:
-              command: ["pg_isready", "-U", "misp", "-d", "misp"]
+              command: ["sh", "-c", 'pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"']
             periodSeconds: 10
           livenessProbe:
             exec:
-              command: ["pg_isready", "-U", "misp", "-d", "misp"]
+              command: ["sh", "-c", 'pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"']
             periodSeconds: 30
           securityContext:
             allowPrivilegeEscalation: false

@@ -140,7 +140,7 @@ def main() -> None:
     if not env("PLUGIN_S3_BUCKET_NAME"):
         check_writable(env("MISP_ATTACHMENTS_DIR"), "attachments")
     db.wait_for_db(retries=60, wait_seconds=5)
-    db.wait_for_live()
+    db.wait_for_configure()
     limit_worker_memory()
     supervisor = Supervisor(programs(), float(env("WORKER_STOP_GRACE", "300")))
     log.info("starting %d worker processes on the queues %s", len(supervisor.programs) - 1, ", ".join(WORKER_QUEUES))

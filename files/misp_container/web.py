@@ -49,7 +49,7 @@ def main():
     if not env("PLUGIN_S3_BUCKET_NAME"):
         check_writable(env("MISP_ATTACHMENTS_DIR"), "attachments")
     db.wait_for_db()
-    db.wait_for_live()
+    db.wait_for_configure()
     start_log_relay()
     log.info("starting PHP-FPM on 127.0.0.1:9002")
     # Debian's production php.ini first, then our overrides: a leading colon appends

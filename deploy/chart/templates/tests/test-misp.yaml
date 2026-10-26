@@ -1,7 +1,6 @@
 # helm test: checks a release from inside the cluster. It loads the login page
 # through the web Service and, with ADMIN_KEY in misp-admin, calls the API as
-# the admin and reads MISP.live. The networkPolicy component lets a pod with
-# its component label, misp-test, reach web.
+# the admin and reads MISP.live.
 apiVersion: v1
 kind: Pod
 metadata:
@@ -47,7 +46,6 @@ spec:
           assert live in (True, 1, "1", "true"), f"MISP.live is {live!r}"
           print("ok: MISP.live is true")
       env:
-        {{- include "misp.logEnv" . | nindent 8 }}
         - name: ADMIN_KEY
           valueFrom:
             secretKeyRef:
@@ -55,5 +53,6 @@ spec:
               key: ADMIN_KEY
               optional: true
       resources:
-        {{- toYaml .Values.cronjobs.resources.api | nindent 8 }}
+        requests: {cpu: 10m, memory: 32Mi}
+        limits: {cpu: 200m, memory: 128Mi}
       {{- include "misp.containerSecurityContext" . | nindent 6 }}

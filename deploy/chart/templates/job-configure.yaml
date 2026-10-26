@@ -23,7 +23,9 @@ spec:
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: configure
+        {{- include "misp.podLabels" (dict "root" . "name" "configure") | nindent 8 }}
+      annotations:
+        {{- include "misp.checksums" . | nindent 8 }}
     spec:
       restartPolicy: Never
       {{- include "misp.podSecurityContext" . | nindent 6 }}

@@ -118,10 +118,13 @@ postgres:
     limits: {cpu: 4000m, memory: 4Gi}
 
 # Single Redis without persistence: sessions and queued jobs do not survive a restart. Leave it
-# off for an external Redis (MISP_REDIS_HOST in env or connectionSecrets).
+# off for an external Redis (MISP_REDIS_HOST in env or connectionSecrets). maxmemory caps the
+# data, under the memory limit: past it Redis refuses writes, and MISP's API calls and logins
+# fail, because MISP keeps the feed and server caches, sessions and key use counters there.
 redis:
   enabled: false
   image: docker.io/library/redis:8.10.1-trixie@sha256:8a1efc5f479551822b47424ccae982026b633f28818eab0387348120a61e10e2
+  maxmemory: 256mb
   resources:
     requests: {cpu: 10m, memory: 64Mi}
     limits: {cpu: 1000m, memory: 384Mi}
@@ -146,22 +149,20 @@ httpRoute:
   hostnames:
     - misp.example.com
 
-# NetworkPolicies for every pod: the paths MISP needs, DNS, HTTPS out and SMTP out, for any CNI
-# that enforces the NetworkPolicy API, Cilium included. ingressNamespace holds the ingress or
-# Gateway proxies, monitoringNamespace Prometheus; databaseEgress and redisEgress reach an
-# external PostgreSQL and Redis.
+# NetworkPolicies for the release's pods, for any CNI that enforces the NetworkPolicy API,
+# Cilium included: ingress from the release's own pods, DNS, HTTPS out, SMTP and LDAP.
+# ingressNamespace holds the ingress or Gateway proxies, monitoringNamespace Prometheus;
+# egress adds rules for the MISP pods, by default an external PostgreSQL and Redis.
 networkPolicy:
   enabled: false
   ingressNamespace: haproxy-controller
   monitoringNamespace: monitoring
-  # Egress rules to an external PostgreSQL and Redis, in place of the rules to the postgres and
-  # redis components while those are off. A rule names the port the server's pods listen on.
-  databaseEgress:
-    - ports: [{port: 5432, protocol: TCP}]
+  # Egress rules of the MISP pods, on top of the chart's. A rule names the port the server's
+  # pods listen on.
+  egress:
+    - ports: [{port: 5432, protocol: TCP}, {port: 6379, protocol: TCP}]
     # - to: [{podSelector: {matchLabels: {cnpg.io/cluster: misp-pg}}}]
     #   ports: [{port: 5432, protocol: TCP}]
-  redisEgress:
-    - ports: [{port: 6379, protocol: TCP}]
 
 # The periodic tasks as CronJobs, each running MISP's console in its pod: tasks maps a task to
 # its schedule, workflows a workflow ID to its schedule. The pod's PHP process has the workers'
@@ -180,7 +181,8 @@ cronjobs:
     update-noticelists: "30 3 * * *"
     update-object-templates: "40 3 * * *"
     push-taxii: "7 * * * *"
-    sharing-group-blueprints: "37 * * * *"
+    # MISP's console fails a run while no blueprint exists: give it a schedule once one does
+    sharing-group-blueprints: ""
     periodic-summary: "0 6 * * *"
     # Need the oidc or ldap group: give check-user-validity a schedule, such as "30 5 * * *",
     # to report each account the provider no longer backs, or block-invalid-users to disable it

@@ -1,366 +1,178 @@
-# The networkPolicy component: NetworkPolicies for every pod, for any CNI that
-# enforces the Kubernetes NetworkPolicy API, Cilium included. A destination in or
-# outside the cluster (the mail relay, an LDAP server) is a port rule without a peer.
+# The networkPolicy component: NetworkPolicies for the pods of the release, for any CNI that
+# enforces the Kubernetes NetworkPolicy API, Cilium included. Every pod template carries
+# app.kubernetes.io/instance (the release) and app.kubernetes.io/part-of: misp, and every
+# rule selects on them, so the pods of another release or an operator in the namespace keep
+# their own rules.
 #
 # Traffic flow:
-#   ingress or Gateway ns --> caddy :8080
-#   task cronjobs         --> postgres :5432, redis :6379, HTTPS out (partners, feeds, TAXII, IdP),
-#                             SMTP out, LDAP out
-#   helm test             --> caddy :8080
-#   caddy                 --> php-fpm :9002  (localhost in same pod)
-#   php-fpm               --> postgres :5432, redis :6379, modules :6666,
-#                             HTTPS out (IdP, partners), SMTP out, LDAP out
-#   worker                --> postgres :5432, redis :6379, modules :6666, HTTPS out (partners, feeds), SMTP out
-#   configure job         --> postgres :5432, redis :6379; with migrate, the source database and S3
-#   org-sync job          --> caddy :8080, postgres :5432
-#   housekeeping          --> postgres :5432
-#   metrics               --> postgres :5432, redis :6379, HTTPS out (partner probes)
-#   all pods              --> kube-dns :53
+#   ingress or Gateway ns --> web :8080
+#   monitoring ns         --> metrics :9191
+#   the release's pods    --> each other: web :8080, modules :6666, postgres :5432, redis :6379
+#   MISP pods             --> DNS, HTTPS outside the private ranges, SMTP, LDAP,
+#                             the rules of networkPolicy.egress; with migrate, the source
+#                             database and S3
+#   modules               --> DNS, HTTPS outside the private ranges
+#   postgres, redis       --> DNS
 #
-# postgres and redis are the components; while one is off, the rules of
-# networkPolicy.databaseEgress or redisEgress take its place.
-#
-# Task CronJob pods carry app.kubernetes.io/component: misp-task or
-# misp-housekeeping, and the helm test pod misp-test; the rules select on that
-# label.
-#
-# Everything else is denied by default.
-
-{{/* An egress rule to one pod of this release, by app.kubernetes.io/name, on one TCP port */}}
-{{- define "misp.np.toPod" -}}
-- to:
-    - podSelector:
-        matchLabels:
-          app.kubernetes.io/name: {{ .name }}
-  ports:
-    - port: {{ .port }}
-      protocol: TCP
-{{- end }}
-
-{{/* The database: the postgres component, else the rules of networkPolicy.databaseEgress */}}
-{{- define "misp.np.db" -}}
-{{- if .Values.postgres.enabled -}}
-{{ include "misp.np.toPod" (dict "name" "postgres" "port" 5432) }}
-{{- else -}}
-{{ toYaml .Values.networkPolicy.databaseEgress }}
-{{- end }}
-{{- end }}
-
-{{/* Redis: the redis component, else the rules of networkPolicy.redisEgress */}}
-{{- define "misp.np.redis" -}}
-{{- if .Values.redis.enabled -}}
-{{ include "misp.np.toPod" (dict "name" "redis" "port" 6379) }}
-{{- else -}}
-{{ toYaml .Values.networkPolicy.redisEgress }}
-{{- end }}
-{{- end }}
-
-{{- define "misp.np.dns" -}}
-# DNS
-- to:
-    - namespaceSelector:
-        matchLabels:
-          kubernetes.io/metadata.name: kube-system
-      podSelector:
-        matchLabels:
-          k8s-app: kube-dns
-  ports:
-    - port: 53
-      protocol: UDP
-    - port: 53
-      protocol: TCP
-{{- end }}
-
-{{- define "misp.np.smtp" -}}
-# Mail relay (SMTP_FQDN, SMTP_PORT), in or outside the cluster
-- ports:
-    - port: 25
-      protocol: TCP
-    - port: 465
-      protocol: TCP
-    - port: 587
-      protocol: TCP
-{{- end }}
-
-{{- define "misp.np.ldap" -}}
-# LDAP server (LDAPAUTH_*, APACHESECUREAUTH_*), in or outside the cluster: LDAPS and StartTLS
-- ports:
-    - port: 389
-      protocol: TCP
-    - port: 636
-      protocol: TCP
-{{- end }}
-
-{{/* HTTPS to every address outside the private ranges */}}
-{{- define "misp.np.httpsOut" -}}
-- to:
-    - ipBlock:
-        cidr: 0.0.0.0/0
-        except:
-          - 10.0.0.0/8
-          - 172.16.0.0/12
-          - 192.168.0.0/16
-    - ipBlock:
-        cidr: "::/0"
-        except:
-          - fc00::/7
-  ports:
-    - port: 443
-      protocol: TCP
-{{- end }}
-
-{{/* The pods of this release that may reach a port: a list of matchLabels */}}
-{{- define "misp.np.fromPods" -}}
-- from:
-    {{- range .selectors }}
-    - podSelector:
-        matchLabels:
-          {{- toYaml . | nindent 10 }}
-    {{- end }}
-  ports:
-    - port: {{ .port }}
-      protocol: TCP
-{{- end }}
-
+# NetworkPolicies add up: a release reaches a proxy, Kafka or a server on a private address
+# through a NetworkPolicy of its own (docs/kubernetes.md, Network policies).
 {{- if .Values.networkPolicy.enabled }}
+{{- $release := dict "app.kubernetes.io/instance" .Release.Name "app.kubernetes.io/part-of" "misp" }}
+{{- $dns := list (dict "port" 53 "protocol" "UDP") (dict "port" 53 "protocol" "TCP")
+                 (dict "port" 5353 "protocol" "UDP") (dict "port" 5353 "protocol" "TCP") }}
+{{- $httpsOut := dict "to" (list
+      (dict "ipBlock" (dict "cidr" "0.0.0.0/0" "except" (list "10.0.0.0/8" "172.16.0.0/12" "192.168.0.0/16")))
+      (dict "ipBlock" (dict "cidr" "::/0" "except" (list "fc00::/7"))))
+    "ports" (list (dict "port" 443 "protocol" "TCP")) }}
 ---
-# -- web pod: caddy and php-fpm --
+# Ingress to every pod of the release from its own pods only
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: web
+  name: misp
   labels:
-    {{- include "misp.labels" (dict "root" $ "name" "web") | nindent 4 }}
+    {{- include "misp.labels" (dict "root" . "name" "misp") | nindent 4 }}
 spec:
   podSelector:
     matchLabels:
-      app.kubernetes.io/name: web
-  policyTypes: [Ingress, Egress]
+      {{- toYaml $release | nindent 6 }}
+  policyTypes: [Ingress]
   ingress:
-    # The ingress or Gateway proxies, org-sync and the helm test
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- toYaml $release | nindent 14 }}
+---
+# The ingress or Gateway proxies reach web
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: misp-web
+  labels:
+    {{- include "misp.labels" (dict "root" . "name" "web") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- toYaml $release | nindent 6 }}
+      app.kubernetes.io/name: web
+  policyTypes: [Ingress]
+  ingress:
     - from:
         - namespaceSelector:
             matchLabels:
-              kubernetes.io/metadata.name: {{ $.Values.networkPolicy.ingressNamespace }}
-        - podSelector:
-            matchLabels:
-              app.kubernetes.io/name: org-sync
-        - podSelector:
-            matchLabels:
-              app.kubernetes.io/component: misp-test
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.ingressNamespace }}
       ports:
         - port: 8080
           protocol: TCP
-  egress:
-    {{- include "misp.np.db" $ | nindent 4 }}
-    {{- include "misp.np.redis" $ | nindent 4 }}
-    # MISP modules (enrichment, import, export)
-    {{- include "misp.np.toPod" (dict "name" "modules" "port" 6666) | nindent 4 }}
-    {{- include "misp.np.smtp" $ | nindent 4 }}
-    # Outbound HTTPS: sync partners, feeds, the OIDC provider
-    {{- include "misp.np.httpsOut" $ | nindent 4 }}
-    {{- include "misp.np.ldap" $ | nindent 4 }}
-    {{- include "misp.np.dns" $ | nindent 4 }}
 ---
-# -- configure job --
+# Prometheus reaches the exporter
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: configure
+  name: misp-metrics
   labels:
-    {{- include "misp.labels" (dict "root" $ "name" "configure") | nindent 4 }}
+    {{- include "misp.labels" (dict "root" . "name" "metrics") | nindent 4 }}
 spec:
   podSelector:
     matchLabels:
-      app.kubernetes.io/name: configure
-  policyTypes: [Ingress, Egress]
-  ingress: []
+      {{- toYaml $release | nindent 6 }}
+      app.kubernetes.io/name: metrics
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.monitoringNamespace }}
+      ports:
+        - port: 9191
+          protocol: TCP
+---
+# Egress of the MISP pods: every pod of the release but modules, postgres and redis
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: misp-egress
+  labels:
+    {{- include "misp.labels" (dict "root" . "name" "misp") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- toYaml $release | nindent 6 }}
+    matchExpressions:
+      - key: app.kubernetes.io/name
+        operator: NotIn
+        values: [modules, postgres, redis]
+  policyTypes: [Egress]
   egress:
-    {{- if $.Values.migrate.enabled }}
-    # The migrate init container: the source database, in the cluster or outside
-    # it, on 3306 unless MIGRATE_SOURCE_PORT says otherwise, and S3 on 443 for the
-    # attachments. Widen the ports for another database or store port.
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- toYaml $release | nindent 14 }}
+    # DNS, wherever the cluster serves it: kube-dns, NodeLocal DNSCache, OpenShift's 5353
+    - ports:
+        {{- toYaml $dns | nindent 8 }}
+    {{- list $httpsOut | toYaml | nindent 4 }}
+    # The mail relay (SMTP_FQDN, SMTP_PORT) and an LDAP server, in or outside the cluster
+    - ports:
+        - port: 25
+          protocol: TCP
+        - port: 465
+          protocol: TCP
+        - port: 587
+          protocol: TCP
+        - port: 389
+          protocol: TCP
+        - port: 636
+          protocol: TCP
+    {{- if .Values.migrate.enabled }}
+    # The migration source: its MySQL or MariaDB, and its S3 bucket
     - ports:
         - port: 3306
           protocol: TCP
         - port: 443
           protocol: TCP
     {{- end }}
-    {{- include "misp.np.db" $ | nindent 4 }}
-    {{- include "misp.np.redis" $ | nindent 4 }}
-    {{- include "misp.np.dns" $ | nindent 4 }}
+    {{- with .Values.networkPolicy.egress }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
 ---
-# -- org-sync job --
+# Egress of misp-modules: the services its modules query
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: org-sync
+  name: misp-modules
   labels:
-    {{- include "misp.labels" (dict "root" $ "name" "org-sync") | nindent 4 }}
+    {{- include "misp.labels" (dict "root" . "name" "modules") | nindent 4 }}
 spec:
   podSelector:
     matchLabels:
-      app.kubernetes.io/name: org-sync
-  policyTypes: [Ingress, Egress]
-  ingress: []
-  egress:
-    {{- include "misp.np.toPod" (dict "name" "web" "port" 8080) | nindent 4 }}
-    {{- include "misp.np.db" $ | nindent 4 }}
-    {{- include "misp.np.dns" $ | nindent 4 }}
----
-# -- worker --
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: worker
-  labels:
-    {{- include "misp.labels" (dict "root" $ "name" "worker") | nindent 4 }}
-spec:
-  podSelector:
-    matchLabels:
-      app.kubernetes.io/name: worker
-  policyTypes: [Ingress, Egress]
-  # Nothing connects to the workers: they take their jobs from Redis
-  ingress: []
-  egress:
-    {{- include "misp.np.db" $ | nindent 4 }}
-    {{- include "misp.np.redis" $ | nindent 4 }}
-    # MISP modules: enrichment jobs query them from the worker
-    {{- include "misp.np.toPod" (dict "name" "modules" "port" 6666) | nindent 4 }}
-    {{- include "misp.np.smtp" $ | nindent 4 }}
-    # Outbound HTTPS: sync partners, feeds
-    {{- include "misp.np.httpsOut" $ | nindent 4 }}
-    {{- include "misp.np.dns" $ | nindent 4 }}
----
-# -- Task cronjobs: MISP's console runs the periodic work in the pod --
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: task
-  labels:
-    {{- include "misp.labels" (dict "root" $ "name" "task") | nindent 4 }}
-spec:
-  podSelector:
-    matchLabels:
-      app.kubernetes.io/component: misp-task
-  policyTypes: [Ingress, Egress]
-  ingress: []
-  egress:
-    {{- include "misp.np.db" $ | nindent 4 }}
-    {{- include "misp.np.redis" $ | nindent 4 }}
-    {{- include "misp.np.smtp" $ | nindent 4 }}
-    # Outbound HTTPS: sync partners, feeds, TAXII servers, the OIDC provider
-    {{- include "misp.np.httpsOut" $ | nindent 4 }}
-    {{- include "misp.np.ldap" $ | nindent 4 }}
-    {{- include "misp.np.dns" $ | nindent 4 }}
----
-# -- Housekeeping cronjobs --
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: housekeeping
-  labels:
-    {{- include "misp.labels" (dict "root" $ "name" "housekeeping") | nindent 4 }}
-spec:
-  podSelector:
-    matchLabels:
-      app.kubernetes.io/component: misp-housekeeping
-  policyTypes: [Ingress, Egress]
-  ingress: []
-  egress:
-    {{- include "misp.np.db" $ | nindent 4 }}
-    {{- include "misp.np.dns" $ | nindent 4 }}
----
-# -- MISP modules --
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: modules
-  labels:
-    {{- include "misp.labels" (dict "root" $ "name" "modules") | nindent 4 }}
-spec:
-  podSelector:
-    matchLabels:
+      {{- toYaml $release | nindent 6 }}
       app.kubernetes.io/name: modules
-  policyTypes: [Ingress, Egress]
-  ingress:
-    # The web pods (UI and API calls) and the workers (enrichment jobs)
-    {{- include "misp.np.fromPods" (dict "port" 6666 "selectors" (list (dict "app.kubernetes.io/name" "web") (dict "app.kubernetes.io/name" "worker"))) | nindent 4 }}
+  policyTypes: [Egress]
   egress:
-    # External HTTPS APIs (enrichment, sandboxes, threat feeds)
-    {{- include "misp.np.httpsOut" $ | nindent 4 }}
-    {{- include "misp.np.dns" $ | nindent 4 }}
+    - ports:
+        {{- toYaml $dns | nindent 8 }}
+    {{- list $httpsOut | toYaml | nindent 4 }}
+{{- if or .Values.postgres.enabled .Values.redis.enabled }}
 ---
-# -- metrics exporter --
+# Egress of the postgres and redis components: DNS only
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: metrics
+  name: misp-stores
   labels:
-    {{- include "misp.labels" (dict "root" $ "name" "metrics") | nindent 4 }}
+    {{- include "misp.labels" (dict "root" . "name" "stores") | nindent 4 }}
 spec:
   podSelector:
     matchLabels:
-      app.kubernetes.io/name: metrics
-  policyTypes: [Ingress, Egress]
-  ingress:
-    # Prometheus
-    - from:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: {{ $.Values.networkPolicy.monitoringNamespace }}
-      ports:
-        - port: 9191
-          protocol: TCP
+      {{- toYaml $release | nindent 6 }}
+    matchExpressions:
+      - key: app.kubernetes.io/name
+        operator: In
+        values: [postgres, redis]
+  policyTypes: [Egress]
   egress:
-    {{- include "misp.np.db" $ | nindent 4 }}
-    {{- include "misp.np.redis" $ | nindent 4 }}
-    # External HTTPS (server reachability + TLS cert checks)
-    {{- include "misp.np.httpsOut" $ | nindent 4 }}
-    {{- include "misp.np.dns" $ | nindent 4 }}
-{{- if .Values.postgres.enabled }}
----
-# -- PostgreSQL --
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: postgres
-  labels:
-    {{- include "misp.labels" (dict "root" $ "name" "postgres") | nindent 4 }}
-spec:
-  podSelector:
-    matchLabels:
-      app.kubernetes.io/name: postgres
-  policyTypes: [Ingress, Egress]
-  ingress:
-    {{- include "misp.np.fromPods" (dict "port" 5432 "selectors" (list
-          (dict "app.kubernetes.io/name" "web") (dict "app.kubernetes.io/name" "worker")
-          (dict "app.kubernetes.io/component" "misp-task") (dict "app.kubernetes.io/name" "configure")
-          (dict "app.kubernetes.io/name" "org-sync") (dict "app.kubernetes.io/component" "misp-housekeeping")
-          (dict "app.kubernetes.io/name" "metrics"))) | nindent 4 }}
-  egress:
-    {{- include "misp.np.dns" $ | nindent 4 }}
-{{- end }}
-{{- if .Values.redis.enabled }}
----
-# -- Redis --
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: cache
-  labels:
-    {{- include "misp.labels" (dict "root" $ "name" "cache") | nindent 4 }}
-spec:
-  podSelector:
-    matchLabels:
-      app.kubernetes.io/name: redis
-  policyTypes: [Ingress, Egress]
-  ingress:
-    {{- include "misp.np.fromPods" (dict "port" 6379 "selectors" (list
-          (dict "app.kubernetes.io/name" "web") (dict "app.kubernetes.io/name" "worker")
-          (dict "app.kubernetes.io/component" "misp-task") (dict "app.kubernetes.io/name" "configure")
-          (dict "app.kubernetes.io/name" "metrics"))) | nindent 4 }}
-  egress:
-    {{- include "misp.np.dns" $ | nindent 4 }}
+    - ports:
+        {{- toYaml $dns | nindent 8 }}
 {{- end }}
 {{- end }}
