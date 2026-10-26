@@ -443,10 +443,12 @@ def copy_attachments(source: Path | Bucket, target: Path | Bucket) -> int:
     """Copy every attachment from source to target under MISP's key; returns the count."""
     copied = 0
     spool = Path(SPOOL_DIR) / "migrate-attachment"
+    spooled = False
     for key, where in source_attachments(source):
         if isinstance(source, Bucket) and isinstance(target, Bucket):
             source.download(where, spool)
             target.upload(key, spool)
+            spooled = True
         elif isinstance(source, Bucket):
             source.download(where, target / key)
         elif isinstance(target, Bucket):
@@ -455,7 +457,8 @@ def copy_attachments(source: Path | Bucket, target: Path | Bucket) -> int:
             (target / key).parent.mkdir(parents=True, exist_ok=True)
             shutil.copy(where, target / key)
         copied += 1
-    spool.unlink(missing_ok=True)
+    if spooled:
+        spool.unlink()
     return copied
 
 
