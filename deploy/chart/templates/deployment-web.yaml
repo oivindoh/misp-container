@@ -83,10 +83,10 @@ spec:
               mountPath: /var/www/MISP/app/attachments
           resources:
             {{- toYaml .Values.web.resources.phpFpm | nindent 12 }}
-          # PHP-FPM listens on the loopback only after the configure Job has set
-          # MISP.live=true, so the kubelet reaches it through caddy; the startup
-          # budget covers a first install where the Job imports the schema and
-          # applies every setting. Liveness asks PHP-FPM itself for its ping: an
+          # PHP-FPM listens on the loopback only after the configure run of this
+          # pod's image and configuration, so the kubelet reaches it through caddy;
+          # the startup budget covers a first install where the Job imports the
+          # schema. Liveness asks PHP-FPM itself for its ping: an
           # open port does not show a hung PHP-FPM. caddy's readiness probe covers
           # the pod's readiness.
           startupProbe:

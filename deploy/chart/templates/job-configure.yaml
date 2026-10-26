@@ -1,7 +1,7 @@
-# One-shot configuration: schema, settings, admin user, GPG, auth. Web and
-# worker pods wait until this Job has set MISP.live=true and recorded their
-# image version, so the order of the rollout does not depend on the tool that
-# applies the chart. Each release revision has its own Job, because a Job's pod
+# One-shot configuration: schema, MISP's updates, admin user and organisation.
+# Web and worker pods wait until this Job has recorded their image version and
+# configuration checksum, so the order of the rollout does not depend on the
+# tool that applies the chart. Each release revision has its own Job, because a Job's pod
 # template cannot change; a run on a configured instance takes seconds. With
 # the migrate component, the copy runs first, in an init container.
 #

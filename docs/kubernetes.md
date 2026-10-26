@@ -71,7 +71,7 @@ below come from them.
 | `secrets` | The misp-db, misp-app and misp-admin Secrets: these entries on top of files/secrets-*.env, whose placeholders the configure Job refuses. With create: false the chart renders none of them: supply Secrets with the same names and keys (SOPS, External Secrets, Sealed Secrets). |
 | `connectionSecrets` | The connection to PostgreSQL and Redis from Secrets the release does not make, such as the ones a database operator keeps (docs/kubernetes.md, External PostgreSQL and Redis): each Secret by name, with the env var that each of its keys fills. They replace the same entries of misp-env, misp-db and misp-app in every pod, the postgres and redis components included. |
 | `databaseCA` | The CA certificate of the PostgreSQL server, from a Secret: a name and a key. Every pod that connects mounts it at DB_SSLROOTCERT, for DB_SSLMODE verify-ca or verify-full in env. |
-| `configure` | The configure Job: schema, settings, admin user, GPG and auth, on every install and upgrade. |
+| `configure` | The configure Job: schema, MISP's updates, admin user and organisation, on every install and upgrade. |
 | `web` | MISP's web tier: PHP-FPM and the caddy sidecar in each pod. Replicas scale freely. |
 | `worker` | The background workers, which take their jobs from Redis. Replicas scale freely. |
 | `metrics` | The Prometheus exporter (docs/metrics.md). |

@@ -74,7 +74,7 @@ Measured on MISP `3.0_wip` at commit 8888b98 on a podman machine (arm64, six cor
 
 | What | Time |
 |------|------|
-| Configure Job on an empty database: schema import, `runUpdates`, admin user | 22 s |
+| Configure Job on an empty database: schema import, `runUpdates`, admin user | 3 s |
 | Configure Job on a configured instance | 1 to 3 s |
 | Web or worker pod, from start to serving, once the Job has run | 1 s |
 

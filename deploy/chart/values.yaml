@@ -49,7 +49,7 @@ connectionSecrets: []
 databaseCA: {}
   # databaseCA: {name: misp-cluster-cert, key: ca.crt}
 
-# The configure Job: schema, settings, admin user, GPG and auth, on every install and upgrade.
+# The configure Job: schema, MISP's updates, admin user and organisation, on every install and upgrade.
 configure:
   resources:
     requests: {cpu: 100m, memory: 512Mi}

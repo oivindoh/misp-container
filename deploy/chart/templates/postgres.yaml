@@ -37,7 +37,7 @@ spec:
             - -c
             - |
               if [ -s /var/lib/postgresql/pgdata/PG_VERSION ]; then
-                echo "A chart 1.x database (MISP 2.5, PostgreSQL $(cat /var/lib/postgresql/pgdata/PG_VERSION)) is in /var/lib/postgresql/pgdata: MISP 3.0 cannot use a MISP 2.5 database on PostgreSQL. Install on a new claim (docs/misp-3.md)" >&2
+                echo "A chart 1.x database (MISP 2.5, PostgreSQL $(cat /var/lib/postgresql/pgdata/PG_VERSION)) is in /var/lib/postgresql/pgdata: MISP 3.0 cannot use a MISP 2.5 database on PostgreSQL. Install on a new claim (docs/migration.md)" >&2
                 exit 1
               fi
           volumeMounts:
