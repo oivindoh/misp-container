@@ -449,8 +449,8 @@ def test_migrated_account_lands_in_the_renamed_org(keycloak_login):
 
 
 def test_migrated_account_is_linked_and_enabled(stack, keycloak_login):
-    assert stack.sql(f"SELECT sub IS NOT NULL FROM users WHERE id = {MIGRATED_USER_ID}") == "1"
-    assert stack.sql(f"SELECT disabled FROM users WHERE id = {MIGRATED_USER_ID}") == "0"
+    assert stack.sql(f"SELECT sub IS NOT NULL FROM users WHERE id = {MIGRATED_USER_ID}") == "True"
+    assert stack.sql(f"SELECT disabled FROM users WHERE id = {MIGRATED_USER_ID}") == "False"
 
 
 # -- attachments into S3 -------------------------------------------------------------
