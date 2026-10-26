@@ -1,14 +1,16 @@
 {{/*
-base.env with the env value on top: the misp-env ConfigMap, as JSON. With databaseCA,
-DB_SSLROOTCERT names the certificate's mount.
+The env value: the misp-env ConfigMap, as JSON. With databaseCA, DB_SSLROOTCERT names the
+certificate's mount unless env sets it.
 */}}
 {{- define "misp.envValues" -}}
-{{- $env := include "misp.envFile" (list . "files/base.env") | fromJson }}
+{{- $env := dict }}
 {{- if .Values.databaseCA }}
 {{- $_ := set $env "DB_SSLROOTCERT" "/etc/misp-docker/db-ca/ca.crt" }}
 {{- end }}
 {{- range $key, $value := .Values.env }}
+{{- if not (kindIs "invalid" $value) }}
 {{- $_ := set $env $key (toString $value) }}
+{{- end }}
 {{- end }}
 {{- toJson $env }}
 {{- end }}
@@ -21,13 +23,11 @@ misp-db and misp-app, a connection Secret's where connectionSecrets maps one.
 {{- $root := . }}
 {{- $refs := include "misp.connectionRefs" . | fromJson }}
 {{- $out := dict }}
-{{- range $name, $source := dict "misp-db" (list "files/secrets-db.env" .Values.secrets.db) "misp-app" (list "files/secrets-app.env" .Values.secrets.app) }}
-{{- $keys := include "misp.envFile" (list $root (index $source 0)) | fromJson }}
-{{- range $key, $_ := index $source 1 }}
-{{- $_ := set $keys $key "" }}
-{{- end }}
-{{- range $var, $_ := $keys }}
+{{- range $name, $keys := dict "misp-db" .Values.secrets.db "misp-app" .Values.secrets.app }}
+{{- range $var, $value := $keys }}
+{{- if not (kindIs "invalid" $value) }}
 {{- $_ := set $out $var (get $refs $var | default (dict "name" $name "key" $var)) }}
+{{- end }}
 {{- end }}
 {{- end }}
 {{- toJson $out }}
@@ -60,7 +60,7 @@ misp-db and misp-app, a connection Secret's where connectionSecrets maps one.
 {{- end }}
 
 {{/*
-The settings the repository brings: files/settings.yaml, with base.env and the env value
+The settings the repository brings: files/settings.yaml, with the env value
 on top, as the env vars MISP and init.py read. JSON {var: {"value": string}} or
 {var: {"secretKeyRef": {name, key}}}, plus MISP_REPOSITORY_SETTINGS, the comma-separated
 names of the settings that MISP takes from its environment layer.

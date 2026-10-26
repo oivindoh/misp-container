@@ -103,12 +103,10 @@ def test_the_pods_wait_for_a_configure_run_of_their_own_configuration():
                 "metadata.annotations['checksum/config']", container["name"]
 
 
-def test_misp_env_holds_base_env_and_the_env_value_wins():
-    base = dict(line.split("=", 1) for line in (chart.CHART / "files/base.env").read_text().splitlines()
-                if "=" in line and not line.lstrip().startswith("#"))
-    data = env_data("env.MISP_BASEURL=https://misp.example.org")
-    assert {k: v for k, v in data.items() if k != "MISP_BASEURL"} == {k: v for k, v in base.items() if k != "MISP_BASEURL"}
-    assert data["MISP_BASEURL"] == "https://misp.example.org"
+def test_misp_env_holds_the_env_defaults_and_a_release_changes_or_drops_one():
+    defaults = yaml.safe_load((chart.CHART / "values.yaml").read_text())["env"]
+    data = env_data("env.MISP_BASEURL=https://misp.example.org", "env.TZ=null")
+    assert data == {**{k: v for k, v in defaults.items() if k != "TZ"}, "MISP_BASEURL": "https://misp.example.org"}
 
 
 def test_misp_points_at_the_postgres_component_unless_env_says_otherwise():

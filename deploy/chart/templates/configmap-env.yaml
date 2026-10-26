@@ -1,4 +1,4 @@
-# misp-env: files/base.env, then the env value (misp.envValues). Every MISP pod reads it;
+# misp-env: the env value (misp.envValues). Every MISP pod reads it;
 # its checksum rolls the Deployments. With databaseCA, DB_SSLROOTCERT names the
 # certificate's mount.
 {{- $env := include "misp.envValues" . | fromJson }}

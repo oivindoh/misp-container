@@ -58,8 +58,8 @@ revisit.
 | `log-block-php` | php | files/misp_container/init.py LOG_BLOCK | cannot run the logging block, in either format |
 <!-- end generated -->
 
-A new queue needs its name in `WORKER_QUEUES` and `NUM_WORKERS_<QUEUE>` in
-`deploy/chart/files/base.env`. New periodic work needs a task in `misp_container/task.py`
+A new queue needs its name in `WORKER_QUEUES` and `NUM_WORKERS_<QUEUE>` in the `env` value of
+`deploy/chart/values.yaml`. New periodic work needs a task in `misp_container/task.py`
 (`SCHEDULER_COVERAGE`) and a schedule in `cronjobs.tasks` in `deploy/chart/values.yaml`.
 
 ### Patches to MISP

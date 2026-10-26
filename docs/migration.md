@@ -123,7 +123,7 @@ The target is the deployment's own `DB_*` connection, and for attachments its ow
 ## Kubernetes
 
 1. Put the source connection in `migrate.secret`, or supply a Secret `misp-migrate` with the
-   keys of `deploy/chart/files/secrets-migrate.env` when `secrets.create` is `false`.
+   keys of that value when `secrets.create` is `false`.
 2. Set `migrate.enabled: true`. To copy attachments from the old bucket, set
    `MIGRATE_SOURCE_S3_*`. To copy them from a directory, give the copy a volume for the old
    files and set `MIGRATE_SOURCE_FILES` to its mount path:
