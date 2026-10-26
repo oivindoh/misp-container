@@ -171,15 +171,17 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # The chart and doc tests render the chart with helm; test_chart_schema.py
-      # lints it and validates every render with kubeconform
-      - name: Install helm and kubeconform
-        uses: ./.github/actions/install-helm
+      # The versions of mise.toml, checked against mise.lock. The chart and doc tests
+      # render the chart with helm; test_chart_schema.py lints it and validates every
+      # render with kubeconform
+      - name: Install the tools
+        uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
         with:
-          kubeconform: "true"
+          version: 2026.8.5
+          install_args: helm kubeconform python uv
+          cache: false
       - name: Unit tests
         run: |
-          pip install --quiet uv
           uv sync
           PYTHONPATH=files .venv/bin/python -m pytest tests/ -v --ignore=tests/e2e
 
@@ -224,17 +226,19 @@ jobs:
           misp: ${{ env.IMAGE_MISP }}
           modules: ${{ env.IMAGE_MODULES }}
 
-      - name: Install helm and kubectl
-        uses: ./.github/actions/install-helm
+      # The versions of mise.toml, checked against mise.lock
+      - name: Install the tools
+        uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
         with:
-          kubectl: "true"
+          version: 2026.8.5
+          install_args: helm kubectl python uv
+          cache: false
 
       - name: Run the suite
         timeout-minutes: ${{ matrix.timeout }}
         env:
           TMPDIR: ${{ runner.temp }}
         run: |
-          pip install --quiet uv
           uv sync
           .venv/bin/python -m pytest ${{ matrix.tests }} --skip-build -v --durations=5 \
             --junitxml="$RUNNER_TEMP/${{ matrix.id }}-junit.xml"
@@ -295,8 +299,13 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Install helm
-        uses: ./.github/actions/install-helm
+      # helm at the version of mise.toml, checked against mise.lock
+      - name: Install the tools
+        uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
+        with:
+          version: 2026.8.5
+          install_args: helm
+          cache: false
 
       # appVersion is the image tag; the chart version is its own SemVer and, like
       # an image tag, is never pushed twice. A lookup that fails for another
@@ -427,8 +436,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
-      - name: Install helm
-        uses: ./.github/actions/install-helm
+      # helm at the version of mise.toml, checked against mise.lock
+      - name: Install the tools
+        uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
+        with:
+          version: 2026.8.5
+          install_args: helm
+          cache: false
 
       - name: Log in to GHCR
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0

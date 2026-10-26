@@ -270,4 +270,6 @@ GitHub Actions on every push to master, every tag and every pull request:
 The stack suites need podman (on macOS, a podman machine with its rootful connection),
 kubectl and helm. Set `CONTAINER_CMD` to use another engine, as CI does with `docker`. The
 unit tests need Python 3.13, uv, helm and kubeconform. mise installs them all but podman, and
-`mise.toml` creates a venv on `cd` into the repository.
+`mise.toml` creates a venv on `cd` into the repository. CI installs the same versions with
+mise-action, checked against the checksums of `mise.lock`. After a version change in
+`mise.toml`, rewrite the lock: `mise lock --platform linux-x64,linux-arm64,macos-arm64,macos-x64`.
