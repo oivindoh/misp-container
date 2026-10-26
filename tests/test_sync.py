@@ -18,7 +18,7 @@ from misp_container.sync import (
     _apply_sharing_groups, _sync_sg_orgs,
     _disable_unmanaged_users, _disable_unmanaged_servers,
     _set_user_authkey,
-    load_config, apply, is_empty, ConfigError, MISPState, TAG_DEFAULTS,
+    load_config, apply, is_empty, ConfigError, StepError, MISPState, TAG_DEFAULTS,
 )
 from misp_container.api import APIError
 
@@ -114,19 +114,6 @@ class TestNormalize:
         user = _normalize(raw)["teams"][0]["users"][0]
         assert (user["role"], user["disabled"], user["external_auth"]) == ("User", False, False)
 
-    @pytest.mark.parametrize("key", ["feide_users", "sync_users", "service_users"])
-    def test_retired_user_list_refused(self, key):
-        raw = {"teams": [{"uuid": "cc98c3e7-f415-4199-a805-898be218f68a", "name": "T",
-                          key: [{"email": "a@b.com"}]}]}
-        with pytest.raises(ConfigError, match=f"{key} is gone; list these users under users"):
-            _normalize(raw)
-
-    def test_allow_external_refused(self):
-        raw = {"teams": [{"uuid": "cc98c3e7-f415-4199-a805-898be218f68a", "name": "T",
-                          "users": [{"email": "a@b.com", "allow_external": True}]}]}
-        with pytest.raises(ConfigError, match="allow_external is gone"):
-            _normalize(raw)
-
     def test_server_defaults(self):
         raw = {"teams": [{
             "uuid": "cc98c3e7-f415-4199-a805-898be218f68a", "name": "T",
@@ -148,7 +135,8 @@ class TestNormalize:
         result = _normalize({})
         assert result["teams"] == []
         assert result["tags"] == []
-        assert result["taxonomies"] == []
+        # Absent, the run leaves MISP's taxonomies and warninglists as they are
+        assert result["taxonomies"] is None and result["warninglists"] is None
 
     def test_default_role_applies_to_users(self):
         raw = {"teams": [{
@@ -238,15 +226,14 @@ class TestApplyRoles:
         assert counts["updated"] == 0
         client.post.assert_not_called()
 
-    def test_skips_role_without_name(self):
+    def test_a_role_without_name_fails_the_step_after_the_others(self):
         client = MagicMock()
         state = MagicMock()
         state.roles = {}
 
-        roles = [{"permission": 2}]
-        counts = _apply_roles(client, state, roles)
-        assert counts["created"] == 0
-        client.post.assert_not_called()
+        with pytest.raises(StepError, match="role: 1 failed"):
+            _apply_roles(client, state, [{"permission": 2}, {"name": "Analyst", "permission": 2}])
+        assert client.post.call_count == 1
 
 
 # ---------------------------------------------------------------------------
@@ -270,11 +257,13 @@ class TestBuildRules:
         assert rules["tags"]["OR"] == [1, 2]
         assert "url_params" not in rules
 
-    def test_push_rules_skip_unknown_tags(self):
+    @pytest.mark.parametrize("include,exclude", [(["unknown:tag"], []), ([], ["unknown:tag"])])
+    def test_an_unknown_push_tag_is_refused(self, include, exclude):
+        # Without its tag the rule would push every event to the partner
         state = MagicMock()
         state.tag_id = lambda name: None
-        rules = _build_rules(["unknown:tag"], [], pull=False, state=state)
-        assert rules["tags"]["OR"] == []
+        with pytest.raises(ValueError, match="unknown:tag"):
+            _build_rules(include, exclude, pull=False, state=state)
 
     def test_pull_rules_with_excludes(self):
         state = MagicMock()
@@ -310,15 +299,20 @@ class TestExpandEnv:
         finally:
             del os.environ["TEST_SYNC_VAR"]
 
-    def test_unbraced_var(self):
-        os.environ["TEST_SYNC_VAR"] = "val"
+    def test_a_dollar_without_braces_stays(self):
+        os.environ["Glass"] = "val"
         try:
-            assert _expand_env("$TEST_SYNC_VAR") == "val"
+            assert _expand_env("Br3ak$Glass-2026!") == "Br3ak$Glass-2026!"
         finally:
-            del os.environ["TEST_SYNC_VAR"]
+            del os.environ["Glass"]
 
-    def test_missing_var_becomes_empty(self):
-        assert _expand_env("${NONEXISTENT_VAR_XYZ}") == ""
+    def test_an_unset_var_is_refused(self):
+        with pytest.raises(ConfigError, match="NONEXISTENT_VAR_XYZ"):
+            _expand_env("${NONEXISTENT_VAR_XYZ}")
+
+    def test_an_empty_var_expands_to_empty(self):
+        with patch.dict(os.environ, {"TEST_SYNC_EMPTY": ""}):
+            assert _expand_env("a${TEST_SYNC_EMPTY}b") == "ab"
 
     def test_no_expansion_without_dollar(self):
         assert _expand_env("plain text") == "plain text"
@@ -585,16 +579,14 @@ class TestApplyOneUser:
         assert result == "unchanged"
         mock_set_key.assert_called_once_with(42, "inbound-key-for-partner-0000000000000000")
 
-    def test_skips_unknown_role(self):
+    def test_an_unknown_role_is_refused(self):
         client = MagicMock()
         state = MagicMock()
         state.users = {}
         state.role_id = lambda name: None
 
-        result = _apply_one_user(client, state,
-                                 {"email": "x@x.com", "role": "Nonexistent"},
-                                 org_id=1)
-        assert result == "unchanged"
+        with pytest.raises(ValueError, match="Nonexistent"):
+            _apply_one_user(client, state, {"email": "x@x.com", "role": "Nonexistent"}, org_id=1)
         client.post.assert_not_called()
 
     def test_updates_user_org_change(self):
@@ -978,12 +970,14 @@ class TestApplyTaxonomies:
         counts = _apply_taxonomies(client, state, [])
         assert counts["disabled"] == 1
 
-    def test_warns_on_missing_taxonomy(self):
-        client = self._mock_client({})
+    def test_a_missing_taxonomy_fails_the_step_and_disables_none(self):
+        tax = {"tlp": {"id": 1, "enabled": True, "namespace": "tlp"}}
+        client = self._mock_client(tax)
         state = MagicMock()
-        state.taxonomies = {}
-        counts = _apply_taxonomies(client, state, ["nonexistent"])
-        assert counts["enabled"] == 0
+        state.taxonomies = dict(tax)
+        with pytest.raises(StepError, match="nonexistent"):
+            _apply_taxonomies(client, state, ["nonexistent"])
+        assert not [c for c in client.post.call_args_list if "disable" in c[0][0]]
 
     def test_skips_already_enabled(self):
         tax = {"tlp": {"id": 1, "enabled": True, "namespace": "tlp"}}
@@ -1038,8 +1032,26 @@ class TestApplySharingGroups:
                          if "addOrg" in c[0][0]]
         assert len(add_org_calls) == 2
 
+    def test_an_entry_without_uuid_finds_its_group_by_name(self):
+        # MISP keys every sharing group by the UUID it gave it
+        client = MagicMock()
+        state = MagicMock()
+        state.sharing_groups = {"128f1153-ccf9-4dc4-87e1-5307d794764c": {
+            "id": 7, "name": "Test SG", "uuid": "128f1153-ccf9-4dc4-87e1-5307d794764c", "SharingGroupOrg": []}}
+        assert _apply_sharing_groups(client, state, [{"name": "Test SG"}]) == {"created": 0, "updated": 0}
+        client.post.assert_not_called()
+
 
 class TestSyncSgOrgs:
+    def test_an_unknown_org_is_refused_before_any_change(self):
+        client = MagicMock()
+        state = MagicMock()
+        state.org_id = lambda uuid: None
+        with pytest.raises(ValueError, match="ee8e368c-1587-4630-99f7-0b7a3ff2674f"):
+            _sync_sg_orgs(client, state, sg_id=10, desired_orgs=["ee8e368c-1587-4630-99f7-0b7a3ff2674f"],
+                          current_orgs=[{"Organisation": {"id": 3}}])
+        client.post.assert_not_called()
+
     def test_adds_missing_and_removes_extra(self):
         client = MagicMock()
         state = MagicMock()
@@ -1267,6 +1279,50 @@ class TestFailedStepDisablesNothing:
         assert disabled == []
 
 
+    @patch("misp_container.sync.MISPState")
+    def test_a_failed_disable_fails_the_run(self, MockState):
+        state = MagicMock(spec=MISPState)
+        state.orgs = {}
+        state.users = {"stale@x.com": {"id": "6", "disabled": False}, "old@x.com": {"id": "7", "disabled": False}}
+        state.roles = state.servers = state.tags = state.taxonomies = state.warninglists = {}
+        state.sharing_groups = {}
+        MockState.return_value = state
+        client = MagicMock()
+        client.post.side_effect = lambda path, data: (_ for _ in ()).throw(APIError(500, "boom", path)) \
+            if path.endswith("/6") else {}
+
+        summary = apply(client=client, config=_normalize({"tags": ["t"]}))
+        assert "error" in summary["disabled_users"]
+        assert [c for c in client.post.call_args_list if c[0][0] == "/admin/users/edit/7"]
+
+
+class TestKeysTheFileLacks:
+    @patch("misp_container.sync.MISPState")
+    def test_a_file_without_taxonomies_or_warninglists_leaves_them(self, MockState):
+        state = MagicMock(spec=MISPState)
+        state.orgs = state.users = state.roles = state.servers = state.tags = state.sharing_groups = {}
+        state.taxonomies = {"tlp": {"id": 1, "enabled": True, "namespace": "tlp"}}
+        state.warninglists = {"Top sites": {"id": 2, "enabled": True}}
+        MockState.return_value = state
+        client = MagicMock()
+
+        summary = apply(client=client, config=_normalize({"tags": ["t"]}))
+        assert "taxonomies" not in summary and "warninglists" not in summary
+        assert not [c for c in client.post.call_args_list if "taxonom" in c[0][0] or "warninglist" in c[0][0]]
+
+    @patch("misp_container.sync.MISPState")
+    def test_an_empty_list_disables_every_taxonomy(self, MockState):
+        state = MagicMock(spec=MISPState)
+        state.orgs = state.users = state.roles = state.servers = state.tags = state.sharing_groups = {}
+        state.warninglists = {}
+        state.taxonomies = {"tlp": {"id": 1, "enabled": True, "namespace": "tlp"}}
+        MockState.return_value = state
+        client = MagicMock()
+
+        apply(client=client, config=_normalize({"tags": ["t"], "taxonomies": []}))
+        assert call("/taxonomies/disable/1", {}) in client.post.call_args_list
+
+
 class TestIsEmpty:
     def test_nothing(self):
         assert is_empty(_normalize({}))
@@ -1307,3 +1363,15 @@ class TestSetUserAuthkey:
         mock_query.return_value = [{"authkey": stored}]
         _set_user_authkey(42, self.KEY)
         assert mock_execute.call_count == 2
+
+
+class TestSharingGroupList:
+    def test_the_list_misp_wraps_in_response(self):
+        from misp_container.api import MISPClient
+        client = MISPClient("http://misp", "key")
+        sg = {"SharingGroup": {"id": "7", "name": "Partners", "uuid": "128F1153-CCF9-4DC4-87E1-5307D794764C"},
+              "SharingGroupOrg": [{"org_id": "5", "Organisation": {"id": "5"}}]}
+        with patch.object(client, "get", return_value={"response": [sg]}):
+            found = client.get_sharing_groups()
+        assert list(found) == ["128f1153-ccf9-4dc4-87e1-5307d794764c"]
+        assert found["128f1153-ccf9-4dc4-87e1-5307d794764c"]["SharingGroupOrg"] == sg["SharingGroupOrg"]

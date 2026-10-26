@@ -2,7 +2,7 @@
 # The chart's orgSync.orgs value takes this content; the org-sync Job reads it
 # from the misp-orgs ConfigMap at /etc/misp-docker/orgs.yaml (docs/org-sync.md).
 #
-# All string values support ${ENV_VAR} expansion for secrets injection.
+# Every string value expands ${ENV_VAR}; an unset variable stops the run.
 
 taxonomies:
   - tlp
@@ -65,9 +65,9 @@ teams:
         push: false
         pull_tags:
           - tlp:clear
+        # Each push tag must be a tag in MISP (docs/org-sync.md, Servers)
         push_tags:
           - tlp:clear
-          - sector:academic
         internal: false
 
     tags:

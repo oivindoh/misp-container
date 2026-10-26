@@ -541,6 +541,14 @@ tags:
   - name: "sync-test:global-tag"
     colour: "#112233"
 
+# No UUID: the runs find the group by its name
+sharing_groups:
+  - name: "Sync Test Sharing Group"
+    releasability: "Sync test partners"
+    description: "Created by integration test"
+    organisations:
+      - "4f1ed2b2-1821-49da-bf2c-b7ab639d9b19"
+
 teams:
   - uuid: "4f1ed2b2-1821-49da-bf2c-b7ab639d9b19"
     name: "Sync Test Org"
@@ -606,10 +614,10 @@ def synced(stack, oidc):
     # A local user the file does not name, beside the OIDC user of the login above
     stack.api("POST", "/admin/users/add", stack.key, {"User": {
         "email": "unnamed-local@example.com", "org_id": 1, "role_id": 3, "password": "Unnamed-L0cal#2026"}})
-    org_sync(stack, ORGS.format(version=1, extra=""))
+    rc, out = org_sync(stack, ORGS.format(version=1, extra=""))
     servers = stack.api("GET", "/servers", stack.key) or []
     server = next((s["Server"] for s in servers if s["Server"]["url"] == "https://sync-test.example.com"), {})
-    return {"server": server}
+    return {"rc": rc, "out": out, "server": server}
 
 
 def search_user(stack, email):
@@ -623,6 +631,15 @@ def taxonomy_enabled(stack, namespace):
         if entry.get("namespace") == namespace:
             return entry.get("enabled") in (True, 1, "1", "true")
     return False
+
+
+def sharing_groups(stack, name):
+    found = stack.api("GET", "/sharing_groups", stack.key) or {}
+    return [sg for sg in found.get("response", []) if sg.get("SharingGroup", {}).get("name") == name]
+
+
+def test_sync_exits_0(synced):
+    assert synced["rc"] == 0, synced["out"][-3000:]
 
 
 def test_sync_org_created(stack, synced):
@@ -708,16 +725,36 @@ def test_sync_custom_warninglist_version(stack, synced):
     assert stack.sql("SELECT version FROM warninglists WHERE name='Sync Test Warninglist';") == "1"
 
 
+def test_sync_sharing_group_created_with_its_org(stack, synced):
+    found = sharing_groups(stack, "Sync Test Sharing Group")
+    assert len(found) == 1
+    assert found[0]["SharingGroup"]["releasability"] == "Sync test partners"
+    members = {o.get("Organisation", {}).get("uuid") for o in found[0].get("SharingGroupOrg", [])}
+    assert members == {SYNC_ORG_UUID}
+
+
 def test_sync_custom_warninglist_updated_to_v2(stack, synced):
-    org_sync(stack, ORGS.format(version=2, extra="\n      - new-entry.example.org"))
+    rc, out = org_sync(stack, ORGS.format(version=2, extra="\n      - new-entry.example.org"))
+    assert rc == 0, out[-3000:]
     assert stack.sql("SELECT version FROM warninglists WHERE name='Sync Test Warninglist';") == "2"
 
 
-def test_sync_warm_run_changes_nothing(stack, synced):
-    # Disabling unmanaged users is expected: headeruser from the custom auth section
-    _, out = org_sync(stack, ORGS.format(version=2, extra="\n      - new-entry.example.org"))
-    changed = [m for m in re.findall(r"'(?:created|updated)': (\d+)", out) if m != "0"]
-    assert changed == [], out[-2000:]
+@pytest.fixture(scope="module")
+def warm_sync(stack, synced):
+    return org_sync(stack, ORGS.format(version=2, extra="\n      - new-entry.example.org"))
+
+
+def test_sync_warm_run_exits_0(warm_sync):
+    assert warm_sync[0] == 0, warm_sync[1][-3000:]
+
+
+def test_sync_warm_run_changes_nothing(warm_sync):
+    changed = [m for m in re.findall(r"'(?:created|updated)': (\d+)", warm_sync[1]) if m != "0"]
+    assert changed == [], warm_sync[1][-2000:]
+
+
+def test_sync_warm_run_keeps_one_sharing_group(stack, warm_sync):
+    assert len(sharing_groups(stack, "Sync Test Sharing Group")) == 1
 
 
 # -- metrics exporter ----------------------------------------------------------------
