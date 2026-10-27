@@ -61,7 +61,7 @@ job at `unfinished` while it waits and runs; a job whose worker died stays `unfi
 **Container jobs:**
 | Metric | Type | Description |
 |--------|------|-------------|
-| `misp_container_job_runs_total{operation,status}` | counter | Runs of `configure`, `org-sync` and `migrate`, by `success` or `error` |
+| `misp_container_job_runs_total{operation,status}` | counter | Runs of `configure`, `org-sync`, `migrate` and its attachment copy `migrate-files`, by `success` or `error` |
 | `misp_container_job_last_success_timestamp_seconds{operation}` | gauge | Unix time of the last successful run per job |
 
 **Settings outside git:**

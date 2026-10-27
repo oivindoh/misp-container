@@ -22,6 +22,10 @@ class TestConversion:
         assert fn("0000-00-00 00:00:00") is None
         assert fn("2026-01-01 00:00:00") == "2026-01-01 00:00:00"
 
+    def test_a_nul_byte_leaves_a_text_value(self):
+        # PostgreSQL refuses 0x00 in text
+        assert migrate.coercer("text")("a\x00b") == "ab" and migrate.coercer("character varying")("ab") == "ab"
+
     def test_bytea_from_bytearray(self):
         assert migrate.coercer("bytea")(bytearray(b"x")) == b"x"
 
@@ -141,6 +145,22 @@ class TestCopyAttachments:
         assert migrate.copy_attachments(FakeBucket("source", {**self.KEYS, "notes.txt": b"x"}), target) == 3
         assert target.objects == self.KEYS
         assert not (tmp_path / "migrate-attachment").exists()
+
+    def test_a_failed_file_fails_the_copy_after_the_others(self, tmp_path):
+        class Flaky(FakeBucket):
+            def download(self, key, path):
+                if key == "56/7":
+                    raise migrate.S3Error(500, "InternalError", key)
+                return super().download(key, path)
+        target = tmp_path / "att"
+        with pytest.raises(OSError, match="1 of 3 attachments failed"):
+            migrate.copy_attachments(Flaky("source", self.KEYS), target)
+        assert (target / "12/34").read_bytes() == b"flat" and (target / "shadow/12/35").exists()
+
+    def test_a_file_of_the_same_size_on_the_volume_stays(self, tmp_path):
+        target = tree(tmp_path / "att", {"12/34": b"FLAT"})
+        migrate.copy_attachments(tree(tmp_path / "src", self.SOURCE), target)
+        assert (target / "12/34").read_bytes() == b"FLAT"
 
     def test_org_logos_and_custom_images_go_to_the_volume(self, tmp_path):
         source = tree(tmp_path / "src", {"img/orgs/7.png": b"logo", "img/custom/top.png": b"banner",
@@ -293,6 +313,30 @@ class TestIndexes:
 SOURCE = {"host": "old", "port": 3306, "user": "u", "password": "p", "database": "misp", "tls": False}
 
 
+class FakeSource:
+    """A source connection that answers a ping and takes plain statements."""
+
+    def __init__(self):
+        self.statements = []
+
+    def ping(self, reconnect=False):
+        self.statements.append("ping")
+
+    def cursor(self, *args):
+        source = self
+
+        class Cursor:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def execute(self, sql):
+                source.statements.append(sql)
+        return Cursor()
+
+
 class TestSchemaGate:
     @pytest.fixture
     def steps(self, monkeypatch):
@@ -313,22 +357,25 @@ class TestSchemaGate:
         monkeypatch.setattr(migrate, "source_schema_state", lambda c: ("120", set()))
         monkeypatch.setattr(migrate, "target_schema_state", lambda c: ("159", {"m1"}))
         with patch.dict(os.environ, {"MIGRATE_SOURCE_UPGRADE": ""}), pytest.raises(SystemExit) as exc:
-            migrate.migrate_into_postgres(object(), object(), SOURCE)
+            migrate.migrate_into_postgres(FakeSource(), object(), SOURCE)
         assert exc.value.code == migrate.EXIT_SCHEMA
 
     def test_the_target_takes_misps_updates_before_the_check(self, monkeypatch, steps):
         # A release can ship ledger migrations its PostgreSQL baseline does not record
         monkeypatch.setattr(migrate, "source_schema_state", lambda c: steps.append("check") or ("159", {"m1", "m2"}))
         monkeypatch.setattr(migrate, "target_schema_state", lambda c: ("159", {"m1", "m2"}))
+        src = FakeSource()
         with patch.dict(os.environ, {"MIGRATE_SOURCE_UPGRADE": ""}):
-            assert migrate.migrate_into_postgres(object(), object(), SOURCE) == 0
+            assert migrate.migrate_into_postgres(src, object(), SOURCE) == 0
         assert steps == ["baseline", "app/Config", "updates", "check"]
+        # Every table from one snapshot, after a reconnect that a long upgrade may need
+        assert src.statements == ["ping", "START TRANSACTION WITH CONSISTENT SNAPSHOT, READ ONLY"]
 
     def test_the_source_upgrade_runs_cake_on_the_source_then_points_back(self, monkeypatch, steps):
         monkeypatch.setattr(migrate, "source_schema_state", lambda c: steps.append("check") or ("159", set()))
         monkeypatch.setattr(migrate, "target_schema_state", lambda c: ("159", set()))
         with patch.dict(os.environ, {"MIGRATE_SOURCE_UPGRADE": "true", "DB_HOST": "postgres"}):
-            migrate.migrate_into_postgres(object(), object(), SOURCE)
+            migrate.migrate_into_postgres(FakeSource(), object(), SOURCE)
         assert steps == ["baseline", "app/Config", "updates", "Database/MysqlObserverExtended", "Admin runUpgrade",
                          "Database/PostgresObserverExtended", "check"]
 
@@ -337,7 +384,7 @@ class TestSchemaGate:
             raise RuntimeError("cake Admin runUpgrade exited 1")
         monkeypatch.setattr(migrate.cake, "run_checked", fail)
         with patch.dict(os.environ, {"MIGRATE_SOURCE_UPGRADE": "true"}), pytest.raises(RuntimeError):
-            migrate.migrate_into_postgres(object(), object(), SOURCE)
+            migrate.migrate_into_postgres(FakeSource(), object(), SOURCE)
         assert steps[-1] == "Database/PostgresObserverExtended"
 
 
@@ -355,3 +402,13 @@ class TestConfig:
             os.environ.pop("MIGRATE_SOURCE_PORT", None); os.environ.pop("MIGRATE_SOURCE_NAME", None)
             s = migrate.source_settings()
         assert s["port"] == 3306 and s["database"] == "misp" and s["tls"] is False
+
+
+class TestFilesRerun:
+    def test_a_failed_file_copy_is_tried_again_while_the_database_copy_stays(self, monkeypatch):
+        monkeypatch.setattr(migrate.db, "run_records", lambda: {"migrate-files": {"last_error": 20, "last_success": 10}})
+        assert migrate.files_failed_last()
+        monkeypatch.setattr(migrate.db, "run_records", lambda: {"migrate-files": {"last_error": 10, "last_success": 20}})
+        assert not migrate.files_failed_last()
+        monkeypatch.setattr(migrate.db, "run_records", lambda: {})
+        assert not migrate.files_failed_last()

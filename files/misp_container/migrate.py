@@ -32,6 +32,7 @@ import json
 import os
 import re
 import shutil
+import socket
 import sys
 import time
 from pathlib import Path
@@ -108,7 +109,14 @@ def connect_source(s: dict):
     if s["tls"]:
         import ssl
         kwargs["ssl"] = {"ssl": ssl.create_default_context()}
-    return pymysql.connect(**kwargs)
+    conn = pymysql.connect(**kwargs)
+    # The source idles through the source upgrade and the target's index builds: keepalives
+    # keep a load balancer in front of it from dropping the connection
+    conn._sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+    if hasattr(socket, "TCP_KEEPIDLE"):
+        conn._sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 60)
+        conn._sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 30)
+    return conn
 
 
 # -- Source inspection ---------------------------------------------------------
@@ -247,6 +255,18 @@ def to_bytes(v):
     return bytes(v) if isinstance(v, (bytearray, memoryview)) else v
 
 
+# The text values of the table being copied that held a NUL byte, which PostgreSQL refuses in text
+nul_values = 0
+
+
+def to_text(v):
+    global nul_values
+    if isinstance(v, str) and "\x00" in v:
+        nul_values += 1
+        return v.replace("\x00", "")
+    return v
+
+
 def coercer(data_type: str):
     """The conversion a MySQL value needs for a PostgreSQL column of this
     type, or None when the value passes through."""
@@ -256,6 +276,8 @@ def coercer(data_type: str):
         return to_timestamp
     if data_type == "bytea":
         return to_bytes
+    if data_type in ("text", "character varying", "character"):
+        return to_text
     return None
 
 
@@ -284,7 +306,9 @@ def copy_table(src, dst, table: str, columns: list[str], types: dict[str, str]) 
     if table in SKIP_ROWS:
         select += " WHERE " + SKIP_ROWS[table]
     import pymysql.cursors
+    global nul_values
     total = 0
+    nul_values = 0
     read = src.cursor(pymysql.cursors.SSCursor)
     try:
         read.execute(select)
@@ -297,6 +321,9 @@ def copy_table(src, dst, table: str, columns: list[str], types: dict[str, str]) 
                 total += len(rows)
     finally:
         read.close()
+    if nul_values:
+        log.warning("%s: %d text values held a NUL byte, which PostgreSQL refuses; copied without it",
+                    table, nul_values)
     return total
 
 
@@ -433,33 +460,47 @@ def source_attachments(source: Path | Bucket) -> Iterator[tuple[str, str]]:
             if key:
                 yield key, name
         return
-    for path in sorted(source.rglob("*")):
-        if path.is_file():
+    # os.walk: a sorted list of every path of a large store would not fit the container's memory
+    for directory, _, files in os.walk(source):
+        for name in files:
+            path = Path(directory, name)
             key = attachment_key(path.relative_to(source).as_posix())
             if key:
                 yield key, str(path)
 
 
 def copy_attachments(source: Path | Bucket, target: Path | Bucket) -> int:
-    """Copy every attachment from source to target under MISP's key; returns the count."""
+    """Copy every attachment from source to target under MISP's key; returns the count.
+
+    A file that fails is logged, and the copy goes on; it raises at the end, with the count.
+    A file on a target volume with the size of the source's is left, so a rerun goes faster.
+    """
     copied = 0
+    failed = 0
     spool = Path(SPOOL_DIR) / "migrate-attachment"
     spooled = False
     for key, where in source_attachments(source):
-        if isinstance(source, Bucket) and isinstance(target, Bucket):
-            source.download(where, spool)
-            target.upload(key, spool)
-            spooled = True
-        elif isinstance(source, Bucket):
-            source.download(where, target / key)
-        elif isinstance(target, Bucket):
-            target.upload(key, Path(where))
-        else:
-            (target / key).parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy(where, target / key)
+        try:
+            if isinstance(source, Bucket) and isinstance(target, Bucket):
+                source.download(where, spool)
+                target.upload(key, spool)
+                spooled = True
+            elif isinstance(source, Bucket):
+                source.download(where, target / key)
+            elif isinstance(target, Bucket):
+                target.upload(key, Path(where))
+            elif not ((target / key).is_file() and (target / key).stat().st_size == Path(where).stat().st_size):
+                (target / key).parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy(where, target / key)
+        except (S3Error, OSError) as e:
+            log.error("attachment %s: %s", key, e)
+            failed += 1
+            continue
         copied += 1
     if spooled:
         spool.unlink()
+    if failed:
+        raise OSError(f"{failed} of {copied + failed} attachments failed; a rerun copies them again")
     return copied
 
 
@@ -510,6 +551,8 @@ def migrate_into_postgres(src, dst, source: dict) -> int:
     cake.run_updates()
     if env("MIGRATE_SOURCE_UPGRADE") == "true":
         upgrade_source(source)
+    # A server's wait_timeout may have ended the connection during the upgrade
+    src.ping(reconnect=True)
     src_version, src_applied = source_schema_state(src)
     dst_version, dst_applied = target_schema_state(dst)
     if src_version != dst_version or src_applied != dst_applied:
@@ -519,6 +562,10 @@ def migrate_into_postgres(src, dst, source: dict) -> int:
                   src_version or "unknown", len(src_applied), dst_version, len(dst_applied))
         sys.exit(EXIT_SCHEMA)
     targets = set(target_tables(dst))
+    # One snapshot for every table, so rows that refer to each other arrive together, also from
+    # a source whose workers or scheduled pulls still write
+    with src.cursor() as cur:
+        cur.execute("START TRANSACTION WITH CONSISTENT SNAPSHOT, READ ONLY")
     rows = 0
     copied = []
     for table in source_tables(src):
@@ -542,11 +589,40 @@ def migrate_into_postgres(src, dst, source: dict) -> int:
     return rows
 
 
-def record(ok: bool) -> None:
+def record(ok: bool, operation: str = "migrate") -> None:
     try:
-        db.record_run("migrate", ok)
+        db.record_run(operation, ok)
     except Exception as e:
         log.warning("could not record the migration run: %s", e)
+
+
+# The run record of the attachment copy, apart from the database's, so a rerun after a
+# failed file copy keeps the database copy and copies the files again
+FILES_RUN = "migrate-files"
+
+
+def files_failed_last() -> bool:
+    state = db.run_records().get(FILES_RUN) or {}
+    return state.get("last_error", 0) > state.get("last_success", 0)
+
+
+def copy_files(files_from: Path | Bucket | None, files_to: Path | Bucket) -> None:
+    """The attachments, and on a volume the org logos and custom images; exits on a failure."""
+    if files_from is None:
+        log.info("neither MIGRATE_SOURCE_FILES nor MIGRATE_SOURCE_S3_BUCKET is set; attachments are not copied")
+        return
+    on_disk = isinstance(files_from, Path) and isinstance(files_to, Path)
+    try:
+        n = copy_attachments(files_from, files_to)
+        images = copy_images(files_from, files_to) if on_disk else 0
+    except (S3Error, OSError) as e:
+        log.error("attachment copy failed: %s", e)
+        record(False, FILES_RUN)
+        sys.exit(EXIT_COPY)
+    record(True, FILES_RUN)
+    log.info("attachments copied from %s to %s: %d files", files_from, files_to, n)
+    if on_disk:
+        log.info("org logos and custom images copied: %d files", images)
 
 
 def run() -> None:
@@ -586,6 +662,9 @@ def run() -> None:
                                 env("MIGRATE_REPLACE_COPY"))
         if plan == "keep":
             log.info("%s", why)
+            if files_failed_last():
+                log.info("the last attachment copy failed: copying the attachments again")
+                copy_files(files_from, files_to)
             return
         if plan == "refuse":
             log.error("%s", why)
@@ -601,29 +680,15 @@ def run() -> None:
             record(False)
             sys.exit(EXIT_COPY)
         log.info("database copied: %d rows", rows)
+        record(True)
         # The copy replaced the database: the pods wait for the configure run that
         # upgrades and configures it
         db.clear_configured()
-
-        if files_from is None:
-            log.info("neither MIGRATE_SOURCE_FILES nor MIGRATE_SOURCE_S3_BUCKET is set; attachments are not copied")
-        else:
-            on_disk = isinstance(files_from, Path) and isinstance(files_to, Path)
-            try:
-                n = copy_attachments(files_from, files_to)
-                images = copy_images(files_from, files_to) if on_disk else 0
-            except (S3Error, OSError) as e:
-                log.error("attachment copy failed: %s", e)
-                record(False)
-                sys.exit(EXIT_COPY)
-            log.info("attachments copied from %s to %s: %d files", files_from, files_to, n)
-            if on_disk:
-                log.info("org logos and custom images copied: %d files", images)
+        copy_files(files_from, files_to)
     finally:
         dst.close()
         src.close()
         db.release_config_lock()
-    record(True)
     log.info("migration complete in %ds; the configure step upgrades and configures the copy",
              int(time.monotonic() - started))
 
