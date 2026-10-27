@@ -289,6 +289,13 @@ def test_the_worker_stop_grace():
         f"docs/architecture.md should say: {expected}"
 
 
+def test_the_web_request_timeout():
+    timeout = yaml.safe_load((REPO / "deploy/chart/values.yaml").read_text())["env"]["PHP_REQUEST_TIMEOUT"]
+    expected = f"`PHP_REQUEST_TIMEOUT` seconds (default {timeout})"
+    assert expected in " ".join((REPO / "docs/architecture.md").read_text().split()), \
+        f"docs/architecture.md should say: {expected}"
+
+
 def test_the_mail_ports_of_the_network_policy():
     policies = [d for d in chart.objects(every_component=True) if d["kind"] == "NetworkPolicy"]
     ports = sorted({int(p["port"]) for d in policies for rule in d["spec"].get("egress", [])

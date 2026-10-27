@@ -185,7 +185,7 @@ worker and the task CronJobs. Each pod renders its own app/Config.
 {{/*
 The checksum of the configuration a pod runs with: misp-env, and misp-db and misp-app when
 the chart makes them. A change rolls the pods, and each pod waits for a configure run of the
-same checksum (MISP_CONFIG_CHECKSUM, misp.checksumEnv), so a revision whose configure Job
+same checksum (MISP_CHECKSUM, misp.checksumEnv), so a revision whose configure Job
 refuses its configuration never serves.
 */}}
 {{- define "misp.checksums" -}}
@@ -196,9 +196,9 @@ refuses its configuration never serves.
 checksum/config: {{ printf "%s%s%s" (include (print .Template.BasePath "/configmap-env.yaml") .) (include (print .Template.BasePath "/configmap-settings.yaml") .) $secrets | sha256sum }}
 {{- end }}
 
-{{/* The pod's checksum/config annotation as MISP_CONFIG_CHECKSUM; empty in a pod without it */}}
+{{/* The pod's checksum/config annotation as MISP_CHECKSUM; empty in a pod without it */}}
 {{- define "misp.checksumEnv" -}}
-- name: MISP_CONFIG_CHECKSUM
+- name: MISP_CHECKSUM
   valueFrom:
     fieldRef:
       fieldPath: metadata.annotations['checksum/config']
@@ -293,11 +293,11 @@ name in misp-db (DB_USER, DB_PASSWORD) or misp-app (MISP_REDIS_PASSWORD). Takes 
 {{- end }}
 
 {{/*
-A CronJob of periodic work. Takes (dict root name task args schedule), and
+A CronJob of periodic work. Takes (dict root name task args schedule), deadline, and
 module "housekeeping" for a housekeeping run. A task (app.kubernetes.io/component:
 misp-task) renders app/Config and runs MISP's console in the pod; housekeeping
-(misp-housekeeping) deletes old rows straight in the database. The network
-policies select on that label.
+(misp-housekeeping) deletes old rows straight in the database. A network policy of
+the release's owner can select on that label.
 */}}
 {{- define "misp.taskCronJob" -}}
 {{- $root := .root }}
@@ -313,6 +313,10 @@ metadata:
     app.kubernetes.io/component: {{ $component }}
 spec:
   schedule: {{ .schedule | quote }}
+  {{- with $root.Values.env.TZ }}
+  # The schedules run in the zone that PHP runs in
+  timeZone: {{ . | quote }}
+  {{- end }}
   concurrencyPolicy: Forbid
   successfulJobsHistoryLimit: 1
   failedJobsHistoryLimit: 3
@@ -321,7 +325,7 @@ spec:
       # A retry would mail the summaries twice, or repeat every server of a run
       # because one partner did not answer
       backoffLimit: {{ ternary 0 2 (has .task (list "periodic-summary" "pull-servers" "push-servers" "cache-servers")) }}
-      activeDeadlineSeconds: 3600
+      activeDeadlineSeconds: {{ default 3600 .deadline }}
       template:
         metadata:
           labels:

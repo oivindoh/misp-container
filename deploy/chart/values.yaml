@@ -66,6 +66,10 @@ env:
   # -- PHP
   PHP_MEMORY_LIMIT: "2048M"
   PHP_MAX_EXECUTION_TIME: "300"
+  # A web request's wall-clock limit in seconds: PHP_MAX_EXECUTION_TIME counts CPU time only.
+  # PHP-FPM ends a request past it, also one that MISP lets run longer (a role's limit, a
+  # download). A stopping web pod lets its running requests finish within it.
+  PHP_REQUEST_TIMEOUT: "330"
   PHP_UPLOAD_MAX_FILESIZE: "50M"
   PHP_POST_MAX_SIZE: "50M"
   PHP_MAX_INPUT_TIME: "300"
@@ -269,6 +273,9 @@ cronjobs:
     check-user-validity: ""
     block-invalid-users: ""
   workflows: {}
+  # A run past it gets SIGTERM, and the task logs the command it stopped. Pulls from many
+  # partners, or a first full pull, can need more
+  activeDeadlineSeconds: 3600
   resources:
     requests: {cpu: 50m, memory: 256Mi}
     limits: {cpu: 1000m, memory: 2560Mi}

@@ -155,7 +155,7 @@ build applies the patches of `patches/` (DEVELOPING.md, Patches to MISP):
 |---|---|---|---|
 | `01-event-index-stats-quotes-the-alias.patch` | app/Model/Behavior/EventIndexStatsBehavior.php | Quote the alias of the events index stats | not filed yet |
 | `02-a-job-keeps-the-workers-environment.patch` | app/Lib/Tools/BackgroundJobs/BackgroundJob.php | A background job keeps the worker's environment | not filed yet |
-| `03-a-worker-finishes-its-job-on-sigterm.patch` | app/Console/Command/StartWorkerShell.php | A worker finishes its running job on SIGTERM | not filed yet |
+| `03-a-worker-finishes-its-job-on-sigterm.patch` | app/Console/Command/StartWorkerShell.php, app/Lib/Tools/BackgroundJobs/BackgroundJob.php | A worker finishes its running job on SIGTERM | not filed yet |
 <!-- end generated -->
 
 ## Scripts: `scripts/`

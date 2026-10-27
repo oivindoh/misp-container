@@ -270,15 +270,18 @@ remote server, do not use a scheduler: the workers run them.
 Each task runs in its CronJob's pod: the pod renders `app/Config` and runs the console
 command that MISP's own scheduler would hand a worker, as user 1, with the `misp-db` and
 `misp-app` Secrets and the attachments claim. So periodic work never waits in the workers'
-queues, and the workers run only what users start. A run's exit code is the console's, and its
-log is the Job's. The PHP process has the workers' memory ceiling (`WORKER_MEMORY_LIMIT`, else
+queues, and the workers run only what users start. A run fails when the console fails, when a
+pull or push ends failed in its job row, or when a feed could not be fetched or cached. Its log
+is the Job's, with the lines MISP writes to its log files in the pod, such as `server-sync.log`.
+The schedules run in the zone of `env.TZ`, the zone PHP runs in. A run past
+`cronjobs.activeDeadlineSeconds` gets SIGTERM, and the task logs the command it stopped. The PHP process has the workers' memory ceiling (`WORKER_MEMORY_LIMIT`, else
 `PHP_MEMORY_LIMIT`), which `cronjobs.resources` must hold. The periodic summary needs a mail
 relay (`SMTP_FQDN`, `SMTP_PORT`).
 
 `cronjobs.tasks` maps each task to its schedule: change a schedule, or set it to `null` to
 drop the CronJob. `cronjobs.workflows` maps a workflow ID to a schedule, one CronJob
 `workflow-<id>` each. Every task CronJob pod carries `app.kubernetes.io/component:
-misp-task`; the network policies select on that label. `check-user-validity` and `block-invalid-users` have no schedule, because MISP runs them
+misp-task`, for a network policy of your own to select. `check-user-validity` and `block-invalid-users` have no schedule, because MISP runs them
 only with the oidc or ldap group: give `check-user-validity` one to report the accounts the
 provider no longer backs, or `block-invalid-users` to disable them.
 

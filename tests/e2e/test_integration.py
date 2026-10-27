@@ -174,9 +174,14 @@ def worker_processes(stack):
 
 @pytest.fixture(scope="module")
 def workers(stack):
-    stack.wait_for("worker", "pgrep -f start_worker", timeout=120)
-    time.sleep(3)
-    return worker_processes(stack)
+    """{queue: [pid]} once every queue runs its NUM_WORKERS_<QUEUE> processes."""
+    expected = {queue: int(stack.exec("worker", f"printenv NUM_WORKERS_{queue.upper()}")) for queue in WORKER_QUEUES}
+    deadline = time.monotonic() + 120
+    while True:
+        found = worker_processes(stack)
+        if all(len(found.get(queue, [])) == n for queue, n in expected.items()) or time.monotonic() > deadline:
+            return found
+        time.sleep(2)
 
 
 @pytest.mark.parametrize("queue", WORKER_QUEUES)
@@ -209,13 +214,65 @@ def test_a_published_event_runs_a_job(stack):
     eid = event.get("Event", {}).get("id")
     assert eid, event
     stack.http("POST", f"/events/publish/{eid}", stack.key, {})
+    query = f"SELECT status FROM jobs WHERE job_type = 'publish_event' AND job_input = 'Event ID: {int(eid)}'"
     deadline = time.monotonic() + 60
-    while time.monotonic() < deadline and int(stack.sql("SELECT COUNT(*) FROM jobs WHERE status=4;") or 0) == 0:
+    while time.monotonic() < deadline and stack.sql(query) != "4":
         time.sleep(2)
-    done = int(stack.sql("SELECT COUNT(*) FROM jobs WHERE status=4;") or 0)
-    queued = int(stack.sql("SELECT COUNT(*) FROM jobs;") or 0)
+    status = stack.sql(query)
     stack.http("POST", f"/events/delete/{eid}", stack.key, {})
-    assert done > 0, f"no job reached status 4 (completed) in 60 s; {queued} job(s) in the table: no worker ran it"
+    assert status == "4", f"the publish job of event {eid} has status {status or 'none'}, not 4 (completed), after 60 s"
+
+
+# A feed that answers its manifest after FEED_DELAY seconds, from the toolbox: a job of known length
+FEED_DELAY = 15
+SLOW_FEED = f"""
+import http.server, time
+class Feed(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        open("/tmp/slow-feed-hit", "w").close()
+        time.sleep({FEED_DELAY})
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", "2")
+        self.end_headers()
+        self.wfile.write(b"{{}}")
+http.server.HTTPServer(("", 8765), Feed).serve_forever()
+"""
+
+
+def redis_job_status(stack, process_id):
+    """The status the worker recorded for a background job in Redis: 3 failed, 4 completed; "" while none."""
+    rc, out = stack.python("import json, os\n"
+                           "from misp_container import metrics\n"
+                           "client, ns = metrics.job_redis()\n"
+                           "job = client.get(f\"{ns}:job_status:{os.environ['JOB']}\")\n"
+                           "print(json.loads(job)['status'] if job else '')", env={"JOB": process_id})
+    assert rc == 0, out
+    return out.strip()
+
+
+def test_a_stopping_worker_finishes_its_running_job(stack):
+    # patches/03: on SIGTERM the worker takes no new job and waits for the running one
+    stack.exec_rc("toolbox", 'rm -f /tmp/slow-feed-hit; nohup python3 -c "$CODE" > /tmp/slow-feed.log 2>&1 &',
+                  env={"CODE": SLOW_FEED})
+    address = stack.kubectl("get", "pod", "toolbox", "-o", "jsonpath={.status.podIP}").stdout.strip()
+    feed = stack.api("POST", "/feeds/add", stack.key, {"Feed": {
+        "name": "slow feed", "provider": "the integration suite", "url": f"http://{address}:8765",
+        "source_format": "misp", "input_source": "network", "enabled": True, "distribution": 0}}) or {}
+    fid = feed.get("Feed", {}).get("id")
+    assert fid, feed
+    stack.http("POST", f"/feeds/fetchFromFeed/{fid}", stack.key, {})
+    stack.wait_for("toolbox", "test -e /tmp/slow-feed-hit", timeout=60)
+    stack.kubectl("delete", "pod", "-l", "app.kubernetes.io/name=worker", "--wait=false")
+    process_id = stack.sql(f"SELECT process_id FROM jobs WHERE job_type = 'fetch_feeds' AND job_input = 'Feed: {int(fid)}'")
+    deadline = time.monotonic() + FEED_DELAY + 60
+    status = ""
+    while time.monotonic() < deadline and status not in ("3", "4"):
+        time.sleep(2)
+        status = redis_job_status(stack, process_id)
+    stack.rollout("worker")
+    stack.http("POST", f"/feeds/delete/{fid}", stack.key, {})
+    assert status == "4", f"the job of the stopped worker ended with status {status or 'none'}, not 4 (completed)"
 
 
 # -- MISP's own Python scripts -------------------------------------------------------

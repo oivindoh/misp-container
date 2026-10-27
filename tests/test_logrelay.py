@@ -1,6 +1,7 @@
 """Unit tests for the log relay (misp_container.logrelay)."""
 
 import os
+import signal
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "files"))
@@ -86,3 +87,19 @@ class TestRelay:
         with patch("misp_container.logrelay.getlog") as getlog:
             Relay._log("server-sync.log", "GET /x 200")
         getlog.assert_called_once_with("misp:server-sync")
+
+    def test_sigterm_ends_the_run_after_a_last_poll(self, tmp_path, monkeypatch):
+        relay, seen = _relay(tmp_path)
+        log = tmp_path / "server-sync.log"
+        handlers = {}
+        monkeypatch.setattr("misp_container.logrelay.signal.signal", lambda signum, h: handlers.update({signum: h}))
+
+        def sleep(_):
+            # A worker writes its last line, then the supervisor stops the relay
+            with open(log, "a") as f:
+                f.write("last\n")
+            handlers[signal.SIGTERM](signal.SIGTERM, None)
+
+        monkeypatch.setattr("misp_container.logrelay.time.sleep", sleep)
+        relay.run()
+        assert [line for _, line in seen] == ["last"]

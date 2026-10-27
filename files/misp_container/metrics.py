@@ -86,6 +86,18 @@ def _job_redis_settings() -> dict[str, str]:
             for key in ("host", "port", "password", "database", "namespace")}
 
 
+def job_redis() -> tuple[redis.Redis, str]:
+    """A client of the Redis that holds MISP's background jobs, and the namespace of its keys."""
+    cfg = _job_redis_settings()
+    host = cfg.get("host") or "redis"
+    # MISP's phpredis connects over TLS to a host written tls://<name>
+    client = redis.Redis(host=host.removeprefix("tls://"), port=int(cfg.get("port") or 6379),
+                         password=cfg.get("password") or None, db=int(cfg.get("database") or 1),
+                         ssl=host.startswith("tls://"), socket_timeout=3, socket_connect_timeout=3,
+                         decode_responses=True)
+    return client, cfg.get("namespace") or "background_jobs"
+
+
 def _collect_queue_metrics() -> str:
     """Jobs waiting in or running from each queue, read where MISP keeps them.
 
@@ -93,14 +105,7 @@ def _collect_queue_metrics() -> str:
     runs, and 3 or 4 once it ends. The live state is in Redis: a list per queue
     for waiting jobs, and a running:<queue>:<id> key while a worker runs one.
     """
-    cfg = _job_redis_settings()
-    ns = cfg.get("namespace") or "background_jobs"
-    host = cfg.get("host") or "redis"
-    # MISP's phpredis connects over TLS to a host written tls://<name>
-    client = redis.Redis(host=host.removeprefix("tls://"), port=int(cfg.get("port") or 6379),
-                         password=cfg.get("password") or None, db=int(cfg.get("database") or 1),
-                         ssl=host.startswith("tls://"), socket_timeout=3, socket_connect_timeout=3,
-                         decode_responses=True)
+    client, ns = job_redis()
     try:
         counts = {q: client.llen(f"{ns}:{q}") for q in WORKER_QUEUES}
         running_prefix = f"{ns}:{RUNNING_PREFIX}:"

@@ -260,39 +260,57 @@ class TestRunRecords:
 
 
 class TestWaitForConfigure:
-    """Pods wait for the configure run of their own image version and configuration checksum."""
+    """Pods wait for a configure run of their own image version and configuration checksum."""
 
     def _run(self, tmp_path, monkeypatch, sequences, image_version="3.0_wip+abc", checksum="c1"):
         marker = tmp_path / "version"
         marker.write_text(image_version)
         monkeypatch.setattr("misp_container.DIST_VERSION_FILE", str(marker))
-        monkeypatch.setenv("MISP_CONFIG_CHECKSUM", checksum)
+        monkeypatch.setenv("MISP_CHECKSUM", checksum)
         calls = iter(sequences)
-
-        def fake_dict_query(sql, params=None):
-            return [{"setting": k, "value": json.dumps(v)} for k, v in next(calls).items()]
-
-        monkeypatch.setattr(db, "dict_query", fake_dict_query)
+        monkeypatch.setattr(db, "get_system_setting", lambda name: next(calls))
         monkeypatch.setattr(db.time, "sleep", lambda s: None)
         return db.wait_for_configure(retries=len(sequences), wait_seconds=0)
 
     def test_waits_for_its_own_version_and_checksum(self, tmp_path, monkeypatch):
         self._run(tmp_path, monkeypatch, [
-            {db.VERSION_ROW: "3.0_wip+old", db.CHECKSUM_ROW: "c1"},   # an older image's run
-            {db.VERSION_ROW: "3.0_wip+abc", db.CHECKSUM_ROW: "c0"},   # an older configuration's run
-            {db.VERSION_ROW: "3.0_wip+abc", db.CHECKSUM_ROW: "c1"},   # its own run: go
+            None,                                                   # no run yet
+            [{"version": "3.0_wip+old", "checksum": "c1"}],          # an older image's run
+            [{"version": "3.0_wip+abc", "checksum": "c0"}],          # an older configuration's run
+            [{"version": "3.0_wip+abc", "checksum": "c0"},
+             {"version": "3.0_wip+abc", "checksum": "c1"}],          # its own run: go
         ])
+
+    def test_an_older_pod_finds_its_run_after_a_newer_one(self, tmp_path, monkeypatch):
+        # A pod of the previous revision that restarts while the rollout stalls
+        self._run(tmp_path, monkeypatch, [[{"version": "3.0_wip+abc", "checksum": "c1"},
+                                           {"version": "3.0_wip+new", "checksum": "c2"}]])
 
     def test_gives_up_without_its_own_run(self, tmp_path, monkeypatch):
         with pytest.raises(SystemExit):
-            self._run(tmp_path, monkeypatch, [{db.VERSION_ROW: "3.0_wip+abc", db.CHECKSUM_ROW: "c0"}] * 2)
-
-    def test_misp_live_plays_no_part(self, tmp_path, monkeypatch):
-        # MISP.live is MISP's maintenance switch; a pod restarted during maintenance still starts
-        self._run(tmp_path, monkeypatch, [{db.VERSION_ROW: "3.0_wip+abc", db.CHECKSUM_ROW: "c1", "MISP.live": False}])
+            self._run(tmp_path, monkeypatch, [[{"version": "3.0_wip+abc", "checksum": "c0"}]] * 2)
 
     def test_without_a_checksum_the_version_decides(self, tmp_path, monkeypatch):
-        self._run(tmp_path, monkeypatch, [{db.VERSION_ROW: "3.0_wip+abc"}], checksum="")
+        self._run(tmp_path, monkeypatch, [[{"version": "3.0_wip+abc"}]], checksum="")
+
+
+class TestRecordConfigured:
+    def test_keeps_the_newest_runs_and_moves_a_repeated_one_last(self, tmp_path, monkeypatch):
+        marker = tmp_path / "version"
+        marker.write_text("v")
+        monkeypatch.setattr("misp_container.DIST_VERSION_FILE", str(marker))
+        monkeypatch.setenv("MISP_CHECKSUM", "c3")
+        runs = [{"version": "v", "checksum": f"c{i}"} for i in range(db.CONFIGURED_KEEP)]
+        written = {}
+        monkeypatch.setattr(db, "get_system_setting", lambda name: runs)
+        monkeypatch.setattr(db, "set_system_setting", lambda name, value: written.update({name: value}))
+        db.record_configured()
+        assert written[db.CONFIGURED_ROW][-1] == {"version": "v", "checksum": "c3"}
+        assert written[db.CONFIGURED_ROW].count({"version": "v", "checksum": "c3"}) == 1
+        monkeypatch.setenv("MISP_CHECKSUM", "c99")
+        db.record_configured()
+        assert len(written[db.CONFIGURED_ROW]) == db.CONFIGURED_KEEP
+        assert written[db.CONFIGURED_ROW][0] == {"version": "v", "checksum": "c1"}
 
 
 class TestHasColumn:

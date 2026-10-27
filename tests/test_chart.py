@@ -99,7 +99,7 @@ def test_the_pods_wait_for_a_configure_run_of_their_own_configuration():
             if container["name"] == "caddy":
                 continue
             env = {e["name"]: e for e in container.get("env", [])}
-            assert env["MISP_CONFIG_CHECKSUM"]["valueFrom"]["fieldRef"]["fieldPath"] == \
+            assert env["MISP_CHECKSUM"]["valueFrom"]["fieldRef"]["fieldPath"] == \
                 "metadata.annotations['checksum/config']", container["name"]
 
 
@@ -290,3 +290,15 @@ def test_every_volume_mount_names_a_volume_of_its_pod():
                 mounts = {m["name"] for m in container.get("volumeMounts", [])}
                 assert mounts <= volumes, (f"{doc['kind']} {doc['metadata']['name']} ({' '.join(sets) or 'defaults'}): "
                                            f"{container['name']} mounts {sorted(mounts - volumes)}, which the pod lacks")
+
+
+def test_a_stopping_web_pod_lets_its_running_requests_finish():
+    web = chart.find("Deployment", "web")
+    spec = chart.pod_spec(web)
+    containers = {c["name"]: c for c in spec["containers"]}
+    php_fpm = " ".join(containers["php-fpm"]["lifecycle"]["preStop"]["exec"]["command"])
+    assert "kill -QUIT 1" in php_fpm, "SIGTERM would end PHP-FPM's running requests at once"
+    assert containers["caddy"]["lifecycle"]["preStop"]["exec"]["command"][0] == "sleep"
+    timeout = int(env_data()["PHP_REQUEST_TIMEOUT"])
+    sleep = int(re.search(r"sleep (\d+)", php_fpm).group(1))
+    assert spec["terminationGracePeriodSeconds"] > sleep + timeout

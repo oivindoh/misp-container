@@ -201,6 +201,7 @@
         "tasks": {"type": "object", "additionalProperties": {"type": "string"},
                   "propertyNames": {"enum": ["block-invalid-users", "cache-feeds", "cache-servers", "check-user-validity", "fetch-feeds", "periodic-summary", "pull-servers", "push-servers", "push-taxii", "sharing-group-blueprints", "update-galaxies", "update-noticelists", "update-object-templates", "update-taxonomies", "update-warninglists"]}},
         "workflows": {"type": "object", "additionalProperties": {"type": "string"}},
+        "activeDeadlineSeconds": {"type": "integer", "minimum": 1},
         "resources": {"$ref": "#/definitions/resources"}
       }
     },

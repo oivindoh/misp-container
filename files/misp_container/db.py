@@ -240,10 +240,13 @@ def run_records() -> dict[str, dict]:
                                         (RUNS_PREFIX + "%",)))
 
 
-# The configure run's record of what it configured: the image version and the checksum of the
-# chart's configuration (the pods' checksum/config annotation, MISP_CONFIG_CHECKSUM)
-VERSION_ROW = "misp_docker.defaults_version"
-CHECKSUM_ROW = "misp_docker.config_checksum"
+# The configure runs' record of what they configured, newest last: the image version and the
+# checksum of the chart's configuration (the pods' checksum/config annotation, MISP_CHECKSUM).
+# A pod of the previous revision that restarts while a rollout stalls finds its own run here.
+CONFIGURED_ROW = "misp_docker.configured"
+CONFIGURED_KEEP = 10
+# The single record of releases before CONFIGURED_ROW
+LEGACY_ROWS = ("misp_docker.defaults_version", "misp_docker.config_checksum")
 
 
 def image_version() -> str:
@@ -256,24 +259,31 @@ def image_version() -> str:
 
 
 def configured_for() -> dict[str, str]:
-    """{VERSION_ROW, CHECKSUM_ROW: what this pod's configure run must have recorded}; empty values dropped."""
-    wanted = {VERSION_ROW: image_version(), CHECKSUM_ROW: envmod.env("MISP_CONFIG_CHECKSUM")}
-    return {row: value for row, value in wanted.items() if value}
+    """{"version", "checksum": what a configure run must have recorded for this pod}; empty values dropped."""
+    wanted = {"version": image_version(), "checksum": envmod.env("MISP_CHECKSUM")}
+    return {key: value for key, value in wanted.items() if value}
+
+
+def configured_runs() -> list[dict]:
+    """The recorded configure runs, newest last."""
+    runs = get_system_setting(CONFIGURED_ROW)
+    return runs if isinstance(runs, list) else []
 
 
 def record_configured() -> None:
     """Record that a configure run finished for this image and this configuration."""
-    for row, value in configured_for().items():
-        set_system_setting(row, value)
+    run = configured_for()
+    runs = [r for r in configured_runs() if r != run] + [run]
+    set_system_setting(CONFIGURED_ROW, runs[-CONFIGURED_KEEP:])
 
 
 def clear_configured() -> None:
-    """Forget the last configure run: the pods wait for the next one."""
-    execute("DELETE FROM system_settings WHERE setting IN (%s, %s)", (VERSION_ROW, CHECKSUM_ROW))
+    """Forget every configure run: the pods wait for the next one."""
+    execute("DELETE FROM system_settings WHERE setting IN (%s, %s, %s)", (CONFIGURED_ROW, *LEGACY_ROWS))
 
 
 def wait_for_configure(retries: int = 120, wait_seconds: int = 3) -> None:
-    """Wait for the configure run of this image and this configuration.
+    """Wait for a configure run of this image and this configuration.
 
     A pod of a newer image or of a changed configuration waits for its own
     configure run, whatever tool applied the manifests and in whatever order.
@@ -282,18 +292,13 @@ def wait_for_configure(retries: int = 120, wait_seconds: int = 3) -> None:
     wanted = configured_for()
     log.info("waiting for the configure run of %s", ", ".join(f"{k}={v}" for k, v in wanted.items()) or "anything")
     for i in range(retries, 0, -1):
-        found = {}
-        for row in dict_query("SELECT setting, value FROM system_settings WHERE setting IN (%s, %s)",
-                              (VERSION_ROW, CHECKSUM_ROW)):
-            try:
-                found[row["setting"]] = json.loads(row["value"])
-            except (TypeError, ValueError):
-                found[row["setting"]] = row["value"]
-        if all(found.get(row) == value for row, value in wanted.items()) and (wanted or found):
-            log.info("configured for %s", ", ".join(f"{k}={v}" for k, v in found.items()))
+        runs = configured_runs()
+        if any(all(run.get(k) == v for k, v in wanted.items()) for run in runs):
+            log.info("configured for %s", ", ".join(f"{k}={v}" for k, v in wanted.items()) or "anything")
             return
-        log.info("waiting: configured for %s (%d retries left)",
-                 ", ".join(f"{k}={v}" for k, v in found.items()) or "nothing", i)
+        latest = runs[-1] if runs else {}
+        log.info("waiting: last configured for %s (%d retries left)",
+                 ", ".join(f"{k}={v}" for k, v in latest.items()) or "nothing", i)
         time.sleep(wait_seconds)
     log.error("no configure run for %s within the timeout; is the configure Job running, or did it fail?",
               ", ".join(f"{k}={v}" for k, v in wanted.items()) or "this pod")
