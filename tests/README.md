@@ -169,7 +169,9 @@ Run with: `mise run test-integration`
 5. `helm rollback` to the revision before runs its configure Job again, removes the upgrade's,
    restores the value and rolls the web pods; the smoke test and `helm test` pass.
 
-Run with: `mise run test-lifecycle`
+Run with: `mise run test-lifecycle`. While this tree's `appVersion` is the newest release's,
+as it is right after a release, run it with `MISP_IMAGE_TAG` set to another tag: the tree's
+images would otherwise replace the release's in the cluster, and the suite refuses.
 
 ## Hub-spoke sync suite
 
