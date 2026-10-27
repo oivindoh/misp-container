@@ -409,6 +409,9 @@ jobs:
           sbom: true
       - name: Fail on a fixable CRITICAL finding (misp, arm64)
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        # The digest is an index; without a platform Trivy looks for linux/amd64 in it
+        env:
+          TRIVY_PLATFORM: linux/arm64
         with:
           image-ref: ${{ env.IMAGE_MISP }}@${{ steps.misp.outputs.digest }}
           severity: CRITICAL
@@ -416,6 +419,8 @@ jobs:
           exit-code: "1"
       - name: Fail on a fixable CRITICAL finding (modules, arm64)
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        env:
+          TRIVY_PLATFORM: linux/arm64
         with:
           image-ref: ${{ env.IMAGE_MODULES }}@${{ steps.modules.outputs.digest }}
           severity: CRITICAL
