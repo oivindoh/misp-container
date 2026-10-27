@@ -115,7 +115,7 @@ change; the upgrade removes the Job of the previous revision.
 | Tool | Notes |
 |------|-------|
 | Helm | Each `helm install` or `helm upgrade` creates the Jobs of its revision and removes those of the previous one. |
-| Argo CD | The Jobs are Sync hooks (`configure` in wave 1, the Deployments in wave 2, `org-sync` in wave 3), recreated on every sync. Argo CD renders the chart as revision 1 every time, so the hook, not the name, makes the new Job. The Deployments do not even roll before the Job succeeded. |
+| Argo CD | The Jobs are Sync hooks (`configure` in wave 1, the Deployments in wave 2, `org-sync` in wave 3), recreated on every sync. Argo CD renders the chart as revision 1 every time, so the hook, not the name, makes the new Job. The Deployments do not even roll before the Job succeeded. The attachments claim is in wave 1 beside its first consumer, the configure hook, so a storage class that binds on first consumer does not stall the first sync. |
 | Flux | A HelmRelease upgrades the release as `helm upgrade` does. |
 
 ## Scaling

@@ -1,4 +1,4 @@
-# Plain HTTP on :8080, for an ingress, a Gateway or a load balancer in front, which
+# Plain HTTP on :8080, for a Gateway or a load balancer in front, which
 # terminates TLS. Caddy writes nothing: no certificates, no autosaved config and no
 # storage checks, so its root stays read-only.
 {
@@ -19,8 +19,12 @@
 :8080 {
 	root * /var/www/MISP/app/webroot
 
-	# PHP-FPM ping for the pod probes (the [ping] pool)
-	@fpm_ping path /fpm-ping
+	# PHP-FPM ping for the pod probes (the [ping] pool). The kubelet sends no
+	# X-Forwarded-For and the Gateway always does, so no client reaches the pool
+	@fpm_ping {
+		path /fpm-ping
+		not header X-Forwarded-For *
+	}
 	reverse_proxy @fpm_ping 127.0.0.1:9003 {
 		transport fastcgi {
 			# FPM matches ping.path against SCRIPT_NAME; without these it

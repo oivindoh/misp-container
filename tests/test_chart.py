@@ -92,7 +92,8 @@ def test_the_pods_wait_for_a_configure_run_of_their_own_configuration():
     expected = configure["metadata"]["annotations"]["checksum/config"]
     pods = [chart.find("Deployment", name)["spec"]["template"] for name in ("web", "worker")]
     pods.append(chart.find("Job", "org-sync")["spec"]["template"])
-    pods += [c["spec"]["jobTemplate"]["spec"]["template"] for c in kinds("cronjobs.enabled=true")["CronJob"]]
+    pods += [c["spec"]["jobTemplate"]["spec"]["template"] for c in kinds("cronjobs.enabled=true")["CronJob"]
+             if c["metadata"]["labels"]["app.kubernetes.io/component"] == "misp-task"]
     for pod in [configure, *pods]:
         assert pod["metadata"]["annotations"]["checksum/config"] == expected
         for container in pod["spec"]["containers"]:
@@ -220,8 +221,11 @@ def test_the_policies_select_every_pod_of_the_release_and_take_the_egress_value(
             spec = doc["spec"]["jobTemplate"]["spec"] if doc["kind"] == "CronJob" else doc["spec"]
             labels = doc["metadata"]["labels"] if doc["kind"] == "Pod" else spec["template"]["metadata"]["labels"]
             assert release.items() <= labels.items(), doc["metadata"]["name"]
+    # The components need no rule; an external PostgreSQL and Redis get theirs
     egress = chart.find("NetworkPolicy", "misp-egress", *on)["spec"]["egress"]
-    assert {"ports": [{"port": 5432, "protocol": "TCP"}, {"port": 6379, "protocol": "TCP"}]} in egress
+    assert not [rule for rule in egress if {p["port"] for p in rule.get("ports", [])} & {5432, 6379}]
+    egress = chart.find("NetworkPolicy", "misp-egress", "networkPolicy.enabled=true")["spec"]["egress"]
+    assert {"ports": [{"port": 5432, "protocol": "TCP"}]} in egress and {"ports": [{"port": 6379, "protocol": "TCP"}]} in egress
     egress = chart.find("NetworkPolicy", "misp-egress", "networkPolicy.enabled=true",
                         "networkPolicy.egress[0].ports[0].port=7432",
                         "networkPolicy.egress[0].ports[0].protocol=TCP")["spec"]["egress"]
@@ -261,12 +265,22 @@ def test_attachments_without_the_claim_or_a_bucket_are_refused():
         chart.objects("attachments.claim=false")
 
 
-def test_every_component_renders_and_the_default_renders_none():
+def test_every_component_switches_and_the_default_renders_only_housekeeping():
     for component in chart.components():
-        assert chart.render_text(*chart.component_sets(component)) != chart.render_text(), (
-            f"{component}.enabled=true changes nothing in the render")
-    assert not any(d["kind"] in ("StatefulSet", "CronJob", "Ingress", "HTTPRoute", "NetworkPolicy")
-                   for d in chart.objects())
+        switched = f"{component}.enabled={str(not chart.on_by_default(component)).lower()}"
+        assert chart.render_text(switched, *chart.NEEDS.get(component, [])) != chart.render_text(), (
+            f"{switched} changes nothing in the render")
+    assert not any(d["kind"] in ("StatefulSet", "HTTPRoute", "NetworkPolicy") for d in chart.objects())
+    assert {d["metadata"]["labels"]["app.kubernetes.io/component"]
+            for d in chart.objects() if d["kind"] == "CronJob"} == {"misp-housekeeping"}
+
+
+def test_the_route_needs_a_proxy_range_or_the_policies():
+    import pytest
+    with pytest.raises(RuntimeError, match="TRUSTED_PROXY_CIDR"):
+        chart.objects("httpRoute.enabled=true")
+    route = chart.find("HTTPRoute", "misp", "httpRoute.enabled=true", "networkPolicy.enabled=true")
+    assert route["spec"]["rules"][0]["timeouts"] == {"request": "300s"}
 
 
 def test_a_misspelt_value_is_refused():

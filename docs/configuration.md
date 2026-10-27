@@ -92,7 +92,7 @@ engine needs MySQL, so it is not available.
 
 ## HTTPS
 
-Caddy serves plain HTTP on 8080, for an ingress, a Gateway or a load balancer in front, which
+Caddy serves plain HTTP on 8080, for a Gateway or a load balancer in front, which
 terminates TLS.
 
 ## Authentication plugins

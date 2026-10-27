@@ -91,6 +91,12 @@ def test_caddy_proxies_fpm_ping(stack):
     assert stack.http("GET", "/fpm-ping", json_api=False)[1].strip() == "pong"
 
 
+def test_the_ping_pool_is_closed_to_a_client_behind_a_proxy(stack):
+    # The probes' pool has one child: a client behind the Gateway, which sends X-Forwarded-For, never reaches it
+    status, body = stack.http("GET", "/fpm-ping", json_api=False, headers={"X-Forwarded-For": "203.0.113.9"})
+    assert body.strip() != "pong", status
+
+
 def test_login_page(stack):
     assert stack.http("GET", "/users/login", json_api=False)[0] == 200
 
@@ -380,8 +386,8 @@ def test_database_php_points_at_the_external_postgresql(stack):
     assert f"'sslmode' => 'verify-full;sslrootcert={DB_CA}'," in config
 
 
-def test_config_php_points_at_the_external_redis(stack):
-    assert "'redis_host' => 'external-redis'" in stack.exec("web", "cat /var/www/MISP/app/Config/config.php")
+def test_misp_reads_the_external_redis(stack):
+    assert setting(stack, "MISP.redis_host") == "external-redis"
 
 
 # -- external PostgreSQL ---------------------------------------------------------------

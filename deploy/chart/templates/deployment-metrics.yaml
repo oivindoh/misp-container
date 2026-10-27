@@ -20,6 +20,7 @@ spec:
         prometheus.io/port: "9191"
         prometheus.io/path: "/metrics"
         {{- include "misp.checksums" . | nindent 8 }}
+        {{- include "misp.podAnnotations" . | nindent 8 }}
     spec:
       {{- include "misp.podSecurityContext" . | nindent 6 }}
       {{- include "misp.podScheduling" . | nindent 6 }}
@@ -71,7 +72,7 @@ spec:
             - name: certs
               mountPath: /etc/misp-docker/certs
               readOnly: true
-            {{- with include "misp.dbCAVolumeMount" . }}
+            {{- with include "misp.caVolumeMounts" . }}
             {{- . | nindent 12 }}
             {{- end }}
           resources:
@@ -98,6 +99,6 @@ spec:
           secret:
             secretName: misp-certs
             optional: true
-        {{- with include "misp.dbCAVolume" . }}
+        {{- with include "misp.caVolumes" . }}
         {{- . | nindent 8 }}
         {{- end }}

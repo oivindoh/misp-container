@@ -18,9 +18,13 @@ spec:
     metadata:
       labels:
         {{- include "misp.podLabels" (dict "root" . "name" "redis") | nindent 8 }}
-      {{- if .Values.secrets.create }}
+      {{- if or .Values.secrets.create .Values.podAnnotations }}
       annotations:
-        checksum/secrets: {{ toJson .Values.secrets.app | sha256sum }}
+        {{- if .Values.secrets.create }}
+        # A new password restarts Redis, which keeps no data: the hash covers it alone
+        checksum/secrets: {{ toJson .Values.secrets.app.MISP_REDIS_PASSWORD | sha256sum }}
+        {{- end }}
+        {{- include "misp.podAnnotations" . | nindent 8 }}
       {{- end }}
     spec:
       securityContext:

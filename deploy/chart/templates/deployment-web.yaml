@@ -26,11 +26,16 @@ spec:
         {{- include "misp.podLabels" (dict "root" . "name" "web") | nindent 8 }}
       annotations:
         {{- include "misp.checksums" . | nindent 8 }}
+        {{- include "misp.podAnnotations" . | nindent 8 }}
     spec:
       # The preStop hooks, then PHP_REQUEST_TIMEOUT for the running requests
       terminationGracePeriodSeconds: {{ add 15 (int (default 330 (index .Values.env "PHP_REQUEST_TIMEOUT"))) }}
       {{- include "misp.podSecurityContext" . | nindent 6 }}
       {{- include "misp.podScheduling" . | nindent 6 }}
+      {{- with .Values.web.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       containers:
         # caddy, from the main image: the static files of its webroot, the rest over
         # FastCGI to PHP-FPM on the pod's loopback
@@ -38,7 +43,7 @@ spec:
           {{- include "misp.image" . | nindent 10 }}
           args: ["caddy", "run", "--config", "/etc/caddy/Caddyfile"]
           env:
-            # The ingress or Gateway proxies whose X-Forwarded-For caddy follows; unset,
+            # The Gateway's proxies whose X-Forwarded-For caddy follows; unset,
             # every private range
             - name: TRUSTED_PROXY_CIDR
               valueFrom:

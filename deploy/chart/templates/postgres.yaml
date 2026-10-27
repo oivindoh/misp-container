@@ -18,11 +18,16 @@ spec:
     metadata:
       labels:
         {{- include "misp.podLabels" (dict "root" . "name" "postgres") | nindent 8 }}
+      {{- with include "misp.podAnnotations" . }}
+      annotations:
+        {{- . | nindent 8 }}
+      {{- end }}
     spec:
       securityContext:
         runAsUser: 999
         runAsGroup: 999
         fsGroup: 999
+        fsGroupChangePolicy: OnRootMismatch
         runAsNonRoot: true
         seccompProfile:
           type: RuntimeDefault
@@ -43,8 +48,11 @@ spec:
           volumeMounts:
             - name: postgres-data
               mountPath: /var/lib/postgresql
+          resources:
+            {{- toYaml .Values.postgres.resources | nindent 12 }}
           securityContext:
             allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
             capabilities:
               drop: [ALL]
       containers:

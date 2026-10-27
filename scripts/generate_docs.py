@@ -146,7 +146,7 @@ def secrets() -> str:
 
 
 def components() -> str:
-    return table(("Component", "Adds"), chart.value_rows()[1])
+    return table(("Component", "Default", "Adds"), chart.value_rows()[1])
 
 
 def values() -> str:

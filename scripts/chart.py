@@ -21,15 +21,24 @@ SOURCE = re.compile(r"^# Source: [\w-]+/(templates/[\w./-]+)$", re.M)
 TOP_KEY = re.compile(r"^([A-Za-z]\w*):")
 
 
+# The values a component needs beside its switch: the route refuses to render without a
+# proxy range or the network policies
+NEEDS = {"httpRoute": ["env.TRUSTED_PROXY_CIDR=10.42.0.0/16"]}
+
+
 def component_sets(component: str) -> list[str]:
     """The --set values that switch a component on."""
-    return [f"{component}.enabled=true"]
+    return [f"{component}.enabled=true", *NEEDS.get(component, [])]
 
 
 def components() -> list[str]:
     """The top-level keys of values.yaml with an enabled flag, in file order."""
     values = yaml.safe_load((CHART / "values.yaml").read_text())
     return [key for key, value in values.items() if isinstance(value, dict) and "enabled" in value]
+
+
+def on_by_default(component: str) -> bool:
+    return bool(yaml.safe_load((CHART / "values.yaml").read_text())[component]["enabled"])
 
 
 def value_comments() -> dict[str, str]:
@@ -48,12 +57,13 @@ def value_comments() -> dict[str, str]:
     return comments
 
 
-def value_rows() -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
-    """(values, components): the (`key`, comment) rows of values.yaml for the docs, the components apart."""
+def value_rows() -> tuple[list[tuple[str, ...]], list[tuple[str, ...]]]:
+    """(values, components): the (`key`, comment) rows of values.yaml for the docs, the components apart,
+    each with its default, on or off."""
     comments = value_comments()
     parts = components()
     values = [(f"`{key}`", text) for key, text in comments.items() if key not in parts]
-    return values, [(f"`{key}`", comments.get(key, "")) for key in parts]
+    return values, [(f"`{key}`", "on" if on_by_default(key) else "off", comments.get(key, "")) for key in parts]
 
 
 def template_component(template: str) -> str:
