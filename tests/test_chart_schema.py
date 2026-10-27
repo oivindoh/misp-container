@@ -2,14 +2,17 @@
 
 The renders: the default values, each component on, every component on, and the
 values a release changes most. kubeconform validates each against the Kubernetes
-schemas and, for the HTTPRoute, the datree CRD catalog at a pinned commit; both
-download once into a cache under the user's cache directory. Pin a newer commit when
-the chart moves to another API version of the HTTPRoute. Needs helm and kubeconform
-on PATH (mise install); without kubeconform the tests skip, except in CI, where they
-fail.
+schemas of the version the stack suites run (K3S_IMAGE), then, for a kind they lack,
+the HTTPRoute, against the datree CRD catalog at a pinned commit. A schema it finds
+downloads once into a cache under the user's cache directory; a render with the
+HTTPRoute asks the Kubernetes schemas for it on every run, so it needs the network.
+Pin a newer commit when the chart moves to another API version of the HTTPRoute.
+Needs helm and kubeconform on PATH (mise install); without kubeconform the tests skip,
+except in CI, where they fail.
 """
 
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -24,6 +27,8 @@ import chart  # noqa: E402
 
 CRD_SCHEMAS = ("https://raw.githubusercontent.com/datreeio/CRDs-catalog/041baf4c1d3740ca21461cab765e7432ecd073ef"
                "/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json")
+# The Kubernetes version of the suites' k3s
+KUBERNETES = re.search(r"rancher/k3s:v(\d+\.\d+\.\d+)", (REPO / "tests/e2e/cluster.py").read_text()).group(1)
 
 
 def renders() -> dict[str, list[str]]:
@@ -66,9 +71,9 @@ def test_render_validates_against_the_schemas(name):
     cache = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "kubeconform"
     cache.mkdir(parents=True, exist_ok=True)
     result = subprocess.run(
-        [kubeconform(), "-strict", "-summary", "-cache", str(cache),
-         # The local copies first: a kind they do not hold falls through to the default
-         "-schema-location", CRD_SCHEMAS, "-schema-location", "default"],
+        [kubeconform(), "-strict", "-summary", "-cache", str(cache), "-kubernetes-version", KUBERNETES,
+         # The Kubernetes schemas first: the catalog answers only the kinds they lack
+         "-schema-location", "default", "-schema-location", CRD_SCHEMAS],
         input=chart.render_text(*renders()[name]), capture_output=True, text=True,
     )
     assert result.returncode == 0, f"render {name}:\n{result.stdout}{result.stderr}"

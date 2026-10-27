@@ -91,10 +91,23 @@ def wip_chart_version(previous_chart: str | None, tag: str, kind: str) -> str:
     return f"{base}-{suffix}"
 
 
+# What helm prints when GHCR has no such chart; any other failure leaves the answer open
+NOT_FOUND = re.compile(r"not found|manifest unknown|name unknown", re.I)
+
+
 def published(chart_version: str) -> bool:
-    """Whether GHCR has this chart version; helm push would replace it."""
-    return subprocess.run(["helm", "show", "chart", CHART_REF, "--version", chart_version],
-                          capture_output=True).returncode == 0
+    """Whether GHCR has this chart version; helm push would replace it.
+
+    Raises when the lookup fails for another reason than "not there", such as no
+    route to GHCR: that must not pass as "not there".
+    """
+    result = subprocess.run(["helm", "show", "chart", CHART_REF, "--version", chart_version],
+                            capture_output=True, text=True)
+    if result.returncode == 0:
+        return True
+    if NOT_FOUND.search(result.stderr):
+        return False
+    raise RuntimeError(f"cannot tell whether GHCR has chart {chart_version}: {result.stderr.strip()}")
 
 
 def set_chart(text: str, version: str, app_version: str) -> str:

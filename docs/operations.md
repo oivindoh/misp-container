@@ -11,6 +11,8 @@
 - A new PostgreSQL major version cannot read the data of the one before: move it with a dump
   and a restore.
 - While Keycloak is down, turn OIDC off and log in with a break-glass account.
+- Upgrade after reading the Release notes and a backup; the troubleshooting table names what
+  to read when a pod or a Job does not come up.
 
 ## What to back up
 
@@ -93,8 +95,28 @@ at all times instead, which leaves every local password open to guessing.
 [kubernetes.md](kubernetes.md#install) has the chart versions.
 
 A release can carry a newer MISP pin, whose schema changes are one-way: the configure Job
-applies them, and only a backup goes back. Before each upgrade, back up the database and check
-that the backup restores ([What to back up](#what-to-back-up), [Restore](#restore)).
+applies them, and only a backup goes back.
+
+### Upgrade a release
+
+1. Read the GitHub Release of each release since yours: a breaking change names the values to
+   change.
+2. Back up the database and check that the backup restores ([What to back up](#what-to-back-up),
+   [Restore](#restore)).
+3. Upgrade:
+
+   ```bash
+   helm upgrade misp oci://ghcr.io/oivindoh/charts/misp --version <chart version> -n misp -f values.yaml
+   ```
+
+4. Read the configure Job of the new revision; it ends with `configuration complete`:
+
+   ```bash
+   kubectl -n misp logs job/configure-<revision> -c configure
+   ```
+
+5. Check that `misp_container_job_runs_total{operation="configure",status="error"}` did not
+   rise ([metrics.md](metrics.md)) and that the login page serves.
 
 ### A new PostgreSQL major version
 
@@ -112,4 +134,17 @@ refuses to start on it. Move the data with a dump:
 3. Upgrade to the new release with `web.replicas: 0` and `worker.replicas: 0`, then follow
    [Restore](#restore) from step 2. The StatefulSet gets an empty claim, and the new major
    version creates its cluster there.
+
+## Troubleshooting
+
+| Symptom | Cause | Read |
+|---------|-------|------|
+| Web and worker pods log `waiting: last configured for ...`, then restart | The configure Job of their revision has not finished, or failed | `kubectl -n misp logs job/configure-<revision> -c configure` |
+| The configure Job exits 1 with `refusing to configure MISP` | A placeholder secret, a salt or encryption key too short, or an identity that differs from the database's | The lines above it name the setting |
+| The `migrate` container exits 2 to 5 | Its exit code names the cause | [migration.md](migration.md), exit codes |
+| The org-sync Job exits 1 | A step failed; the other items of the step ran | `kubectl -n misp logs job/org-sync-<revision>`: the failed item and its error |
+| API calls answer 500 and logins fail | Redis is at `redis.maxmemory` and refuses writes | The redis pod's log; raise `redis.maxmemory` and its memory limit |
+| `misp_setting_manual` is above 0 | A setting changed in MISP's UI that the repository does not carry | The configure log names it, with who and when: move it into git or undo it |
+| A task CronJob fails | The console failed, a pull or push job ended failed, or a feed could not be fetched | `kubectl -n misp logs job/<task>-<n>`: the server or the feed |
+| A task Job ends `DeadlineExceeded` | The run passed `cronjobs.activeDeadlineSeconds` | The Job's log names the command it stopped |
 

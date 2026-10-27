@@ -45,6 +45,7 @@ Tests of the Python entrypoint library (`files/misp_container/`), the scripts an
 | `test_settings.py` | The repository's settings as the chart renders them (_settings.tpl) and a pod reads them. |
 | `test_sync.py` | Unit tests for the org sync engine. |
 | `test_task.py` | Unit tests for the periodic task runner. |
+| `test_web.py` | Unit tests for the web role (misp_container.web): the session path and the PHP-FPM pool. |
 | `test_worker.py` | Unit tests for the worker supervisor (misp_container.worker): the programs, restarts and stop. |
 <!-- end generated -->
 
@@ -53,8 +54,9 @@ Run with: `mise run test` or `PYTHONPATH=files python -m pytest tests/ -v --igno
 **Render check** (`test_chart_schema.py`): runs `helm lint --strict`, renders the chart with
 the default values, with each component on, with every component on, and with supplied
 Secrets, attachments in S3 and a workflow CronJob. It validates each render with
-`kubeconform -strict` against the Kubernetes schemas and, for the HTTPRoute, the datree CRD
-catalog at a pinned commit; the first run downloads both into a cache. It needs `helm` and
+`kubeconform -strict` against the Kubernetes schemas of the suites' k3s and, for the
+HTTPRoute, the datree CRD catalog at a pinned commit. A schema it finds downloads once into a
+cache; a render with the HTTPRoute needs the network on every run. It needs `helm` and
 `kubeconform` (`mise install` in the repository); without `kubeconform` the render tests skip,
 and in CI they fail.
 `test_chart.py` checks what the renders hold.
@@ -154,11 +156,11 @@ Run with: `mise run test-integration`
 
 `e2e/test_lifecycle.py` takes the chart from its install to a rollback. Each step must pass:
 
-1. The newest release of this major version, other than HEAD's own tag, installs from GHCR
-   with its own images, and the smoke test passes. The step skips without such a release, and
-   when the release has no image for the node's architecture.
-2. This tree's chart and images upgrade it, or install fresh. The smoke test and `helm test`
-   pass.
+1. The newest chart of this major version in GHCR installs with its own images and the
+   `tests/k3s/values.yaml` of its tag, and the smoke test passes. The step skips without such
+   a chart.
+2. This tree's chart and images upgrade it, or install fresh, with the network policies, the
+   CronJobs and housekeeping on. The smoke test and `helm test` pass.
 3. Two tasks (`update-noticelists`, `periodic-summary`) and a housekeeping run
    (`housekeeping-jobs`), each started from its CronJob, succeed. The configure Job writes
    JSON lines only.

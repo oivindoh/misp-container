@@ -136,9 +136,9 @@ UI. A setting's env var is its name in upper case with dots as underscores
 | `gpg` | GnuPG settings |
 | `s3` | S3 attachment storage (only while PLUGIN_S3_BUCKET_NAME is set, which also sets MISP.attachments_dir to s3://) |
 | `proxy` | HTTP proxy settings (an empty Proxy.host means no proxy) |
-| `custom_auth` | header authentication from a reverse proxy, no directory lookup (CUSTOM_AUTH_ENABLE=true turns it on; the CUSTOM_AUTH_* names are aliases, below) |
+| `custom_auth` | header authentication from a reverse proxy, no directory lookup (CUSTOM_AUTH_ENABLE=true turns it on; the CUSTOM_AUTH_* names are aliases of settings.yaml) |
 | `kafka` | Kafka pub/sub integration (PLUGIN_KAFKA_ENABLE=true turns it on) |
-| `oidc` | OidcAuth plugin, rendered into config.php when OIDC_ENABLE=true. The documented OIDC_* names map onto these (the aliases below). role_mapper and scopes take JSON in env; scopes also takes a comma-separated list. |
+| `oidc` | OidcAuth plugin, rendered into config.php when OIDC_ENABLE=true. The documented OIDC_* names map onto these (the aliases of settings.yaml). role_mapper and scopes take JSON in env; scopes also takes a comma-separated list. |
 | `ldap` | LdapAuth plugin, rendered into config.php when LDAPAUTH_ENABLE=true |
 <!-- end generated -->
 

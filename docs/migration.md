@@ -1,11 +1,11 @@
 # Migrating an existing MISP instance
 
+## TL;DR
+
 The migration copies an existing MISP database (MySQL or MariaDB: the official misp-docker,
 a VM, a bare-metal install) into this deployment's PostgreSQL, and copies the attachments
 into this deployment's store: its S3 bucket, or the attachments volume. The configure Job
 then configures the copy as on any release upgrade.
-
-## TL;DR
 
 1. Read `Security.salt`, `Security.encryption_key` and `MISP.uuid` from the old instance
    (`config.php` or `system_settings`) into `misp-app` and `misp-env`. The migration refuses
@@ -162,9 +162,9 @@ Onto a deployment that has run once, set `MIGRATE_FORCE=true` in `migrate.secret
 The web and worker pods keep running; they answer with errors while the copy runs, and MISP
 shows itself as offline (`MISP.live=false`) until the configure Job has configured the copy.
 
-With the `networkPolicy` component the configure pod may reach the
-source on port 3306 and S3 on 443, in the cluster or outside it, while `migrate` is on;
-another port needs a change to the template.
+With the `networkPolicy` component the MISP pods may reach the source on port 3306 and S3 on
+443, in the cluster or outside it, while `migrate` is on; `networkPolicy.egress` adds another
+port.
 
 ## Files copied by hand
 

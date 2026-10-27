@@ -130,3 +130,24 @@ class TestMain:
         monkeypatch.setattr(release, "published", lambda version: True)
         assert release.main([]) == 1
         assert self.git(repo, "tag", "--list") == ""
+
+
+class TestPublished:
+    def run(self, monkeypatch, returncode, stderr):
+        import subprocess
+        monkeypatch.setattr(release.subprocess, "run",
+                            lambda *a, **k: subprocess.CompletedProcess(a, returncode, "", stderr))
+
+    def test_a_chart_in_ghcr_is_published(self, monkeypatch):
+        self.run(monkeypatch, 0, "")
+        assert release.published("3.0.0-wip.5")
+
+    def test_not_found_is_not_published(self, monkeypatch):
+        self.run(monkeypatch, 1, 'Error: failed to perform "FetchReference": ghcr.io/x:3.0.0-wip.5: not found')
+        assert not release.published("3.0.0-wip.5")
+
+    def test_a_failed_lookup_is_no_answer(self, monkeypatch):
+        # Without a route to GHCR the release would otherwise go ahead
+        self.run(monkeypatch, 1, "Error: dial tcp: lookup ghcr.io: no such host")
+        with pytest.raises(RuntimeError, match="cannot tell"):
+            release.published("3.0.0-wip.5")

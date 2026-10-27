@@ -38,8 +38,11 @@ MODULES = "http://localhost:16666"
 SYNC_ORG_UUID = "4f1ed2b2-1821-49da-bf2c-b7ab639d9b19"
 # The external PostgreSQL in the release's namespace, misp, and the keys of its user Secret
 PG_HOST = "pg-primary.misp.svc"
-PG_USER = {"host": PG_HOST, "port": "5432", "dbname": "misp", "user": "misp", "password": "pg-test-pw"}
+# The passwords hold the characters that need quoting in a URL, PHP, SQL or a shell
+PG_USER = {"host": PG_HOST, "port": "5432", "dbname": "misp", "user": "misp", "password": "pg'\"$\\@:/?#&%-pw"}
 DB_CA = "/etc/misp-docker/db-ca/ca.crt"
+# A setting whose value differs from MISP's default, so a job that misses the env layer shows
+TITLE = "Integration MISP"
 # Header login from a reverse proxy; required false keeps the password form and the API keys
 CUSTOM_AUTH = {"env": {"CUSTOM_AUTH_ENABLE": "true", "CUSTOM_AUTH_HEADER": "X_FORWARDED_EMAIL",
                        "CUSTOM_AUTH_USE_HEADER_NAMESPACE": "true", "CUSTOM_AUTH_HEADER_NAMESPACE": "HTTP_",
@@ -52,10 +55,10 @@ def stack(options, failed_in_module):
     cluster = Cluster("misp-integration", PORTS)
     cluster.start()
     cluster.load_images_under_test()
-    s = Release(cluster, values=merge(merge(values_file(K3S / "oidc.yaml"), values_file(K3S / "external.yaml")),
-                                      CUSTOM_AUTH))
+    s = Release(cluster, values=merge(merge(merge(values_file(K3S / "oidc.yaml"), values_file(K3S / "external.yaml")),
+                                            CUSTOM_AUTH), {"env": {"MISP_TITLE_TEXT": TITLE}}))
     s.apply(gnupg_key(ADMIN_EMAIL, s.values["secrets"]["app"]["GNUPG_PASSWORD"]), *manifests.keycloak(), *manifests.postgres_tls(server_certificate("pg-primary", PG_HOST), PG_USER),
-            *manifests.external_redis("external-redis-pw"),
+            *manifests.external_redis("ext'\"$\\@:/?#&%-pw"),
             manifests.nodeport("web", "web", {8080: 30080}), manifests.nodeport("metrics", "metrics", {9191: 30191}),
             manifests.nodeport("modules", "modules", {6666: 30666}))
     s.install()
@@ -245,6 +248,24 @@ def test_a_published_event_runs_a_job(stack):
     status = stack.sql(query)
     stack.http("POST", f"/events/delete/{eid}", stack.key, {})
     assert status == "4", f"the publish job of event {eid} has status {status or 'none'}, not 4 (completed), after 60 s"
+
+
+def test_a_background_job_reads_the_env_layer(stack):
+    # patches/02: MISP starts a job with an environment of its own; the job keeps the worker's
+    rc, out = stack.python("""
+import json, time, uuid
+from misp_container import metrics
+client, ns = metrics.job_redis()
+job = {"id": str(uuid.uuid4()), "command": "admin", "args": ["getSetting", "MISP.title_text"], "metadata": {}}
+client.rpush(f"{ns}:default", json.dumps(job))
+for _ in range(90):
+    found = json.loads(client.get(f"{ns}:job_status:{job['id']}") or "{}")
+    if found.get("status") in (3, 4):
+        print(found.get("output", ""))
+        break
+    time.sleep(1)
+""")
+    assert rc == 0 and TITLE in out, out[-2000:]
 
 
 # A feed that answers its manifest after FEED_DELAY seconds, from the toolbox: a job of known length
@@ -550,6 +571,18 @@ def test_task_check_user_validity_exits_0_with_oidc(user_validity):
 
 def test_task_check_user_validity_reports_the_admin(user_validity):
     assert ADMIN_EMAIL in user_validity[1]
+
+
+@pytest.fixture(scope="module")
+def blocked(stack, oidc, user_validity):
+    return task(stack, "block-invalid-users")
+
+
+def test_task_block_invalid_users_keeps_the_users_keycloak_backs(stack, blocked):
+    # The task disables what the provider no longer backs: a wrong answer would lock people out
+    assert blocked[0] == 0, blocked[1][-2000:]
+    states = stack.sql("SELECT string_agg(disabled::text, ',') FROM users WHERE sub IS NOT NULL AND sub <> ''")
+    assert states and "true" not in states, blocked[1][-2000:]
 
 
 def test_php_console_sessions_go_to_tmp(stack):
@@ -917,27 +950,33 @@ def modules(path, data=None):
 @pytest.fixture(scope="module")
 def modules_ready(stack):
     deadline = time.monotonic() + 90
+    last = ""
     while time.monotonic() < deadline:
         try:
-            if modules("/healthcheck")[0] == 200:
+            status, body = modules("/healthcheck")
+            if status == 200:
                 return True
-        except Exception:
-            pass
+            last = f"{status} {body[:200]}"
+        except Exception as e:
+            last = str(e)
         time.sleep(3)
-    return False
+    pytest.fail(f"misp-modules answered no /healthcheck within 90 s: {last}\n{stack.logs('modules')[-3000:]}")
 
 
 def test_modules_loaded(modules_ready):
-    assert len(json.loads(modules("/modules")[1])) > 0
+    body = modules("/modules")[1]
+    assert len(json.loads(body)) > 0, body[:500]
 
 
 def test_modules_dns_available(modules_ready):
-    assert any(m.get("name") == "dns" for m in json.loads(modules("/modules")[1]))
+    names = [m.get("name") for m in json.loads(modules("/modules")[1])]
+    assert "dns" in names, names
 
 
 def test_modules_dns_resolves(modules_ready):
-    result = json.loads(modules("/query", {"module": "dns", "domain": "example.com"})[1])
-    assert result.get("results", [{}])[0].get("values")
+    # Needs public DNS from the cluster
+    body = modules("/query", {"module": "dns", "domain": "example.com"})[1]
+    assert json.loads(body).get("results", [{}])[0].get("values"), body[:500]
 
 
 def test_modules_enrichment_url_in_misp(stack, modules_ready):
@@ -954,7 +993,7 @@ with urllib.request.urlopen(request, timeout=10) as response:
     values = json.loads(response.read()).get('results', [{}])[0].get('values', [])
     print(values[0] if values else '')
 """)
-    assert out.strip()
+    assert out.strip(), out
 
 
 # -- multi-replica web ---------------------------------------------------------------

@@ -535,7 +535,7 @@ settings:
       secret: true
 
   # -- custom_auth: header authentication from a reverse proxy, no directory lookup
-  # (CUSTOM_AUTH_ENABLE=true turns it on; the CUSTOM_AUTH_* names are aliases, below)
+  # (CUSTOM_AUTH_ENABLE=true turns it on; the CUSTOM_AUTH_* names are aliases of settings.yaml)
   custom_auth:
 
     Plugin.CustomAuth_enable:
@@ -592,7 +592,7 @@ settings:
       value: misp_audit
 
   # -- oidc: OidcAuth plugin, rendered into config.php when OIDC_ENABLE=true ---
-  # The documented OIDC_* names map onto these (the aliases below). role_mapper and
+  # The documented OIDC_* names map onto these (the aliases of settings.yaml). role_mapper and
   # scopes take JSON in env; scopes also takes a comma-separated list.
   oidc:
     Security.auth:

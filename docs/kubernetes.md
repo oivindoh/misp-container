@@ -111,7 +111,7 @@ Each component has its switch, `enabled`:
 ## Client addresses
 
 MISP takes the first address in `X-Forwarded-For` as the client of each request: for its
-logs, its login lockout (five failed logins per address and user name in five minutes), the
+logs, its login lockout (5 failed logins per address and user name in 300 seconds), the
 `allowed_ips` of an API key and `CustomAuth_only_allow_source`. The caddy sidecar sends it one
 address: the rightmost `X-Forwarded-For` address outside the trusted proxies,
 `TRUSTED_PROXY_CIDR`, or the address of the peer when the peer is no trusted proxy. When every
@@ -145,9 +145,8 @@ gets a whole Secret, or only the keys the table names:
 
 With `ADMIN_KEY` empty, MISP generates a key, and org-sync exits without changes.
 
-The files hold placeholders that the configure Job refuses. Set the real values in the
-`secrets` value, or set `secrets.create: false` and supply Secrets with the same names and
-keys, for example through SOPS, External Secrets or Sealed Secrets. The pods roll when a
+Set the real values in the `secrets` value, or set `secrets.create: false` and supply Secrets
+with the same names and keys, for example through SOPS, External Secrets or Sealed Secrets. The pods roll when a
 Secret the chart makes changes; after a change to a Secret you supply, restart them.
 
 These Secrets are optional and copied into every pod at start:
