@@ -5,6 +5,7 @@ the REST API, and applies the changes. Designed to be fast on warm runs:
 with nothing changed, it only reads.
 """
 
+import hashlib
 import json
 import os
 import re
@@ -29,6 +30,8 @@ TAG_FIELDS = ("colour", "exportable", "hide_tag", "org_id")
 SERVER_FIELDS = ("name", "internal", "push", "pull", "self_signed",
                  "caching_enabled", "pull_rules", "push_rules", "remote_org_id")
 SG_FIELDS = ("name", "description", "releasability", "active", "roaming", "local")
+# {server URL: the SHA-256 of the authkey it last got}, a row of system_settings
+SERVER_KEYS_ROW = "misp_docker.server_keys"
 ROLE_FIELDS = ("name", "permission", "perm_site_admin", "perm_admin", "perm_sync",
                "perm_auth", "perm_tagger", "perm_tag_editor", "perm_template",
                "perm_sharing_group", "perm_delegate", "perm_sighting",
@@ -301,8 +304,9 @@ def _apply_orgs(client: MISPClient, state: MISPState, teams: list) -> dict:
     def apply_one(team):
         uuid = team["uuid"]
         org_data = {**{k: team[k] for k in ORG_FIELDS}, "uuid": uuid, "local": True}
+        # A team that MISP knows as a remote organisation, such as a partner after a pull, becomes local
         return _reconcile(client, "org", f"{team['name']} ({uuid})", state.orgs.get(uuid), org_data,
-                          ORG_FIELDS)[0]
+                          (*ORG_FIELDS, "local"))[0]
 
     try:
         _each("organisation", teams, lambda t: t["name"], apply_one, counts)
@@ -447,12 +451,18 @@ def _apply_servers(client: MISPClient, state: MISPState,
     counts = {"created": 0, "updated": 0}
     items = _team_items(state, teams, "servers")
     managed_urls = {server["url"].rstrip("/").lower() for server, _ in items}
+    # The SHA-256 of the key each server last got: an edit with the key clears MISP's caches
+    # of the server, so the key goes only when it changed
+    sent = db.get_system_setting(SERVER_KEYS_ROW) or {}
+    before = dict(sent)
 
     def apply_one(server, org_id):
         url = server["url"].rstrip("/").lower()
-        # Our credential on the partner. MISP never returns it, so a configured one goes
-        # with every edit; MISP needs one to create the server, and a random one stands in
+        # Our credential on the partner. MISP never returns it; MISP needs one to create the
+        # server, and a random one stands in
         config_authkey = server.get("authkey", "")
+        digest = hashlib.sha256(config_authkey.encode()).hexdigest() if config_authkey else ""
+        unread = {"authkey": config_authkey} if digest and sent.get(url) != digest else None
         server_data = {
             "name": server["name"],
             "url": server["url"].rstrip("/"),
@@ -469,10 +479,17 @@ def _apply_servers(client: MISPClient, state: MISPState,
             "push_rules": json.dumps(_build_rules(server["push_tags"], server["push_tags_exclude"],
                                                   pull=False, state=state)),
         }
-        return _reconcile(client, "server", f"{server['name']} ({url})", state.servers.get(url), server_data,
-                          SERVER_FIELDS, {"authkey": config_authkey} if config_authkey else None)[0]
+        outcome = _reconcile(client, "server", f"{server['name']} ({url})", state.servers.get(url), server_data,
+                             SERVER_FIELDS, unread)[0]
+        if digest:
+            sent[url] = digest
+        return outcome
 
-    _each("server", items, lambda pair: pair[0]["url"], _in_org(apply_one), counts)
+    try:
+        _each("server", items, lambda pair: pair[0]["url"], _in_org(apply_one), counts)
+    finally:
+        if sent != before:
+            db.set_system_setting(SERVER_KEYS_ROW, sent)
     return counts, managed_urls
 
 
@@ -511,8 +528,8 @@ def _apply_taxonomies(client: MISPClient, state: MISPState,
                       desired: list) -> dict:
     """Enable the taxonomies the file names, then disable the others."""
     counts = {"enabled": 0, "disabled": 0}
-    if desired:
-        # Loads the taxonomies of the image into the database
+    if any(namespace not in state.taxonomies for namespace in desired):
+        # Loads the taxonomies of the image into the database; each run would log a row
         client.post("/taxonomies/update", {})
         state.taxonomies = client.get_taxonomies()
 
@@ -575,28 +592,29 @@ def _apply_warninglists(client: MISPClient, state: MISPState,
 
 
 def _apply_custom_warninglist(client: MISPClient, state: MISPState, item: dict, counts: dict) -> None:
-    """Create a custom warninglist, or update it when its version changed, and enable it."""
+    """Create a custom warninglist, or edit it when its content differs, and enable it.
+
+    MISP keeps the version of a list itself: an edit stores the old one plus 1, so
+    the file's version counts only at the create.
+    """
     name = item["name"]
-    version = str(item.get("version", 1))
+    values = [str(v) for v in item.get("values", [])]
+    types = list(item.get("matching_attributes", [])) or ["ALL"]
     wl_data = {
         "name": name,
         "description": item.get("description", ""),
-        "version": version,
         "type": item.get("type", "string"),
         "category": item.get("category", "false_positive"),
+        # A list: MISP takes form-style keys literally from a JSON body, and then matches every type
+        "matching_attributes": types,
+        "entries": "\r\n".join(values),
     }
-    # matching_attributes as indexed keys (MISP form-data style)
-    for i, attr in enumerate(item.get("matching_attributes", [])):
-        wl_data[f"matching_attributes[{i}]"] = attr
-    # Entries as CRLF-delimited string
-    values = item.get("values", [])
-    wl_data["entries"] = "\r\n".join(str(v) for v in values)
 
     existing = state.warninglists.get(name)
     if existing is None:
         log.info("creating custom warninglist '%s' (%d entries)", name, len(values))
         try:
-            client.post("/warninglists/add", {"Warninglist": wl_data})
+            client.post("/warninglists/add", {"Warninglist": {**wl_data, "version": str(item.get("version", 1))}})
             counts["created"] += 1
         except APIError as e:
             # A list that the index left out
@@ -606,10 +624,15 @@ def _apply_custom_warninglist(client: MISPClient, state: MISPState, item: dict, 
         existing = state.warninglists.get(name)
         if existing is None:
             raise ValueError("MISP lists no warninglist of this name after the create")
-    if str(existing.get("version", "")) != version:
-        log.info("updating custom warninglist '%s' to version %s", name, version)
-        client.post(f"/warninglists/edit/{existing['id']}", {"Warninglist": wl_data})
-        counts["updated"] += 1
+    else:
+        view = client.get(f"/warninglists/view/{existing['id']}").get("Warninglist", {})
+        current = (view.get("description") or "", view.get("type"), view.get("category"),
+                   sorted(t["type"] for t in view.get("WarninglistType", [])),
+                   sorted(e["value"] for e in view.get("WarninglistEntry", [])))
+        if current != (wl_data["description"], wl_data["type"], wl_data["category"], sorted(types), sorted(values)):
+            log.info("updating custom warninglist '%s'", name)
+            client.post(f"/warninglists/edit/{existing['id']}", {"Warninglist": wl_data})
+            counts["updated"] += 1
     if not existing.get("enabled") and item.get("enabled", True):
         log.info("enabling warninglist '%s'", name)
         client.post("/warninglists/toggleEnable", {"id": existing["id"], "enabled": True})
@@ -657,15 +680,22 @@ def _sync_sg_orgs(client: MISPClient, state: MISPState,
             raise ValueError(f"organisation {uuid} is not in MISP")
         desired_map[oid] = extend
 
-    # Parse current orgs
-    current_ids = set()
-    if current_orgs:
-        for entry in current_orgs:
-            if isinstance(entry, dict):
-                org = entry.get("Organisation", entry)
-                oid = org.get("id") or entry.get("org_id")
-                if oid:
-                    current_ids.add(int(oid))
+    # Parse current orgs: org_id -> extend
+    current = {}
+    for entry in current_orgs or []:
+        if isinstance(entry, dict):
+            org = entry.get("Organisation", entry)
+            oid = org.get("id") or entry.get("org_id")
+            if oid:
+                current[int(oid)] = bool(entry.get("extend"))
+
+    # MISP's addOrg refuses a member, so a changed extend goes through a remove
+    for oid, extend in desired_map.items():
+        if oid in current and current[oid] != bool(extend):
+            log.info("changing extend of org %d in sharing group %s to %s", oid, sg_id, extend)
+            client.post(f"/sharing_groups/removeOrg/{sg_id}", {"org_id": oid})
+            del current[oid]
+    current_ids = set(current)
 
     # Add missing
     for oid, extend in desired_map.items():
@@ -880,30 +910,39 @@ def main(argv: list[str]) -> None:
         config = load_config(file_path=argv[0] if argv else None)
     except (ConfigError, ValueError) as e:
         log.error("cannot load the org config: %s", e)
+        record_run(False)
         sys.exit(1)
     if is_empty(config):
         log.info("no org config to apply, exiting")
         sys.exit(0)
 
-    wait_for_login_page(base_url)
-    # The configure step and the migrate Job hold this lock while they write; a
-    # sync that starts during one waits for it
-    db.acquire_config_lock()
+    ok = False
     try:
-        summary = apply(client=MISPClient(base_url, api_key), config=config)
+        wait_for_login_page(base_url)
+        # The configure step and the migrate Job hold this lock while they write; a
+        # sync that starts during one waits for it
+        db.acquire_config_lock()
+        try:
+            summary = apply(client=MISPClient(base_url, api_key), config=config)
+        finally:
+            db.release_config_lock()
+        errors = [v for v in summary.values() if isinstance(v, dict) and "error" in v]
+        ok = not errors
     finally:
-        db.release_config_lock()
-
-    errors = [v for v in summary.values() if isinstance(v, dict) and "error" in v]
-    # The run's count in its system_settings row, for the metrics exporter
-    try:
-        db.record_run("org-sync", not errors)
-    except Exception as e:
-        log.warning("could not record the sync run: %s", e)
-    if errors:
+        # Also a run that fails outside a step, such as a refused ADMIN_KEY
+        record_run(ok)
+    if not ok:
         log.error("sync completed with errors: %s", summary)
         sys.exit(1)
     log.info("sync completed successfully")
+
+
+def record_run(ok: bool) -> None:
+    """The run's count in its system_settings row, for the metrics exporter."""
+    try:
+        db.record_run("org-sync", ok)
+    except Exception as e:
+        log.warning("could not record the sync run: %s", e)
 
 
 if __name__ == "__main__":

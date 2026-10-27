@@ -61,9 +61,16 @@ def _metric(name: str, help_text: str, mtype: str, samples: list) -> str:
     return "\n".join(lines)
 
 
+# A scrape gives up on a database that holds it longer, such as behind a lock of the configure run
+DB_TIMEOUT = 10
+
+
 def _connect():
-    """A connection to MISP's database; the tests replace it."""
-    return db._connect()
+    """A connection to MISP's database that gives up rather than hold a scrape; the tests replace it."""
+    conn = db._connect(timeout=DB_TIMEOUT)
+    with db._cursor(conn) as cur:
+        cur.execute(f"SET statement_timeout = {DB_TIMEOUT * 1000}")
+    return conn
 
 
 # ---------------------------------------------------------------------------
@@ -152,26 +159,8 @@ def _collect_db_metrics() -> tuple[str, int]:
         )
 
         with db.dict_cursor(conn) as cur:
-            # Instance info
-            info = {}
-            try:
-                cur.execute(
-                    "SELECT setting, value FROM system_settings "
-                    "WHERE setting IN ('MISP.uuid', 'MISP.baseurl')"
-                )
-                for r in cur.fetchall():
-                    v = r["value"]
-                    if isinstance(v, bytes):
-                        v = v.decode()
-                    if v is not None:
-                        v = str(v).strip('"')
-                    info[r["setting"]] = v or ""
-            except Exception as e:
-                log.warning("instance info: %s", e)
-                errors += 1
-            # configure deletes the rows of the settings MISP takes from its env layer
-            for name in ("MISP.uuid", "MISP.baseurl"):
-                info[name] = env(SETTING_PREFIX + name.replace(".", "__")) or info.get(name, "")
+            # Instance info: the repository carries both settings, and configure refuses an empty UUID
+            info = {name: env(SETTING_PREFIX + name.replace(".", "__")) for name in ("MISP.uuid", "MISP.baseurl")}
             blocks.append(
                 _metric(
                     "misp_instance_info",

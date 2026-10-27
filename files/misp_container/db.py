@@ -61,13 +61,17 @@ def ssl_context(sslmode: str, sslrootcert: str = ""):
 
 # -- Connections and queries -------------------------------------------------
 
-def _connect(autocommit: bool = True):
-    """A DB-API connection from the environment, over TLS as DB_SSLMODE says."""
+def _connect(autocommit: bool = True, timeout: float | None = None):
+    """A DB-API connection from the environment, over TLS as DB_SSLMODE says.
+
+    timeout bounds the connect and each read from the server, in seconds.
+    """
     import pg8000.dbapi
     s = settings()
     kwargs = {"user": s["user"], "password": s["password"], "host": s["host"],
               "port": s["port"], "database": s["database"]}
-    conn = pg8000.dbapi.connect(**kwargs, ssl_context=ssl_context(s["sslmode"], s["sslrootcert"]))
+    conn = pg8000.dbapi.connect(**kwargs, ssl_context=ssl_context(s["sslmode"], s["sslrootcert"]),
+                                timeout=timeout)
     conn.autocommit = autocommit
     return conn
 

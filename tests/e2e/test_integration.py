@@ -754,6 +754,12 @@ def test_sync_custom_warninglist_version(stack, synced):
     assert stack.sql("SELECT version FROM warninglists WHERE name='Sync Test Warninglist';") == "1"
 
 
+def test_sync_custom_warninglist_matches_its_types_only(stack, synced):
+    types = stack.sql("SELECT string_agg(type, ',' ORDER BY type) FROM warninglist_types WHERE warninglist_id = "
+                      "(SELECT id FROM warninglists WHERE name = 'Sync Test Warninglist')")
+    assert types == "domain,hostname"
+
+
 def test_sync_sharing_group_created_with_its_org(stack, synced):
     found = sharing_groups(stack, "Sync Test Sharing Group")
     assert len(found) == 1

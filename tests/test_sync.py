@@ -398,7 +398,7 @@ class TestApplyOrgs:
         client = MagicMock()
         state = MagicMock()
         state.orgs = {"ee8e368c-1587-4630-99f7-0b7a3ff2674f": {"id": 1, "name": "Same", "description": "",
-                               "sector": "", "nationality": "", "type": "", "contacts": ""}}
+                               "sector": "", "nationality": "", "type": "", "contacts": "", "local": True}}
 
         teams = [{"uuid": "ee8e368c-1587-4630-99f7-0b7a3ff2674f", "name": "Same", "description": "",
                   "sector": "", "nationality": "", "type": "", "contacts": ""}]
@@ -407,6 +407,18 @@ class TestApplyOrgs:
         assert counts["created"] == 0
         assert counts["updated"] == 0
         client.post.assert_not_called()
+
+    def test_a_remote_org_of_a_team_becomes_local(self):
+        # A partner's organisation after a pull: MISP refuses a second one with its UUID
+        client = MagicMock()
+        state = MagicMock()
+        state.orgs = {"ee8e368c-1587-4630-99f7-0b7a3ff2674f": {"id": 4, "name": "Partner", "description": "",
+                      "sector": "", "nationality": "", "type": "", "contacts": "", "local": False}}
+        teams = [{"uuid": "ee8e368c-1587-4630-99f7-0b7a3ff2674f", "name": "Partner", "description": "",
+                  "sector": "", "nationality": "", "type": "", "contacts": ""}]
+        assert _apply_orgs(client, state, teams)["updated"] == 1
+        path, data = client.post.call_args[0]
+        assert "organisations/edit/4" in path and data["Organisation"] == {"local": True}
 
     def test_creates_multiple_orgs(self):
         client = MagicMock()
@@ -720,6 +732,15 @@ class TestApplyUsers:
 # ---------------------------------------------------------------------------
 
 class TestApplyServers:
+    @pytest.fixture(autouse=True)
+    def keys_row(self):
+        """The row of the keys the servers got: none yet, unless a test sets self.sent."""
+        self.sent = None
+        with patch("misp_container.sync.db.get_system_setting", side_effect=lambda name: self.sent), \
+                patch("misp_container.sync.db.set_system_setting") as set_row:
+            self.set_row = set_row
+            yield
+
     def test_creates_server_with_pull_tags(self):
         client = MagicMock()
         state = MagicMock()
@@ -881,8 +902,14 @@ class TestApplyServers:
         server = client.post.call_args[0][1]["Server"]
         assert server["authkey"] == "my-explicit-key-from-config-abcdef1234567890"
 
-    def test_explicit_authkey_sent_on_update(self):
-        """Config authkey should always be sent on update (even though we can't diff it)."""
+    def test_a_key_it_got_already_is_not_sent_again(self):
+        # An edit with the key clears MISP's caches of the server, and with an encryption key writes an audit row
+        import hashlib
+        self.sent = {"https://remote.com": hashlib.sha256(b"new-key-from-config-0000000000000000000000").hexdigest()}
+        self.test_explicit_authkey_sent_on_update(sent=False)
+
+    def test_explicit_authkey_sent_on_update(self, sent=True):
+        """A new config authkey is sent on update, though MISP never returns it to compare."""
         client = MagicMock()
         state = MagicMock()
         state.org_id = lambda uuid: 5
@@ -917,9 +944,14 @@ class TestApplyServers:
         counts, _ = _apply_servers(client, state, teams)
         # Authkey-only change doesn't count as "updated" in summary
         assert counts["updated"] == 0
-        # But the authkey IS sent to MISP
+        if not sent:
+            client.post.assert_not_called()
+            self.set_row.assert_not_called()
+            return
+        # But the authkey IS sent to MISP, and its hash recorded
         server_update = client.post.call_args[0][1]["Server"]
         assert server_update["authkey"] == "new-key-from-config-0000000000000000000000"
+        assert list(self.set_row.call_args[0][1]) == ["https://remote.com"]
 
     def test_env_var_in_authkey(self):
         """Authkey should support ${ENV_VAR} expansion."""
@@ -1001,6 +1033,45 @@ class TestApplyWarninglists:
         counts = _apply_warninglists(client, state, [])
         assert counts["disabled"] == 1
 
+    CUSTOM = {"name": "Ours", "version": 20260515, "type": "hostname", "category": "false_positive",
+              "matching_attributes": ["hostname", "domain"], "values": ["b.example", "a.example"]}
+
+    def test_a_custom_list_is_created_with_its_types_as_a_list(self):
+        # Form-style keys in a JSON body reach MISP literally, and it then matches every type
+        client = MagicMock()
+        state = MagicMock()
+        state.warninglists = {}
+        client.get_warninglists.return_value = {"Ours": {"id": 9, "enabled": True}}
+        assert _apply_warninglists(client, state, [self.CUSTOM])["created"] == 1
+        path, data = client.post.call_args_list[0][0]
+        assert path == "/warninglists/add"
+        assert data["Warninglist"]["matching_attributes"] == ["hostname", "domain"]
+        assert data["Warninglist"]["version"] == "20260515"
+
+    def view(self, **changes):
+        wl = {"description": "", "type": "hostname", "category": "false_positive",
+              "WarninglistType": [{"type": "domain"}, {"type": "hostname"}],
+              "WarninglistEntry": [{"value": "a.example"}, {"value": "b.example"}], **changes}
+        return {"Warninglist": wl}
+
+    def test_a_custom_list_with_its_content_is_left_whatever_its_version(self):
+        # MISP stores the old version plus 1 at each edit: a version compare would edit for ever
+        client = MagicMock()
+        client.get.return_value = self.view()
+        state = MagicMock()
+        state.warninglists = {"Ours": {"id": 9, "enabled": True, "version": "20260519"}}
+        assert _apply_warninglists(client, state, [self.CUSTOM])["updated"] == 0
+        client.post.assert_not_called()
+
+    def test_a_custom_list_with_other_entries_is_edited(self):
+        client = MagicMock()
+        client.get.return_value = self.view(WarninglistEntry=[{"value": "a.example"}])
+        state = MagicMock()
+        state.warninglists = {"Ours": {"id": 9, "enabled": True}}
+        assert _apply_warninglists(client, state, [self.CUSTOM])["updated"] == 1
+        path, data = client.post.call_args[0]
+        assert path == "/warninglists/edit/9" and data["Warninglist"]["entries"] == "b.example\r\na.example"
+
 
 # ---------------------------------------------------------------------------
 # Apply sharing groups
@@ -1041,6 +1112,27 @@ class TestApplySharingGroups:
 
 
 class TestSyncSgOrgs:
+    def test_a_member_whose_extend_changed_is_removed_and_added_again(self):
+        # MISP's addOrg refuses a present member
+        client = MagicMock()
+        state = MagicMock()
+        state.org_id = lambda uuid: 1
+        _sync_sg_orgs(client, state, sg_id=10,
+                      desired_orgs=[{"uuid": "ee8e368c-1587-4630-99f7-0b7a3ff2674f", "extend": True}],
+                      current_orgs=[{"Organisation": {"id": 1}, "extend": False}])
+        assert [c[0][0] for c in client.post.call_args_list] == ["/sharing_groups/removeOrg/10",
+                                                               "/sharing_groups/addOrg/10"]
+        assert client.post.call_args[0][1] == {"org_id": 1, "extend": True}
+
+    def test_a_member_with_its_extend_is_left(self):
+        client = MagicMock()
+        state = MagicMock()
+        state.org_id = lambda uuid: 1
+        _sync_sg_orgs(client, state, sg_id=10,
+                      desired_orgs=[{"uuid": "ee8e368c-1587-4630-99f7-0b7a3ff2674f", "extend": True}],
+                      current_orgs=[{"Organisation": {"id": 1}, "extend": True}])
+        client.post.assert_not_called()
+
     def test_an_unknown_org_is_refused_before_any_change(self):
         client = MagicMock()
         state = MagicMock()
@@ -1373,3 +1465,38 @@ class TestSharingGroupList:
             found = client.get_sharing_groups()
         assert list(found) == ["128f1153-ccf9-4dc4-87e1-5307d794764c"]
         assert found["128f1153-ccf9-4dc4-87e1-5307d794764c"]["SharingGroupOrg"] == sg["SharingGroupOrg"]
+
+
+class TestClient:
+    def test_a_page_where_json_belongs_is_an_error(self):
+        # urllib follows a redirect to the login page: that is no success
+        from misp_container.api import MISPClient
+        response = MagicMock(status=200)
+        response.read.return_value = b"<html>login</html>"
+        response.__enter__.return_value = response
+        with patch("misp_container.api.urllib.request.urlopen", return_value=response):
+            with pytest.raises(APIError, match="not JSON"):
+                MISPClient("http://misp", "k").post("/warninglists/add", {})
+
+    def test_the_indexes_take_remote_orgs_and_skip_the_tag_counts(self):
+        from misp_container.api import MISPClient
+        client = MISPClient("http://misp", "k")
+        client.get = MagicMock(return_value=[])
+        client.get_organisations()
+        client.get_tags()
+        assert [c[0][0] for c in client.get.call_args_list] == ["/organisations/index/scope:all",
+                                                               "/tags/index/exclude_statistics:1"]
+
+
+class TestMain:
+    @patch("misp_container.sync.db")
+    @patch("misp_container.sync.wait_for_login_page")
+    @patch("misp_container.sync.load_config", return_value={"teams": [{"name": "x"}]})
+    @patch("misp_container.sync.apply", side_effect=APIError(403, "Authentication failed", "/organisations"))
+    def test_a_run_that_fails_outside_a_step_is_recorded(self, _apply, _load, _wait, db, monkeypatch):
+        from misp_container import sync
+        monkeypatch.setenv("ADMIN_KEY", "k" * 40)
+        with pytest.raises(APIError):
+            sync.main([])
+        db.record_run.assert_called_once_with("org-sync", False)
+        db.release_config_lock.assert_called_once()
