@@ -537,11 +537,11 @@ class TestApplyOneUser:
         state.role_id = lambda name: 3
 
         _apply_one_user(client, state,
-                        {"email": "feide@inst.no", "role": "User", "external_auth": True},
+                        {"email": "header-user@example.org", "role": "User", "external_auth": True},
                         org_id=1)
         data = client.post.call_args[0][1]["User"]
         assert data["external_auth_required"] is True
-        assert data["external_auth_key"] == "feide@inst.no"
+        assert data["external_auth_key"] == "header-user@example.org"
 
     @patch("misp_container.sync._set_user_authkey")
     def test_sync_user_with_explicit_authkey(self, mock_set_key):

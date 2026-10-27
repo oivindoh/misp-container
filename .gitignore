@@ -9,9 +9,6 @@
 # Claude
 .claude/
 
-# SOPS - never commit decrypted secrets
-**/secrets.dec.yaml
-
 # Python
 *.pyc
 __pycache__/
