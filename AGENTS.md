@@ -130,8 +130,7 @@ UI. A setting's env var is its name in upper case with dots as underscores
 <!-- generated: settings-groups -->
 | Group | Holds |
 |---|---|
-| `minimum_config` | also rendered into config.php, by every pod. MISP never reads SystemSetting::BLOCKED_SETTINGS from the database (salt, encryption key, password policy, python_bin, ca_path, tmpdir, attachments_dir, self_update, online_version_check, system_setting_db, GnuPG.binary, disable_local_feed_access), so those live here. |
-| `db_enable` | toggle system_setting_db |
+| `core` | the connections, paths and security bootstrap |
 | `initialisation` | core instance settings |
 | `critical` | security hardening |
 | `optional` | nice-to-have defaults |
@@ -156,6 +155,7 @@ build applies the patches of `patches/` (DEVELOPING.md, Patches to MISP):
 | `01-event-index-stats-quotes-the-alias.patch` | app/Model/Behavior/EventIndexStatsBehavior.php | Quote the alias of the events index stats | not filed yet |
 | `02-a-job-keeps-the-workers-environment.patch` | app/Lib/Tools/BackgroundJobs/BackgroundJob.php | A background job keeps the worker's environment | not filed yet |
 | `03-a-worker-finishes-its-job-on-sigterm.patch` | app/Console/Command/StartWorkerShell.php, app/Lib/Tools/BackgroundJobs/BackgroundJob.php | A worker finishes its running job on SIGTERM | not filed yet |
+| `04-the-acl-reads-the-host-org-at-each-use.patch` | app/Controller/Component/ACLComponent.php | The ACL reads the host organisation at each use | not filed yet |
 <!-- end generated -->
 
 ## Scripts: `scripts/`

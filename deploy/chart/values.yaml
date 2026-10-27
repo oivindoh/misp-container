@@ -35,6 +35,9 @@ env:
   # -- Admin
   ADMIN_EMAIL: "admin@admin.test"
   ADMIN_ORG: "ORGNAME"
+  # The admin organisation's UUID, as sync partners know it; unset, the organisation of the
+  # first user keeps the UUID MISP gave it. Either way it is MISP's host organisation
+  # ADMIN_ORG_UUID: ""
   # -- Database: PostgreSQL; DB_HOST postgres is the Service of the postgres component
   DB_HOST: "postgres"
   DB_PORT: "5432"
@@ -44,19 +47,19 @@ env:
   # -- Redis
   MISP_REDIS_HOST: "redis"
   MISP_REDIS_PORT: "6379"
-  # -- Email
+  # -- Email: the relay MISP sends through. SMTP_TLS true sends STARTTLS; a relay that speaks
+  # TLS from the first byte (port 465) takes SMTP_FQDN ssl://<host>. With SMTP_USERNAME, MISP
+  # logs in with SMTP_PASSWORD from secrets.app
   SMTP_FQDN: "mail"
   SMTP_PORT: "25"
-  # -- GPG: every pod imports the instance key from the misp-gnupg Secret (docs/kubernetes.md, Secrets)
-  GNUPG_HOMEDIR: "/var/www/MISP/.gnupg"
+  SMTP_TLS: "false"
+  SMTP_USERNAME: ""
   # -- Client addresses: the ingress or Gateway proxy pods, whose X-Forwarded-For caddy follows
   # (docs/kubernetes.md, Client addresses). Unset, caddy trusts every private range, and a
   # client with a private address is logged as the proxy.
   # TRUSTED_PROXY_CIDR: "10.244.0.0/16"
   # -- Logging. json: one JSON object per line, for a log collector; text: for a terminal
   LOG_FORMAT: "json"
-  # -- Paths
-  MISP_ATTACHMENTS_DIR: "/var/www/MISP/app/attachments"
   # -- Auth plugins: true turns one on. Their settings are the groups oidc and ldap of
   # files/settings.yaml, rendered into config.php (docs/configuration.md)
   OIDC_ENABLE: "false"
@@ -104,8 +107,9 @@ secrets:
   # misp-app: configure and its migrate container, web, worker, the redis component, the task
   # CronJobs; metrics gets MISP_REDIS_PASSWORD and PROXY_PASSWORD. A key named after a setting
   # is that setting's value (Security.salt -> SECURITY_SALT): the chart passes it to MISP by
-  # reference, so it never lands in a ConfigMap. A secret setting without a key here
-  # (OIDC_CLIENT_SECRET, PROXY_PASSWORD) goes here the same way.
+  # reference, so it never lands in a ConfigMap. Every secret setting of settings.yaml takes its
+  # key here, or in the Secret of a release with create: false, also one this map does not
+  # name (OIDC_CLIENT_SECRET, PROXY_PASSWORD, PLUGIN_S3_AWS_SECRET_KEY); so does SMTP_PASSWORD.
   app:
     MISP_REDIS_PASSWORD: "change-me"
     GNUPG_PASSWORD: "change-me"

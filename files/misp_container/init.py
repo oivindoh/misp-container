@@ -12,6 +12,7 @@ from pathlib import Path
 
 from . import MISP_BASE, CONFIG_DEFAULTS
 from .db import settings as db_settings
+from .config import setting
 from .env import env
 from .log import get as getlog
 
@@ -139,7 +140,7 @@ def populate_gnupg():
     imports it into a homedir of its own, so all replicas sign with the same key.
     """
     key_file = Path(GNUPG_KEY_FILE)
-    gpg_dir = Path(env("GNUPG_HOMEDIR"))
+    gpg_dir = Path(setting("GnuPG.homedir"))
     gpg_dir.mkdir(parents=True, exist_ok=True)
     try:
         gpg_dir.chmod(0o700)
@@ -259,6 +260,12 @@ def _generate_email_config(config_dst):
     email = php_literal(env("MISP_EMAIL", env("ADMIN_EMAIL")))
     smtp = php_literal(env("SMTP_FQDN"))
     port = _int_env("SMTP_PORT", 25)
+    # STARTTLS; a relay that speaks TLS from the first byte takes SMTP_FQDN ssl://<host>
+    tls = php_literal(env("SMTP_TLS").lower() == "true")
+    login = ""
+    if env("SMTP_USERNAME"):
+        login = (f"\n        'username'      => {php_literal(env('SMTP_USERNAME'))},"
+                 f"\n        'password'      => {php_literal(env('SMTP_PASSWORD'))},")
     content = f"""<?php
 class EmailConfig {{
     public $default = array(
@@ -266,6 +273,7 @@ class EmailConfig {{
         'from'          => array({email} => 'MISP'),
         'host'          => {smtp},
         'port'          => {port},
+        'tls'           => {tls},{login}
         'timeout'       => 30,
         'client'        => null,
         'log'           => false,

@@ -163,7 +163,7 @@ class TestAttachmentConfig:
             monkeypatch.setenv(key, value)
 
     def test_target_is_the_volume_without_a_bucket(self, monkeypatch, tmp_path):
-        self.env(monkeypatch, {"MISP_ATTACHMENTS_DIR": str(tmp_path)})
+        self.env(monkeypatch, {"MISP_SETTING_MISP__attachments_dir": str(tmp_path)})
         assert migrate.attachment_target() == tmp_path
 
     def test_target_is_the_deployments_bucket(self, monkeypatch):

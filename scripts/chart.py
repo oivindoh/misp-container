@@ -87,7 +87,8 @@ def _render(args: tuple[str, ...]) -> tuple[tuple[str, dict], ...]:
 def _args(sets: tuple[str, ...], every_component: bool) -> tuple[str, ...]:
     args: list[str] = []
     for value in [*(v for c in components() if every_component for v in component_sets(c)), *sets]:
-        args += ["--set", value]
+        # A flag of its own, such as --set-json=key=value, passes as it is
+        args += [value] if value.startswith("--") else ["--set", value]
     return tuple(args)
 
 

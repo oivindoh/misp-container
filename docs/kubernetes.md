@@ -124,7 +124,7 @@ gets a whole Secret, or only the keys the table names:
 | Secret | Value | Keys | Read by |
 |---|---|---|---|
 | `misp-db` | `secrets.db` | `DB_USER`, `DB_PASSWORD` | configure, cronjobs, housekeeping, metrics (`DB_PASSWORD`, `DB_USER`), migrate, org-sync, postgres (`DB_PASSWORD`, `DB_USER`), web, worker |
-| `misp-app` | `secrets.app` | `MISP_REDIS_PASSWORD`, `GNUPG_PASSWORD`, `SECURITY_ENCRYPTION_KEY`, `SECURITY_SALT` | configure, cronjobs, metrics (`MISP_REDIS_PASSWORD`), migrate, redis (`MISP_REDIS_PASSWORD`), web, worker |
+| `misp-app` | `secrets.app` | `MISP_REDIS_PASSWORD`, `GNUPG_PASSWORD`, `SECURITY_ENCRYPTION_KEY`, `SECURITY_SALT` | configure, cronjobs, metrics (`MISP_REDIS_PASSWORD`, `PROXY_PASSWORD`), migrate, redis (`MISP_REDIS_PASSWORD`), web, worker |
 | `misp-admin` | `secrets.admin` | `ADMIN_PASSWORD`, `ADMIN_KEY` | configure, misp-test (`ADMIN_KEY`), org-sync |
 | `misp-migrate` | `migrate.secret` | `MIGRATE_SOURCE_HOST`, `MIGRATE_SOURCE_USER`, `MIGRATE_SOURCE_PASSWORD`, `MIGRATE_FORCE`, `MIGRATE_REPLACE_COPY`, `MIGRATE_SOURCE_FILES`, `MIGRATE_SOURCE_S3_BUCKET`, `MIGRATE_SOURCE_S3_ENDPOINT`, `MIGRATE_SOURCE_S3_REGION`, `MIGRATE_SOURCE_S3_ACCESS_KEY`, `MIGRATE_SOURCE_S3_SECRET_KEY` | migrate |
 <!-- end generated -->

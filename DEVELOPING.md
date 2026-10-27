@@ -97,6 +97,14 @@ older image. Each pin move is a release of its own.
 3. Open a pull request to master. The upstream guard and the suites report what MISP changed.
 4. After the merge, release it (see Releases).
 
+`files/composer.lock` pins MISP's PHP dependencies plus this image's extra packages. The
+build installs exactly that lock and fails when it no longer matches upstream's
+`composer.json`, which is the signal to run `mise run composer-lock` after a bump.
+
+`files/requirements-misp.txt` pins the Python packages MISP's own scripts import (STIX,
+TAXII, ZeroMQ, sample extraction), resolved from MISP's `requirements.txt` at the pinned
+commit; a unit test fails while its header names another commit.
+
 ## Releases
 
 While MISP is a work-in-progress pin, every release is the next pre-release of the version the
@@ -175,35 +183,22 @@ settings:
 ```
 
 `blank_protection: true` leaves an empty value out, so MISP keeps its own default until env
-sets one. `derived` and `aliases` at the end of the file map one env var onto others.
+sets one. `secret: true` takes the value from the `misp-app` Secret only, and the chart refuses
+it in env. `config_php: true` also renders the setting into `config.php`. `derived` and
+`aliases` at the end of the file map one env var onto others.
 
 ### Groups
 
 | Group | Reaches MISP through |
 |-------|----------------------|
-| `minimum_config`, `db_enable` | `MISP_SETTING_*` and `config.php`, which every MISP pod renders from `MISP_CONFIG_*` on start |
-| `s3` | the same, while `PLUGIN_S3_BUCKET_NAME` is set |
-| `oidc`, `ldap` | `config.php` only, while the plugin's switch is on: MISP takes no auth plugin key from its environment layer |
-| every other group | `MISP_SETTING_*` |
+| `s3` | `MISP_SETTING_*`, while `PLUGIN_S3_BUCKET_NAME` is set |
+| `oidc`, `ldap` | `config.php` only, while the plugin's switch is on: MISP loads an auth plugin from `config.php` before its environment layer |
+| every other group | `MISP_SETTING_*`, and `config.php` for a setting marked `config_php` |
 
-MISP reads `config.php` before its environment layer, and its bootstrap reads `MISP.baseurl`,
-`debug` and the auth plugin keys from it. MISP never reads `SystemSetting::BLOCKED_SETTINGS`
-(salt, encryption key, password policy, `python_bin`, `ca_path`, `tmpdir`, `attachments_dir`,
-`system_setting_db` and a few more) from the database. Those settings stay in
-`minimum_config`.
-
-```bash
-mise run composer-lock                # resolve files/composer.lock for the current CORE_TAG
-mise run misp-requirements           # resolve files/requirements-misp.txt for the current CORE_TAG
-```
-
-`files/composer.lock` pins MISP's PHP dependencies plus this image's extra packages. The
-build installs exactly that lock and fails when it no longer matches upstream's
-`composer.json`, which is the signal to run `mise run composer-lock` after a bump.
-
-`files/requirements-misp.txt` pins the Python packages MISP's own scripts import (STIX,
-TAXII, ZeroMQ, sample extraction), resolved from MISP's `requirements.txt` at the pinned
-commit; a unit test fails while its header names another commit.
+MISP reads `config.php` before its environment layer. Of the settings outside the auth
+plugins, only `MISP.system_setting_db` must be there: MISP decides on it whether to read the
+database rows at all. The bootstrap takes `MISP.baseurl` from `config.php` only to set
+`App.base` for a base URL with a path, which caddy does not serve.
 
 ## Docs from the code
 

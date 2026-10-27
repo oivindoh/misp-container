@@ -1,0 +1,55 @@
+The ACL reads the host organisation at each use
+
+Why: ACLComponent read MISP.host_org_id in its constructor. CakePHP builds the components before AppController::beforeFilter() applies the database and env settings, so the ACL saw 0 unless config.php held the setting. A host-org user who is not site admin got 403 on event blocklists, feed views and coverage, server previews and the ID translator, and lost the host-org local-tag rule.
+Upstream: not filed yet
+
+diff --git a/app/Controller/Component/ACLComponent.php b/app/Controller/Component/ACLComponent.php
+index 42a45bf..c0c36b1 100644
+--- a/app/Controller/Component/ACLComponent.php
++++ b/app/Controller/Component/ACLComponent.php
+@@ -1226,17 +1226,22 @@ class ACLComponent extends Component
+ 
+     private $dynamicChecks = [];
+ 
+-    /** @var int */
+-    private $hostOrgId;
++    /**
++     * The host organisation, read at each use: the constructor runs before
++     * AppController::beforeFilter() applies the database and env settings.
++     * @return int
++     */
++    private function hostOrgId()
++    {
++        return (int)Configure::read('MISP.host_org_id');
++    }
+ 
+     public function __construct(ComponentCollection $collection, $settings = array())
+     {
+         parent::__construct($collection, $settings);
+ 
+-        $this->hostOrgId = (int)Configure::read('MISP.host_org_id');
+-
+         $this->dynamicChecks['host_org_user'] = function (array $user) {
+-            return (int)$user['org_id'] === $this->hostOrgId;
++            return (int)$user['org_id'] === $this->hostOrgId();
+         };
+         $this->dynamicChecks['self_management_enabled'] = function (array $user) {
+             if (Configure::read('MISP.disableUserSelfManagement') && !$user['Role']['perm_admin']) {
+@@ -1361,7 +1366,7 @@ class ACLComponent extends Component
+         if ($this->canModifyEvent($user, $event)) {
+             return true; // full access
+         }
+-        if ($isTagLocal && $this->hostOrgId === (int)$user['org_id']) {
++        if ($isTagLocal && $this->hostOrgId() === (int)$user['org_id']) {
+             return true;
+         }
+         return false;
+@@ -1802,7 +1807,7 @@ class ACLComponent extends Component
+     private function __checkRoleAccess(array $role)
+     {
+         $result = array();
+-        $fakeUser = ['Role' => $role, 'org_id' => $this->hostOrgId];
++        $fakeUser = ['Role' => $role, 'org_id' => $this->hostOrgId()];
+         foreach (self::ACL_LIST as $controller => $actions) {
+             $controllerNames = Inflector::variable($controller) === Inflector::underscore($controller) ?
+                 array(Inflector::variable($controller)) :

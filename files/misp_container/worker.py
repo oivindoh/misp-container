@@ -22,6 +22,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import CAKE, MISP_BASE, WORKER_QUEUES, db
+from .config import setting
 from .env import env
 from .init import check_writable, prepare
 from .log import get as getlog, setup as setup_logging
@@ -155,7 +156,7 @@ def main() -> None:
     log.info("MISP worker container starting")
     prepare()
     if not env("PLUGIN_S3_BUCKET_NAME"):
-        check_writable(env("MISP_ATTACHMENTS_DIR"), "attachments")
+        check_writable(setting("MISP.attachments_dir"), "attachments")
     db.wait_for_db(retries=60, wait_seconds=5)
     db.wait_for_configure()
     limit_worker_memory()

@@ -64,7 +64,7 @@ def _org_id_by_uuid(org_uuid: str):
 
 
 def _configure_admin_org(admin_org: str) -> None:
-    """Configure admin organisation by UUID or name."""
+    """The admin's organisation, by ADMIN_ORG_UUID or else the one of user 1, as MISP's host organisation."""
     org_uuid = env("ADMIN_ORG_UUID")
     if org_uuid:
         org_id = _org_id_by_uuid(org_uuid)
@@ -87,22 +87,22 @@ def _configure_admin_org(admin_org: str) -> None:
                 (admin_org, org_uuid),
             )
             org_id = _org_id_by_uuid(org_uuid)
-
-        if org_id:
-            if admin_org != "ORGNAME":
-                log.info("setting org name to %s (id=%s)", admin_org, org_id)
-                db.execute("UPDATE organisations SET name = %s, date_modified = NOW() WHERE id = %s AND name != %s",
-                           (admin_org, org_id, admin_org))
-            row = _one("SELECT org_id FROM users WHERE id = 1")
-            if str((row or {}).get("org_id")) != str(org_id):
-                log.info("assigning admin user to org id=%s (uuid=%s)", org_id, org_uuid)
-                db.execute("UPDATE users SET org_id = %s WHERE id = 1", (org_id,))
-            cake.set_setting("MISP.host_org_id", org_id)
-
-    elif admin_org != "ORGNAME":
-        log.info("setting admin org name to %s", admin_org)
-        db.execute("UPDATE organisations SET name = %s, date_modified = NOW() WHERE id = 1 AND name != %s",
-                   (admin_org, admin_org))
+        row = _one("SELECT org_id FROM users WHERE id = 1")
+        if org_id and str((row or {}).get("org_id")) != str(org_id):
+            log.info("assigning admin user to org id=%s (uuid=%s)", org_id, org_uuid)
+            db.execute("UPDATE users SET org_id = %s WHERE id = 1", (org_id,))
+    else:
+        org_id = (_one("SELECT org_id FROM users WHERE id = 1") or {}).get("org_id")
+    if not org_id:
+        return
+    if admin_org != "ORGNAME" and db.execute(
+            "UPDATE organisations SET name = %s, date_modified = NOW() WHERE id = %s AND name != %s",
+            (admin_org, org_id, admin_org)):
+        log.info("named the admin organisation %s (id=%s)", admin_org, org_id)
+    # Each set is a PHP process and a log row in MISP, so only a change
+    if str(db.get_system_setting("MISP.host_org_id")) != str(org_id):
+        log.info("making organisation %s MISP's host organisation", org_id)
+        cake.set_setting("MISP.host_org_id", org_id)
 
 
 def has_authkey(user_id: int, authkey: str) -> bool:

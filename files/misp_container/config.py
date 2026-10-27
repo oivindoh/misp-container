@@ -3,53 +3,37 @@
 The chart resolves the repository's settings (deploy/chart/files/settings.yaml, with the
 env value on top) into two kinds of env var. MISP_SETTING_<Category>__<key> is MISP's own
 environment layer, which MISP reads above config.php and the database. What MISP reads
-before that layer goes into config.php: MISP_CONFIG_<Category>__<key>, and
-MISP_CONFIG_<name> for a setting without a category (debug).
+before that layer goes into config.php: MISP_CONFIG_<Category>__<key>, as JSON typed by
+the setting's default, or as a plain string for the names in MISP_PLAIN_CONFIG, which a
+Secret fills.
 """
 
 from __future__ import annotations
 
 import json
 import os
-import re
 
 CONFIG_PREFIX = "MISP_CONFIG_"
 SETTING_PREFIX = "MISP_SETTING_"
-
-
-def env_value(raw: str):
-    """A setting's env value with the type MISP's EnvSetting gives it.
-
-    true, false and null become their types, a number a number, and a value that
-    starts with [ or { is JSON; anything else stays a string.
-    """
-    value = raw.strip()
-    lowered = value.lower()
-    if lowered in ("true", "false"):
-        return lowered == "true"
-    if lowered == "null":
-        return None
-    if re.fullmatch(r"-?\d+", value):
-        return int(value)
-    if re.fullmatch(r"-?\d+\.\d+", value):
-        return float(value)
-    if value[:1] in ("[", "{"):
-        try:
-            return json.loads(value)
-        except ValueError:
-            return raw
-    return raw
+PLAIN = "MISP_PLAIN_CONFIG"
 
 
 def config_php_values(environ=None) -> dict:
     """{section: {key: value}} and {name: value} of the MISP_CONFIG_* env vars."""
     environ = os.environ if environ is None else environ
+    plain = set(environ.get(PLAIN, "").split(","))
     tree: dict = {}
     for var in sorted(environ):
         if not var.startswith(CONFIG_PREFIX):
             continue
         section, _, key = var[len(CONFIG_PREFIX):].partition("__")
-        value = env_value(environ[var])
+        value = environ[var]
+        if var not in plain:
+            try:
+                value = json.loads(value)
+            except ValueError:
+                # An env value the setting's type does not take, such as a path for a flag
+                pass
         if key:
             tree.setdefault(section, {})[key] = value
         else:
@@ -66,6 +50,22 @@ def repository_settings(environ=None) -> set[str]:
     environ = os.environ if environ is None else environ
     names = {name for name in environ.get("MISP_REPOSITORY_SETTINGS", "").split(",") if name}
     return names | {var[len(SETTING_PREFIX):].replace("__", ".") for var in environ if var.startswith(SETTING_PREFIX)}
+
+
+def setting(name: str, default: str = "") -> str:
+    """A setting's value as the chart passes it to MISP's environment layer."""
+    return os.environ.get(SETTING_PREFIX + name.replace(".", "__"), default)
+
+
+def missing_settings(environ=None) -> set[str]:
+    """The settings MISP_REPOSITORY_SETTINGS lists whose MISP_SETTING_* variable the pod lacks.
+
+    A Secret the release supplies (secrets.create false) can lack a key the secrets
+    value names; the setting then never reaches MISP.
+    """
+    environ = os.environ if environ is None else environ
+    listed = {name for name in environ.get("MISP_REPOSITORY_SETTINGS", "").split(",") if name}
+    return {name for name in listed if SETTING_PREFIX + name.replace(".", "__") not in environ}
 
 
 def php_literal(value) -> str:

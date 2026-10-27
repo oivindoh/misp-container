@@ -129,6 +129,24 @@ def test_admin_org_uuid(stack):
     assert me(stack).get("Organisation", {}).get("uuid") == TEST_ENV["ADMIN_ORG_UUID"]
 
 
+def test_the_admin_org_is_the_host_org(stack):
+    assert str(setting(stack, "MISP.host_org_id")) == str(me(stack)["User"]["org_id"])
+
+
+def test_a_host_org_user_without_site_admin_passes_the_host_org_check(stack):
+    # patches/04: the ACL reads the host organisation after MISP's settings layers
+    org_id = me(stack)["User"]["org_id"]
+    user = stack.api("POST", "/admin/users/add", stack.key, {"User": {
+        "email": "host-org-user@example.com", "org_id": org_id, "role_id": 3,
+        "password": "Host-0rg!Pass#2026"}}) or {}
+    uid = user.get("User", {}).get("id")
+    assert uid, user
+    key = (stack.api("POST", f"/auth_keys/add/{uid}", stack.key, {}) or {})["AuthKey"]["authkey_raw"]
+    status, body = stack.http("GET", "/event_blocklists/index", key)
+    stack.http("POST", f"/admin/users/delete/{uid}", stack.key, {})
+    assert status == 200, body[:300]
+
+
 def test_misp_org_is_the_admin_org(stack):
     assert setting(stack, "MISP.org") == TEST_ENV["ADMIN_ORG"]
 

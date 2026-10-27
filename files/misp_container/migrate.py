@@ -38,6 +38,7 @@ from pathlib import Path
 from typing import Iterator
 
 from . import MISP_BASE, cake, db
+from .config import setting
 from .env import env
 from .init import database_fields, prepare_config, purge_model_cache, setup_tmp, write_database_php
 from .log import setup as setup_logging, get as getlog
@@ -415,7 +416,7 @@ def attachment_target() -> Path | Bucket:
     # MISP uses the endpoint only for an AWS-compatible store (Plugin.S3_aws_compatible)
     if bucket and env("PLUGIN_S3_AWS_COMPATIBLE", "true").lower() in ("false", "0"):
         bucket.endpoint = ""
-    return bucket or Path(env("MISP_ATTACHMENTS_DIR", f"{MISP_BASE}/app/attachments"))
+    return bucket or Path(setting("MISP.attachments_dir", f"{MISP_BASE}/app/attachments"))
 
 
 def check_bucket(bucket: Path | Bucket | None) -> None:
