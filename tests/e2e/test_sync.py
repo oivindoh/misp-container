@@ -12,6 +12,7 @@ tags, and pushes A and C only the events tagged for them.
 """
 
 import json
+import shlex
 import time
 
 import pytest
@@ -40,6 +41,9 @@ SYNC_KEY = {  # the key the first instance's sync user holds, for the second ins
 SECRETS = values_file(VALUES)["secrets"]
 REDIS_PASSWORD = SECRETS["app"]["MISP_REDIS_PASSWORD"]
 PARTNER_DB_PASSWORD = "misp-25-db-pw"
+# The partner's Redis is its own, and the entrypoint of MISP's 2.5 images writes the password
+# unquoted into its config: a plain one
+PARTNER_REDIS_PASSWORD = "misp-25-redis-pw"
 
 
 class Instances(dict):
@@ -64,7 +68,7 @@ def partner_settings():
     return {"BASE_URL": url("c"), "ADMIN_EMAIL": "admin@admin.test", "ADMIN_PASSWORD": SECRETS["admin"]["ADMIN_PASSWORD"],
             "ADMIN_KEY": ADMIN_KEYS["c"], "ADMIN_ORG": "Org-C", "ADMIN_ORG_UUID": ORG_UUIDS["c"],
             "MYSQL_HOST": "mariadb", "MYSQL_USER": "misp", "MYSQL_PASSWORD": PARTNER_DB_PASSWORD,
-            "MYSQL_DATABASE": "misp", "REDIS_HOST": "redis", "REDIS_PASSWORD": REDIS_PASSWORD,
+            "MYSQL_DATABASE": "misp", "REDIS_HOST": "redis", "REDIS_PASSWORD": PARTNER_REDIS_PASSWORD,
             "DISABLE_IPV6": "true", "DISABLE_CA_REFRESH": "true", "ENABLE_BACKGROUND_UPDATES": "true"}
 
 
@@ -264,7 +268,7 @@ def hub_tagged(stack, hub_pulled):
 @pytest.fixture(scope="module")
 def spoke_pulled(stack, hub_tagged):
     # Stale event indexes in Redis would hide the pulled events
-    stack["a"].exec("redis", f"redis-cli -a {REDIS_PASSWORD} FLUSHALL")
+    stack["a"].exec("redis", f"redis-cli -a {shlex.quote(REDIS_PASSWORD)} FLUSHALL")
     for inst in ("a", "c"):
         post_ok(stack, inst, f"/servers/pull/{server_id(stack, inst, 'Hub B')}/full")
     for inst in ("a", "c"):

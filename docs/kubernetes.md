@@ -210,7 +210,7 @@ in session mode ([configuration.md](configuration.md#database)).
 | Resource | Default | Notes |
 |----------|---------|-------|
 | PostgreSQL | StatefulSet, 20Gi ReadWriteOnce claim (`postgres` component) | `postgres.size` and `postgres.storageClass` |
-| Attachments, org logos, custom images | claim `attachments`, 20Gi ReadWriteMany | Web and worker pods share it, and `helm uninstall` leaves it. For S3, set `PLUGIN_S3_BUCKET_NAME` in `env` and `attachments.claim: false` |
+| Attachments, org logos, custom images | claim `attachments`, 20Gi ReadWriteMany | Web and worker pods share it, and `helm uninstall` leaves it. For S3, set `PLUGIN_S3_BUCKET_NAME`, `PLUGIN_S3_AWS_ACCESS_KEY` and the endpoint in `env`, `PLUGIN_S3_AWS_SECRET_KEY` in `secrets.app`, and `attachments.claim: false` |
 | Redis | No persistence (`redis` component) | Sessions and queued jobs are lost when Redis restarts |
 | Everything else | `emptyDir` per pod | `app/Config`, `app/tmp`, `.gnupg`, `app/files/{scripts/tmp,certs,terms}` |
 
