@@ -130,27 +130,19 @@ def secret_users() -> dict[str, dict[str, set[str]]]:
     return users
 
 
-# The order of the Secrets table: the three every release has, then the migration's
-SECRET_ORDER = ["secrets-db.env", "secrets-app.env", "secrets-admin.env", "secrets-migrate.env"]
-
-
 def secrets() -> str:
     users = secret_users()
+    values = yaml.safe_load((chart.CHART / "values.yaml").read_text())
     rows = []
-
-    def order(path: Path):
-        # the known ones in their order, then any new one by name
-        return (path.name not in SECRET_ORDER, SECRET_ORDER.index(path.name) if path.name in SECRET_ORDER else 0, path.name)
-
-    for path in sorted((chart.CHART / "files").glob("secrets-*.env"), key=order):
-        name = "misp-" + path.stem.removeprefix("secrets-")
-        keys = [line.split("=", 1)[0] for line in path.read_text().splitlines()
-                if "=" in line and not line.lstrip().startswith("#")]
+    for name, value, keys in [("misp-db", "secrets.db", values["secrets"]["db"]),
+                              ("misp-app", "secrets.app", values["secrets"]["app"]),
+                              ("misp-admin", "secrets.admin", values["secrets"]["admin"]),
+                              ("misp-migrate", "migrate.secret", values["migrate"]["secret"])]:
         readers = []
         for user, subset in sorted(users.get(name, {}).items()):
             readers.append(f"{user} ({', '.join(f'`{k}`' for k in sorted(subset))})" if subset else user)
-        rows.append((f"`{name}`", f"`{rel(path)}`", ", ".join(f"`{k}`" for k in keys), ", ".join(readers)))
-    return table(("Secret", "File", "Keys", "Read by"), rows)
+        rows.append((f"`{name}`", f"`{value}`", ", ".join(f"`{k}`" for k in keys), ", ".join(readers)))
+    return table(("Secret", "Value", "Keys", "Read by"), rows)
 
 
 def components() -> str:

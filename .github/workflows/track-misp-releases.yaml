@@ -59,14 +59,22 @@ jobs:
       # Resolve the new version's dependencies first: the image build installs
       # exactly files/composer.lock and fails while it lags upstream. docker's
       # own builder keeps the composer-lock image in docker for its run.
+      # Python and uv at the versions of mise.toml, checked against mise.lock
+      - name: Install the tools
+        if: steps.misp.outputs.changed == 'true' && steps.bump.outputs.skip != 'true'
+        uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
+        with:
+          version: 2026.8.5
+          install_args: python uv
+          cache: false
       - name: Resolve the dependencies
         if: steps.misp.outputs.changed == 'true' && steps.bump.outputs.skip != 'true'
         env:
           CONTAINER_CMD: docker
         run: |
-          pip install --quiet pyyaml uv
+          uv sync
           scripts/update-composer-lock.sh
-          python3 scripts/update_misp_requirements.py
+          .venv/bin/python scripts/update_misp_requirements.py
 
       - name: Commit and open PR
         if: steps.misp.outputs.changed == 'true' && steps.bump.outputs.skip != 'true'

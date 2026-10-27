@@ -20,7 +20,7 @@ spec:
         {{- include "misp.podLabels" (dict "root" . "name" "redis") | nindent 8 }}
       {{- if .Values.secrets.create }}
       annotations:
-        checksum/secrets: {{ printf "%s%s" (.Files.Get "files/secrets-app.env") (toJson .Values.secrets.app) | sha256sum }}
+        checksum/secrets: {{ toJson .Values.secrets.app | sha256sum }}
       {{- end }}
     spec:
       securityContext:

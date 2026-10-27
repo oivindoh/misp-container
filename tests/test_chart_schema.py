@@ -48,7 +48,7 @@ def kubeconform() -> str:
     path = shutil.which("kubeconform")
     if not path:
         if os.environ.get("CI"):
-            pytest.fail("kubeconform is not on PATH; the install-helm action installs it")
+            pytest.fail("kubeconform is not on PATH: mise install installs it (mise.toml)")
         pytest.skip("kubeconform is not on PATH (mise install)")
     return path
 

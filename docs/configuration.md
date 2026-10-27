@@ -60,8 +60,8 @@ a warning for every other row that a person changed, with who and when from MISP
 metrics exporter reports the same settings as `misp_setting_manual`
 ([metrics.md](metrics.md)): move each into git, or undo it.
 
-Container-level defaults (database and Redis hosts, PHP limits, worker counts) are in
-`deploy/chart/files/base.env`, which the chart reads.
+Container-level defaults (database and Redis hosts, PHP limits, worker counts) are the `env`
+value of `deploy/chart/values.yaml`: `helm show values` shows them.
 
 ## Database
 
@@ -181,7 +181,7 @@ are required; `LDAPAUTH_LDAPSEARCHFILTER`, `LDAPAUTH_LDAPDEFAULTORGID`, `LDAPAUT
 ## Logging
 
 Every pod writes its log to stdout and stderr and keeps no log file. `LOG_FORMAT` selects the
-line format: `json` (the `base.env` default: one JSON object per line, for a log collector)
+line format: `json` (the chart's default: one JSON object per line, for a log collector)
 or `text` (coloured on a terminal).
 
 | Source | Reaches the output as | Format |

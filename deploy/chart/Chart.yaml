@@ -5,9 +5,9 @@ type: application
 # Set by mise run release (scripts/release.py): while MISP is a work-in-progress
 # pin, the chart, the images and the git tag share the pre-release version
 # 3.0.0-wip.N.
-version: 3.0.0-wip.2
+version: 3.0.0-wip.3
 # The image tag of the release. The images default to it.
-appVersion: "3.0.0-wip.2"
+appVersion: "3.0.0-wip.3"
 home: https://github.com/oivindoh/misp-container
 sources:
   - https://github.com/oivindoh/misp-container

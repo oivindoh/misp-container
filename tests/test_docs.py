@@ -116,8 +116,9 @@ FILE_TOKEN = re.compile(r"([\w.-]+\.(?:py|sh|yaml|yml|env|toml))")
 
 
 def container_files() -> set[str]:
-    """Names of the files the containers read that base.env names (ORG_CONFIG_FILE: orgs.yaml)."""
-    return set(re.findall(r"=/\S*/([\w.-]+\.yaml)$", (REPO / "deploy/chart/files/base.env").read_text(), re.M))
+    """Names of the files the containers read that the env defaults name (ORG_CONFIG_FILE: orgs.yaml)."""
+    env = yaml.safe_load((chart.CHART / "values.yaml").read_text())["env"]
+    return {value.rsplit("/", 1)[1] for value in env.values() if value.startswith("/") and value.endswith(".yaml")}
 
 
 def test_every_file_name_a_doc_names_exists():
@@ -306,10 +307,9 @@ def test_the_logging_doc_names_every_relayed_file():
 
 
 def test_the_log_format_default():
-    base = (chart.CHART / "files/base.env").read_text()
-    base_default = re.search(r"^LOG_FORMAT=(\w+)", base, re.M).group(1)
+    default = yaml.safe_load((chart.CHART / "values.yaml").read_text())["env"]["LOG_FORMAT"]
     text = " ".join((REPO / "docs/configuration.md").read_text().split())
-    expected = f"`{base_default}` (the `base.env` default"
+    expected = f"`{default}` (the chart's default"
     assert expected in text, f"docs/configuration.md should say: {expected}"
 
 

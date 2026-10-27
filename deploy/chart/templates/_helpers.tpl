@@ -191,7 +191,7 @@ refuses its configuration never serves.
 {{- define "misp.checksums" -}}
 {{- $secrets := "" }}
 {{- if .Values.secrets.create }}
-{{- $secrets = printf "%s%s%s%s" (.Files.Get "files/secrets-db.env") (toJson .Values.secrets.db) (.Files.Get "files/secrets-app.env") (toJson .Values.secrets.app) }}
+{{- $secrets = printf "%s%s" (toJson .Values.secrets.db) (toJson .Values.secrets.app) }}
 {{- end }}
 checksum/config: {{ printf "%s%s%s" (include (print .Template.BasePath "/configmap-env.yaml") .) (include (print .Template.BasePath "/configmap-settings.yaml") .) $secrets | sha256sum }}
 {{- end }}
@@ -290,23 +290,6 @@ name in misp-db (DB_USER, DB_PASSWORD) or misp-app (MISP_REDIS_PASSWORD). Takes 
 {{- $var := index . 1 }}
 {{- $ref := get (include "misp.connectionRefs" (index . 0) | fromJson) $var }}
 {{- toYaml (default (dict "name" (get (include "misp.connectionVars" . | fromJson) $var) "key" $var) $ref) }}
-{{- end }}
-
-{{/*
-Entries of an env file in files/: KEY=VALUE lines, comments and blank lines
-skipped, as a dict. Takes (list root path).
-*/}}
-{{- define "misp.envFile" -}}
-{{- $root := index . 0 }}
-{{- $out := dict }}
-{{- range $line := $root.Files.Lines (index . 1) }}
-{{- $line = trim $line }}
-{{- if and $line (not (hasPrefix "#" $line)) (contains "=" $line) }}
-{{- $kv := regexSplit "=" $line 2 }}
-{{- $_ := set $out (index $kv 0) (index $kv 1) }}
-{{- end }}
-{{- end }}
-{{- toJson $out }}
 {{- end }}
 
 {{/*
