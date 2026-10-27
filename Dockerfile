@@ -21,16 +21,17 @@ ARG RUNTIME_PACKAGES="ca-certificates tini procps openssl gpg gpg-agent \
     systemd-standalone-tmpfiles libmagic1 libldap-common librdkafka1 libbrotli1 libfuzzy2 \
     python3-minimal libpython3.13-stdlib"
 # The MISP submodules the image does not ship: PyMISP and the STIX helpers, which
-# requirements-misp.txt installs as packages
+# requirements-misp.txt installs as packages, and the sources of misp-iconify, whose
+# exports MISP serves from webroot
 ARG EXCLUDED_SUBMODULES="PyMISP app/files/scripts/cti-python-stix2 app/files/scripts/misp-stix \
     app/files/scripts/mixbox app/files/scripts/python-cybox app/files/scripts/python-maec \
-    app/files/scripts/python-stix"
+    app/files/scripts/python-stix app/files/misp-iconify"
 
 # =============================================================================
 # Stage 1: php-base - Common runtime packages
 # =============================================================================
 FROM debian:trixie-slim@sha256:62bd423aeee912639ca8ee681c2b762cb3e25137e0a92b20be455898a9f034ad AS php-base
-ENV DEBIAN_FRONTEND=noninteractive
+ARG DEBIAN_FRONTEND=noninteractive
 ARG RUNTIME_PACKAGES
 
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
@@ -53,15 +54,10 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
     rm -f /etc/apt/apt.conf.d/docker-clean && apt-get update && apt-get install -y --no-install-recommends git ca-certificates python3
 
-# No submodule is recursive: only misp-iconify nests any, the sources of its icon
-# exports, over SSH URLs.
-RUN if [ -n "${CORE_COMMIT}" ]; then \
-        mkdir -p /var/www/MISP && cd /var/www/MISP && git init -q && \
-        git fetch -q --depth 1 https://github.com/MISP/MISP.git "${CORE_COMMIT}" && git checkout -q FETCH_HEAD; \
-    else \
-        git clone --branch "${CORE_TAG}" --depth 1 https://github.com/MISP/MISP.git /var/www/MISP; \
-    fi && \
-    cd /var/www/MISP && \
+# By commit: a tag can move. CORE_TAG only names the release
+RUN test -n "${CORE_COMMIT}" || { echo "CORE_COMMIT is empty: pin the commit of ${CORE_TAG}" >&2; exit 1; } && \
+    mkdir -p /var/www/MISP && cd /var/www/MISP && git init -q && \
+    git fetch -q --depth 1 https://github.com/MISP/MISP.git "${CORE_COMMIT}" && git checkout -q FETCH_HEAD && \
     git config --file .gitmodules --get-regexp path | awk '{print $2}' \
         | grep -v -x -F "$(printf '%s\n' ${EXCLUDED_SUBMODULES})" \
         | xargs git submodule update --init --depth 1 --
@@ -73,26 +69,32 @@ COPY scripts/apply_patches.py /tmp/apply_patches.py
 RUN python3 /tmp/apply_patches.py /var/www/MISP /tmp/patches
 
 # Clean and set permissions - all in one layer. MISP reads none of the removed
-# files at run time: its docs, slides, packaging, tests and tools.
+# files at run time: its docs, slides, packaging, tests and tools, CakePHP's own
+# tests, and the ASN database that only a release step reads (scripts/check_upstream.py,
+# dropped-files). The code stays root's: UID 1000 reads it and writes only the
+# directories the final stage gives it.
 RUN find /var/www/MISP/INSTALL/* ! -name 'POSTGRESQL.sql' -type f -exec rm {} + && \
     find /var/www/MISP/INSTALL/* ! -name 'POSTGRESQL.sql' -type l -exec rm {} + && \
     find /var/www/MISP/.git/* ! -name HEAD -exec rm -rf {} + 2>/dev/null || true && \
     cd /var/www/MISP && rm -rf ${EXCLUDED_SUBMODULES} \
-        docs slides format tests tools debian build db_schema.json app/Test app/composer.phar && \
+        docs slides format tests tools debian build db_schema.json app/Test app/composer.phar \
+        app/Lib/cakephp/lib/Cake/Test app/files/geo-open/GeoOpen-Country-ASN.mmdb && \
     # The configure step records this marker and the pods wait for it
-    echo "${CORE_TAG}${CORE_COMMIT:++${CORE_COMMIT}}" > /tmp/misp-dist-version && \
+    echo "${CORE_TAG}+${CORE_COMMIT}" > /tmp/misp-dist-version && \
     # app/Config is a per-pod volume rendered at start from these defaults
     mkdir -p /srv/misp-config && \
     cp /var/www/MISP/app/Config/core.default.php /var/www/MISP/app/Config/bootstrap.default.php \
        /var/www/MISP/app/Config/routes.php /srv/misp-config/ && \
     rm -rf /var/www/MISP/app/Config/* && \
-    chown -R ${MISP_UID}:${MISP_GID} /srv/misp-config /tmp/misp-dist-version && \
-    # Now set restrictive permissions for the runtime image
-    find /var/www/MISP -type f -exec chmod 0440 {} + && \
-    find /var/www/MISP -type d -exec chmod 0550 {} + && \
-    chmod +x /var/www/MISP/app/Console/cake && \
-    touch /var/www/MISP/.git/ORIG_HEAD && chmod 0660 /var/www/MISP/.git/ORIG_HEAD && \
-    chown -R ${MISP_UID}:${MISP_GID} /var/www/MISP
+    chown -R 0:0 /var/www/MISP && \
+    find /var/www/MISP -type f -exec chmod 0444 {} + && \
+    find /var/www/MISP -type d -exec chmod 0555 {} + && \
+    chmod 0555 /var/www/MISP/app/Console/cake && \
+    touch /var/www/MISP/.git/ORIG_HEAD && chown ${MISP_UID}:${MISP_GID} /var/www/MISP/.git/ORIG_HEAD && \
+    chmod 0660 /var/www/MISP/.git/ORIG_HEAD
+
+# The composer binary, as a stage of its own so that dependabot bumps its digest
+FROM composer:2@sha256:b6dcd72ca98fa19d0e5b8476de179859704891fad06dd9e0b96833d4c430a5fc AS composer-bin
 
 # =============================================================================
 # Stage 3: composer - PHP dependencies, pinned by files/composer.lock
@@ -113,7 +115,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 
 WORKDIR /tmp
 COPY --from=misp-source --chown=0:0 --chmod=0644 /var/www/MISP/app/composer.json /tmp/composer.json
-COPY --from=composer:2@sha256:1364b5b9132ab4c42ea3be53e894572c32fe75a512cb3b1c3903fcc9bce53dcc /usr/bin/composer /usr/bin/composer
+COPY --from=composer-bin /usr/bin/composer /usr/bin/composer
 # certmichelin/openid-connect-php accepts any phpseclib from 3.0.47 on, but its Jwks.php
 # needs phpseclib 3's EC key formats: with phpseclib 4 every OIDC login fails
 RUN composer require --no-update --no-interaction \
@@ -151,10 +153,6 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         libbrotli-dev libfuzzy-dev librdkafka-dev \
     && apt-get autoremove -y
 
-RUN update-alternatives --set php /usr/bin/php8.4 && \
-    update-alternatives --set php-config /usr/bin/php-config8.4 && \
-    update-alternatives --set phpize /usr/bin/phpize8.4
-
 # Debian packages none of these four. Each builds from its GitHub repository at a
 # pinned commit, so the build reaches no host but GitHub:
 #   rdkafka   php-rdkafka/php-rdkafka       6.0.5
@@ -177,19 +175,20 @@ RUN cp "/usr/lib/$(gcc -dumpmachine)"/libfuzzy.* /usr/lib && \
 # =============================================================================
 # Stage 5: uv - Python package installer (pinned)
 # =============================================================================
-FROM ghcr.io/astral-sh/uv:latest@sha256:b46b03ddfcfbf8f547af7e9eaefdf8a39c8cebcba7c98858d3162bd28cf536f6 AS uv
+FROM ghcr.io/astral-sh/uv:latest@sha256:af22a52f5eafef3d78e551599d405c02df61919d18028f0cea8eda93bc9986d0 AS uv
 
 # =============================================================================
 # Stage 6: python - Python packages of misp_container and of MISP's scripts
 # =============================================================================
 # files/requirements-final.txt holds the packages of this repository's code,
 # files/requirements-misp.txt those MISP's own scripts import (STIX, TAXII,
-# ZeroMQ, sample extraction). pydeep2 and weakrefmethod ship no wheels: they
-# build here, with a compiler the final image does not carry. One install
-# resolves both files together. The bind mount keeps the uv binary out of
-# every layer.
+# ZeroMQ, sample extraction), each pin with its hashes. pydeep2 and weakrefmethod
+# ship no wheels: they build here, with a compiler the final image does not
+# carry. The bind mount keeps the uv binary out of every layer. The bytecode is
+# compiled here: the read-only root keeps Python from writing it, and each
+# STIX import or export MISP starts would compile its packages again.
 FROM debian:trixie-slim@sha256:62bd423aeee912639ca8ee681c2b762cb3e25137e0a92b20be455898a9f034ad AS python
-ENV DEBIAN_FRONTEND=noninteractive
+ARG DEBIAN_FRONTEND=noninteractive
 
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
@@ -198,13 +197,13 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 
 COPY files/requirements-final.txt files/requirements-misp.txt /tmp/
 RUN --mount=type=bind,from=uv,source=/uv,target=/tmp/uv \
-    /tmp/uv pip install --system --break-system-packages --no-cache \
+    /tmp/uv pip install --system --break-system-packages --no-cache --require-hashes --compile-bytecode \
         -r /tmp/requirements-final.txt -r /tmp/requirements-misp.txt
 
 # =============================================================================
 # Stage 7: caddy-bin - The caddy binary for the web pod's caddy container
 # =============================================================================
-FROM caddy:2@sha256:cb9d71ad83182011b79355cd57692686374bd78d6fe327efe0ff8507da03ab13 AS caddy-bin
+FROM caddy:2@sha256:504a44d7d74bd2bc28a66afc4774912fc21223ca8a67734af1c54ab2f999b489 AS caddy-bin
 # Kubernetes' allowPrivilegeEscalation: false (no_new_privs) blocks execve of a
 # binary with file capabilities, and caddy listens on 8080, so it needs none
 RUN setcap -r /usr/bin/caddy
@@ -217,7 +216,7 @@ RUN setcap -r /usr/bin/caddy
 # test suite, docs and man pages) never enters a layer. Deleted in a later layer
 # on top of php-base, those files would still be pulled.
 FROM debian:trixie-slim@sha256:62bd423aeee912639ca8ee681c2b762cb3e25137e0a92b20be455898a9f034ad AS final
-ENV DEBIAN_FRONTEND=noninteractive
+ARG DEBIAN_FRONTEND=noninteractive
 
 ARG RUNTIME_PACKAGES
 ARG PHP_VER
@@ -237,6 +236,8 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     apt-get upgrade -y --no-install-recommends && \
     apt-get install -y --no-install-recommends $RUNTIME_PACKAGES \
     && apt-get autoremove -y \
+    # No setuid or setgid binary: no process of the image changes its user
+    && find / -xdev -perm /6000 -type f -exec chmod a-s {} + \
     && rm -rf /root/.cache \
               /usr/lib/*/gconv \
               /usr/lib/*/perl \
@@ -253,8 +254,7 @@ COPY --from=python /usr/local /usr/local
 
 # Create non-root user
 RUN groupadd -g ${MISP_GID} misp && \
-    useradd -u ${MISP_UID} -g ${MISP_GID} -m -s /bin/bash misp && \
-    update-alternatives --set php /usr/bin/php8.4
+    useradd -u ${MISP_UID} -g ${MISP_GID} -m -s /bin/bash misp
 
 # Install the native PHP extensions
 # By name: final takes the security pocket's PHP packages, so the build stage's
@@ -277,14 +277,14 @@ RUN for mod in ssdeep rdkafka brotli simdjson; do \
 # The web pod's caddy container runs this binary from this image
 COPY --from=caddy-bin /usr/bin/caddy /usr/bin/caddy
 
-# Copy MISP source (permissions already set in misp-source stage)
-COPY --from=misp-source --chown=${MISP_UID}:${MISP_GID} /var/www/MISP /var/www/MISP
-COPY --from=composer-build --chown=${MISP_UID}:${MISP_GID} /tmp/composer.lock /var/www/MISP/app/composer.lock
-COPY --from=composer-build --chown=${MISP_UID}:${MISP_GID} /tmp/Vendor /var/www/MISP/app/Vendor
+# MISP's code, root's and readable by all (permissions set in the misp-source stage)
+COPY --from=misp-source /var/www/MISP /var/www/MISP
+COPY --from=composer-build /tmp/composer.lock /var/www/MISP/app/composer.lock
+COPY --from=composer-build /tmp/Vendor /var/www/MISP/app/Vendor
 
 # app/Config defaults (rendered into the per-pod Config volume at start) and the version marker
-COPY --from=misp-source --chown=${MISP_UID}:${MISP_GID} /srv/misp-config /srv/misp-config
-COPY --from=misp-source --chown=${MISP_UID}:${MISP_GID} /tmp/misp-dist-version /srv/misp-dist-version
+COPY --from=misp-source /srv/misp-config /srv/misp-config
+COPY --from=misp-source /tmp/misp-dist-version /srv/misp-dist-version
 
 # Prepare writable directories (overlaid by the pods' emptyDir volumes and claims).
 # app/files ships in the image; MISP writes only to these five subdirectories of it.
@@ -296,16 +296,18 @@ RUN for dir in app/files/scripts/tmp app/files/certs app/files/terms app/files/i
     done
 
 # The Python package: each role starts as python3 -m misp_container.<role>
-COPY --chown=${MISP_UID}:${MISP_GID} files/misp_container/ /opt/misp_container/
+COPY files/misp_container/ /opt/misp_container/
+RUN python3 -m compileall -q /opt/misp_container
 
-# Config files. PHP-FPM loads Debian's php.ini, then the files of php.d through
-# PHP_INI_SCAN_DIR (web.py). MISP's settings come from the chart (misp-settings).
-COPY --chown=${MISP_UID}:${MISP_GID} files/php-fpm-pool.conf /etc/misp-docker/php-fpm-pool.conf
-COPY --chown=${MISP_UID}:${MISP_GID} files/php.ini /etc/misp-docker/php.d/99-misp.ini
-COPY --chown=${MISP_UID}:${MISP_GID} files/Caddyfile /etc/caddy/Caddyfile
+# Config files, root's and readable by all. PHP-FPM loads Debian's php.ini, then the
+# files of php.d through PHP_INI_SCAN_DIR (web.py). MISP's settings come from the
+# chart (misp-settings).
+COPY files/php-fpm-pool.conf /etc/misp-docker/php-fpm-pool.conf
+COPY files/php.ini /etc/misp-docker/php.d/99-misp.ini
+COPY files/Caddyfile /etc/caddy/Caddyfile
 # gnupg/ is the mount point of the instance GPG key (the misp-gnupg Secret)
-RUN find /etc/misp-docker /etc/caddy -type f -exec chmod 0440 {} + && \
-    find /etc/misp-docker /etc/caddy -type d -exec chmod 0550 {} + && \
+RUN find /opt/misp_container /etc/misp-docker /etc/caddy -type f -exec chmod 0444 {} + && \
+    find /opt/misp_container /etc/misp-docker /etc/caddy -type d -exec chmod 0555 {} + && \
     install -d -o ${MISP_UID} -g ${MISP_GID} -m 0700 /etc/misp-docker/gnupg
 
 ENV PYTHONPATH=/opt PYTHONUNBUFFERED=1
@@ -321,26 +323,27 @@ CMD ["python3", "-m", "misp_container.web"]
 # =============================================================================
 # Distroless Python on Debian 13 (trixie). No shell, no package manager.
 #
-# Edit files/requirements-modules.txt to change the version or extras:
+# Edit files/requirements-modules.in to change the version or extras, then run
+# mise run misp-requirements, which locks it with hashes into requirements-modules.txt:
 #   misp-modules[minimal]  (default) -- common enrichment APIs
 #   misp-modules[all]      -- everything including numpy, pandas, opencv
 #   misp-modules           -- core only (~89 modules, 106 MB)
 
 FROM debian:trixie-slim@sha256:62bd423aeee912639ca8ee681c2b762cb3e25137e0a92b20be455898a9f034ad AS modules-build
-ENV DEBIAN_FRONTEND=noninteractive
+ARG DEBIAN_FRONTEND=noninteractive
 
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
     rm -f /etc/apt/apt.conf.d/docker-clean && apt-get update && apt-get install -y --no-install-recommends \
         python3-minimal libpython3.13-stdlib python3-dev gcc g++
 
-COPY --from=uv /uv /tmp/uv
 COPY files/requirements-modules.txt /tmp/requirements.txt
-RUN /tmp/uv pip install --system --break-system-packages --no-cache -r /tmp/requirements.txt \
-    && rm /tmp/requirements.txt /tmp/uv
+RUN --mount=type=bind,from=uv,source=/uv,target=/tmp/uv \
+    /tmp/uv pip install --system --break-system-packages --no-cache --require-hashes -r /tmp/requirements.txt \
+    && rm /tmp/requirements.txt
 
 # gcr.io/distroless/python3-debian13 (Python 3.13, nonroot UID 65532)
-FROM gcr.io/distroless/python3-debian13:nonroot@sha256:614040f7f08b3f0dca943ea54eae94ea555ea2b9ca83d1acda1b7e4238ce91fb AS modules
+FROM gcr.io/distroless/python3-debian13:nonroot@sha256:64e54c4b1200da244d80181d98e86fc01d73c8101f107d5baf472152d8e119a2 AS modules
 COPY --from=modules-build /usr/local/lib/python3.13/dist-packages /usr/local/lib/python3.13/dist-packages
 
 EXPOSE 6666

@@ -25,7 +25,14 @@ helm install misp oci://ghcr.io/oivindoh/charts/misp --devel \
 ```
 
 The chart's version and its `appVersion`, the image tag of the release, follow the release
-scheme in [DEVELOPING.md](../DEVELOPING.md#releases). A pre-release such as `3.0.0-wip.1` needs
+scheme in [DEVELOPING.md](../DEVELOPING.md#releases). Each image and the chart carry an
+attestation that this repository's CI built them:
+
+```bash
+gh attestation verify oci://ghcr.io/oivindoh/misp-container:<tag> --repo oivindoh/misp-container
+gh attestation verify oci://ghcr.io/oivindoh/charts/misp:<chart version> --repo oivindoh/misp-container
+```
+ A pre-release such as `3.0.0-wip.1` needs
 `--version` or `--devel`. From a checkout, install `deploy/chart` instead.
 
 Check a release from inside the cluster once the configure Job has run:

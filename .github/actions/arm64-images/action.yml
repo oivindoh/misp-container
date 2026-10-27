@@ -1,0 +1,62 @@
+# Builds the two images for arm64 on an arm64 runner, loads them into docker, and
+# checks what the amd64 suites check of them: the image gates, the upstream guard
+# with its PHP run, the PHP extensions, and a modules image that starts. Without the
+# layer cache: the cache holds 10 GB per repository, and the amd64 layers fill it.
+name: The arm64 images
+description: Build, load and check the misp and modules images for arm64
+inputs:
+  misp:
+    description: The misp image name
+    required: true
+  modules:
+    description: The modules image name
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Build misp for arm64
+      uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+      with:
+        context: .
+        target: final
+        platforms: linux/arm64
+        load: true
+        tags: ${{ inputs.misp }}:arm64
+    - name: Build modules for arm64
+      uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+      with:
+        context: .
+        target: modules
+        platforms: linux/arm64
+        load: true
+        tags: ${{ inputs.modules }}:arm64
+    - name: Check misp for arm64
+      uses: ./.github/actions/check-image
+      with:
+        image: ${{ inputs.misp }}:arm64
+    - name: Check modules for arm64
+      uses: ./.github/actions/check-image
+      with:
+        image: ${{ inputs.modules }}:arm64
+    # The integration suite runs the same guard in the amd64 image (tests/e2e/test_upstream.py)
+    - name: Run the upstream guard and the PHP extensions in misp
+      shell: bash
+      run: |
+        set -euo pipefail
+        docker run --rm -v "$PWD:/repo:ro" --entrypoint python3 "${{ inputs.misp }}:arm64" \
+          /repo/scripts/check_upstream.py /var/www/MISP --php
+        loaded=$(docker run --rm --entrypoint php "${{ inputs.misp }}:arm64" -m)
+        for ext in brotli rdkafka redis simdjson ssdeep zstd; do
+          grep -qx "$ext" <<<"$loaded" || { echo "PHP does not load $ext"; exit 1; }
+        done
+    - name: Start modules
+      shell: bash
+      run: |
+        set -euo pipefail
+        docker run -d --name modules -p 6666:6666 "${{ inputs.modules }}:arm64"
+        for _ in $(seq 60); do
+          if curl -fsS http://localhost:6666/healthcheck; then docker rm -f modules; exit 0; fi
+          sleep 2
+        done
+        docker logs modules
+        exit 1

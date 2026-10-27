@@ -14,7 +14,7 @@ PYTHONPATH = "{{config_root}}/files"
 _.path = [".venv/bin"]
 
 [hooks.enter]
-run = "test -d .venv || uv sync --python 3.13"
+run = "test -d .venv || uv sync --locked --python 3.13"
 
 [tasks.test]
 description = "Run unit tests"
@@ -64,7 +64,7 @@ description = "Resolve MISP's PHP dependencies for the current CORE_TAG into fil
 run = "scripts/update-composer-lock.sh"
 
 [tasks.misp-requirements]
-description = "Resolve the Python packages of MISP's own scripts for the current CORE_TAG into files/requirements-misp.txt"
+description = "Resolve the Python packages of both images, MISP's scripts' for the current CORE_TAG among them, into hash-locked files/requirements-*.txt"
 run = "python scripts/update_misp_requirements.py"
 
 [tasks.release]

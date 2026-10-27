@@ -562,3 +562,19 @@ class TestEnvSettings:
         edit(misp, cu.SYSTEM_SETTING, "'Proxy', ", "")
         [problem] = problems(misp, "env-settings")
         assert "no longer holds Proxy" in problem
+
+
+class TestDroppedFiles:
+    def test_misp_code_that_names_the_asn_database_is_reported(self, misp):
+        write(misp, "app/Lib/Tools/GeoTool.php", "<?php\n$db = APP . 'files/geo-open/GeoOpen-Country-ASN.mmdb';\n")
+        [problem] = problems(misp, "dropped-files")
+        assert "app/Lib/Tools/GeoTool.php names GeoOpen-Country-ASN" in problem
+
+    def test_the_release_step_and_comments_may_name_it(self, misp):
+        write(misp, "app/Console/Command/AdminShell.php", "<?php\n$help = __('from the GeoOpen-Country-ASN mmdb');\n")
+        write(misp, "app/Lib/Dashboard/Widget.php", "<?php\n// built from GeoOpen-Country-ASN.mmdb\n")
+        assert problems(misp, "dropped-files") == []
+
+    def test_a_view_that_loads_misp_iconify_sources_is_reported(self, misp):
+        write(misp, "app/View/Layouts/x.ctp", "<link href=\"/files/misp-iconify/exports/icons.css\">\n")
+        assert problems(misp, "dropped-files")

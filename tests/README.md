@@ -40,7 +40,7 @@ Tests of the Python entrypoint library (`files/misp_container/`), the scripts an
 | `test_metrics.py` | Unit tests for the Prometheus metrics exporter. |
 | `test_migrate.py` | Unit tests for the migration Job (misp_container.migrate). |
 | `test_release.py` | Unit tests for the release tool (scripts/release.py): the next tag and chart version. |
-| `test_requirements.py` | files/requirements-misp.txt was resolved for the MISP the Dockerfile pins. |
+| `test_requirements.py` | The hash-locked requirement files of the images: resolved for the MISP the Dockerfile pins, and from their .in files. |
 | `test_s3.py` | Unit tests for the minimal S3 client (misp_container.s3). |
 | `test_settings.py` | The repository's settings as the chart renders them (_settings.tpl) and a pod reads them. |
 | `test_sync.py` | Unit tests for the org sync engine. |
@@ -252,18 +252,23 @@ Run with: `mise run smoketest https://misp.example.com`
 
 ## CI
 
-GitHub Actions on every push to master, every tag and every pull request:
+GitHub Actions on every push to master, every tag and every pull request, from the comment
+above each job of `.github/workflows/ci.yaml`:
 
-| Job | Runs |
-|-----|------|
-| `gate` | Decides what the run does: nothing on a master push whose commit carries a release tag, since the tag run tests and releases that commit; the unit tests only on a draft; no unit tests and no suites on a push to master that merges a pull request, which ran them on the same tree |
-| `build` | The two images into the layer cache, then Trivy on each: CRITICAL and HIGH findings with a fix go to the Security tab, and a CRITICAL one fails the job. The misp image's final stage is built fresh each run, so it carries the current Debian packages |
-| `unit` | The unit tests, the chart lint and every chart render validated against the schemas |
-| `suite` | The stack suites, one job each, in parallel, each on k3s in docker against the images from `build` (`MISP_IMAGE_TAG=ci`): `integration` (the upstream guard, then the integration suite), `hub-spoke`, `migration` and `lifecycle`. Each uploads its JUnit report and, after a failure, the cluster's logs |
-| `ci-ok` | The one required check: fails when a job failed or was cancelled, and on a draft |
-| `publish-plan` | On a tag, once every other job passed: the image tag and chart version of the release, refused when GHCR has either already |
-| `publish-arm64` | After `publish-plan`: the arm64 images, on an arm64 runner without the layer cache, to GHCR by digest, through the same CRITICAL gate as `build` |
-| `publish` | After `publish-arm64`: the amd64 images, one tag per image over both architectures, the chart and the GitHub Release |
+<!-- generated: ci-jobs-described -->
+| Job | Needs | Does |
+|---|---|---|
+| `gate` |  | Decides what the run does: A master push whose commit carries a release tag does nothing: the run of the tag tests the same commit and releases it. When the lookup fails, both runs go ahead. A draft pull request runs the unit tests only, and ci-ok fails, so it cannot merge before a run of the pull request marked ready passed. A push to master that merges a pull request skips the unit tests and the stack suites: the ruleset requires them on the pull request and requires it to be up to date, so the merge commit has the tree they tested. When the lookup fails, they run. |
+| `build` | `gate` | Builds each image into its own layer cache scope, in parallel, and scans it. The suite jobs rebuild from those caches and run against the images they loaded. The misp image's final stage never comes from the cache: its apt layer takes the current Debian packages, security updates included. The suites, the scan and the release then all use those layers. |
+| `arm64` | `gate` | The arm64 images, beside the suites, which run on amd64 only: a broken arm64 build, an extension that fails to load or a modules image that does not start shows here, before a release tags them |
+| `unit` | `gate` | The unit tests, the chart renders and the doc tests (mise run test) |
+| `suite` | `gate`, `build` | The stack suites, one job each, in parallel, each on a k3s cluster in docker, against the images from build. The upload keeps the JUnit report and, after a failure, the cluster's logs. name is the check name; id names the report and the suite's mise task. |
+| `ci-ok` | `gate`, `build`, `arm64`, `unit`, `suite` | The one required check: it fails on any failed or cancelled job, and on a draft, whose run skips the stack suites. Every other skip is the gate's. |
+| `publish-plan` | `gate`, `build`, `arm64`, `unit`, `suite` | Publishes a tag after every other job: the images under the tag without its v, the chart at the version of Chart.yaml, and a GitHub Release that names the MISP commit. The unit tests and the suites may be skipped only where the gate skipped them. The plan comes first, so a tag that cannot be published fails before any image is pushed. |
+| `publish-arm64` | `publish-plan` | The arm64 images of a release: built, loaded and checked as the arm64 job does, then pushed to GHCR by digest from the builder's cache, so a failed check leaves nothing in GHCR. publish tags them with the amd64 images. |
+| `publish` | `publish-plan`, `publish-arm64` | The amd64 images of a release: from the build job's layer cache, loaded and checked again, since a cache miss rebuilds a stage, then pushed by digest and tagged with the arm64 ones. Then the chart, an attestation of each, and the GitHub Release. |
+| `caches` | `gate`, `build`, `arm64`, `unit`, `suite`, `publish` | The layer caches of a pull request or a tag serve its run only, and at the repository's 10 GB limit they push master's out. A re-run of a pull request's suite then rebuilds the final stage. GitHub keeps a tag run's caches under refs/heads/refs/tags/<tag>, so both refs go. A dependabot run's token cannot delete; its caches go when the pull request closes (cache-cleanup.yaml). |
+<!-- end generated -->
 
 ## Environment
 

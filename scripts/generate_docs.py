@@ -276,6 +276,32 @@ def ci_jobs() -> str:
     return table(("Job", "Needs"), rows)
 
 
+def ci_job_comments() -> dict[str, str]:
+    """{job of ci.yaml: the comment block right above it, on one line}."""
+    comments: dict[str, str] = {}
+    block: list[str] = []
+    for line in (REPO / ".github/workflows/ci.yaml").read_text().splitlines():
+        if line.startswith("  # "):
+            block.append(line[4:].strip().removeprefix("- "))
+            continue
+        job = re.match(r"^  ([\w-]+):\s*$", line)
+        if job and block:
+            comments[job.group(1)] = one_line("\n".join(block))
+        block = []
+    return comments
+
+
+def ci_jobs_described() -> str:
+    workflow = yaml.safe_load((REPO / ".github/workflows/ci.yaml").read_text())
+    comments = ci_job_comments()
+    rows = []
+    for job, spec in workflow["jobs"].items():
+        needs = spec.get("needs", [])
+        needs = [needs] if isinstance(needs, str) else needs
+        rows.append((f"`{job}`", ", ".join(f"`{n}`" for n in needs), comments.get(job, "")))
+    return table(("Job", "Needs", "Does"), rows)
+
+
 def workflows() -> str:
     rows = []
     for path in sorted((REPO / ".github/workflows").glob("*.yaml")):
@@ -294,6 +320,7 @@ def workflows() -> str:
 GENERATORS = {
     "chart-templates": chart_templates,
     "ci-jobs": ci_jobs,
+    "ci-jobs-described": ci_jobs_described,
     "commands": commands,
     "components": components,
     "image-stages": image_stages,

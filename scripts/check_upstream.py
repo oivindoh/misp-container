@@ -55,6 +55,14 @@ IMAGE_DIRS = {"orgs": "files/img/orgs", "img": "files/img/custom"}
 MISP_PHP = ("app/Model", "app/Lib", "app/Controller", "app/Console", "app/Plugin", "app/Error")
 NOT_MISP_PARTS = {"cakephp", "Vendor"}
 
+# What the image deletes from MISP's tree (Dockerfile, stage misp-source), with the MISP files
+# that may name it: a help text and a release step that needs a package the image lacks
+DROPPED = {
+    "GeoOpen-Country-ASN": {"app/Console/Command/AdminShell.php", "app/files/scripts/generate_asn_country_map.py"},
+    "misp-iconify/": set(),
+    "Cake/Test": set(),
+}
+
 # The modules that call MISP's HTTP API; every route-like string in them is a MISP route
 API_CALLERS = ("misp_container/api.py", "misp_container/sync.py",
                "misp_container/metrics.py")
@@ -399,6 +407,23 @@ def env_settings(root: Path) -> list[str]:
     return problems
 
 
+# -- What the image deletes ---------------------------------------------------------
+
+def dropped_files(root: Path) -> list[str]:
+    """No MISP code names what the image deletes: the ASN database, misp-iconify's sources, CakePHP's tests."""
+    code = [*misp_php(root), *sorted((root / "app/View").rglob("*.ctp")),
+            *sorted((root / "app/files/scripts").glob("*.py"))]
+    problems = []
+    for path in code:
+        source = strip_php_comments(path.read_text(errors="replace"))
+        rel = path.relative_to(root).as_posix()
+        for name, allowed in DROPPED.items():
+            if name in source and rel not in allowed:
+                problems.append(f"{rel} names {name}, which the image deletes: keep it, or check that MISP "
+                                "does not read it")
+    return problems
+
+
 CHECKS = [
     Check("worker-queues", BACKGROUND_JOBS, "files/misp_container/__init__.py WORKER_QUEUES", worker_queues,
           fails_when="adds or drops a job queue"),
@@ -423,6 +448,9 @@ CHECKS = [
     Check("env-settings", f"{ENV_SETTING}, {SYSTEM_SETTING}",
           "deploy/chart/templates/_settings.tpl, deploy/chart/files/settings.yaml", env_settings,
           fails_when="stops reading MISP_SETTING_* settings, or a category the repository's settings use"),
+    Check("dropped-files", "app/Model, app/Lib, app/Controller, app/Console, app/Plugin, app/View, app/files/scripts",
+          "Dockerfile stage misp-source", dropped_files,
+          fails_when="names a file the image deletes: the ASN database, misp-iconify's sources or CakePHP's tests"),
     Check("image-paths", f"{SERVER_MODEL}, {ORG_IMG_HELPER}",
           "deploy/chart/templates/_helpers.tpl misp.appVolumeMounts", image_paths,
           fails_when="uploads org logos or custom images to, or reads them from, a directory the volumes do not mount"),

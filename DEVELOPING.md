@@ -7,8 +7,8 @@
 - Settings: `deploy/chart/files/settings.yaml`; the chart passes each one to MISP's own
   environment layer, so it wins over the UI (docs/configuration.md, Settings).
 - New MISP release: the tracking workflow opens a draft PR with the bump, `files/composer.lock`
-  and `files/requirements-misp.txt`; marking it ready runs CI, and the upstream guard tells you
-  what changed.
+  and the hash-locked `files/requirements-*.txt`; marking it ready runs CI, and the upstream
+  guard tells you what changed.
 - MISP: the `Dockerfile` pins MISP's `3.0_wip` branch at a commit (see The MISP pin).
 - Release: `mise run release` makes the next `3.0.0-wip.N`; push master and the tag.
 - Pull requests: a draft runs the unit tests only; marking it ready for review runs every suite.
@@ -28,8 +28,9 @@ mise run test          # unit tests, the chart lint and every chart render valid
 ## New MISP releases
 
 `.github/workflows/track-misp-releases.yaml` checks upstream daily. For a new release it
-bumps `CORE_TAG`, resolves `files/composer.lock` and `files/requirements-misp.txt` for that
-release, and opens a draft PR with the three changes. GitHub starts no CI for a pull request
+sets `CORE_TAG` and pins `CORE_COMMIT` to the release's commit, resolves `files/composer.lock`
+and the `files/requirements-*.txt` locks for that release, and opens a draft PR with the
+changes. GitHub starts no CI for a pull request
 that a workflow opens with its own token: mark it ready for review, and CI builds, scans and
 runs every suite. The upstream guard (`scripts/check_upstream.py`, run in the image by
 `tests/e2e/test_upstream.py`) fails when MISP changed something the image patches or depends
@@ -54,6 +55,7 @@ revisit.
 | `shell-streams` | app/Lib/cakephp/lib/Cake/Console/Shell.php | files/misp_container/init.py LOG_BLOCK | checks other stream names before it adds its console streams |
 | `relayed-files` | app/Model, app/Lib, app/Controller, app/Console, app/Plugin, app/Error | files/misp_container/logrelay.py FILES | writes a new file under app/tmp/logs, or stops writing one the relay follows |
 | `env-settings` | app/Lib/Tools/EnvSetting.php, app/Model/SystemSetting.php | deploy/chart/templates/_settings.tpl, deploy/chart/files/settings.yaml | stops reading MISP_SETTING_* settings, or a category the repository's settings use |
+| `dropped-files` | app/Model, app/Lib, app/Controller, app/Console, app/Plugin, app/View, app/files/scripts | Dockerfile stage misp-source | names a file the image deletes: the ASN database, misp-iconify's sources or CakePHP's tests |
 | `image-paths` | app/Model/Server.php, app/View/Helper/OrgImgHelper.php | deploy/chart/templates/_helpers.tpl misp.appVolumeMounts | uploads org logos or custom images to, or reads them from, a directory the volumes do not mount |
 | `log-block-php` | php | files/misp_container/init.py LOG_BLOCK | cannot run the logging block, in either format |
 <!-- end generated -->
@@ -83,7 +85,7 @@ that moves the pin to `v3.0.0` once it does. The pin shapes the image in these p
 
 | Where | What | Because |
 |-------|------|---------|
-| `Dockerfile` | Submodules without recursion | Only `misp-iconify` nests submodules, over SSH URLs |
+| `Dockerfile` | Clones by `CORE_COMMIT` | A tag can move; `CORE_TAG` only names the release |
 | The version marker | `3.0_wip+<CORE_COMMIT>` | It changes with each pin, so the pods wait for the configure run of their own build |
 | The configure step | Refuses a database whose `attributes` table has the text column `value1` | That is MISP 2.x's layout; the migrate Job imports such a database (docs/migration.md) |
 
@@ -101,9 +103,16 @@ older image. Each pin move is a release of its own.
 build installs exactly that lock and fails when it no longer matches upstream's
 `composer.json`, which is the signal to run `mise run composer-lock` after a bump.
 
-`files/requirements-misp.txt` pins the Python packages MISP's own scripts import (STIX,
-TAXII, ZeroMQ, sample extraction), resolved from MISP's `requirements.txt` at the pinned
-commit; a unit test fails while its header names another commit.
+`mise run misp-requirements` resolves three hash-locked files, each pin with the hashes of its
+files, which the images install with `--require-hashes`:
+
+| File | From |
+|------|------|
+| `files/requirements-misp.txt` | MISP's `requirements.txt` at the pinned commit: the packages MISP's own scripts import (STIX, TAXII, ZeroMQ, sample extraction). A unit test fails while its header names another commit |
+| `files/requirements-final.txt` | `files/requirements-final.in`, within the pins above: the packages of this repository's code |
+| `files/requirements-modules.txt` | `files/requirements-modules.in`: misp-modules and its closure |
+
+Change an `.in` file, then run the task; a unit test fails while a lock lacks a pin of its `.in`.
 
 ## Releases
 
@@ -143,13 +152,18 @@ The push starts two runs of the release commit. The `gate` job stops the master 
 tag run tests the commit and releases it.
 
 CI runs the tests and the scans, then pushes the images for amd64 and arm64 and the chart,
-and creates a GitHub Release that names the MISP commit. The `publish` job refuses a tag whose image tag differs
-from `appVersion`, an image tag that GHCR already holds, and a chart version that GHCR
-already holds.
+attests each, and creates a GitHub Release that names the MISP commit and lists the merged pull
+requests; a `-wip.` release is a pre-release. The `publish-plan` job refuses a tag whose image
+tag differs from `appVersion`, an image tag that GHCR already holds, and a chart version that
+GHCR already holds. Edit the Release to add a line for each breaking change: operators read it
+before they upgrade (docs/operations.md, Upgrade a release).
+
+A failed tag run cannot be run again with a fix: a re-run takes the workflow of the tag's
+commit. Merge the fix, then run `mise run release` again, which makes the next `-wip.N`.
 
 | Artefact | Version |
 |----------|---------|
-| `ghcr.io/oivindoh/misp-container`, `-caddy`, `-modules` | the image tag: the git tag without the `v` |
+| `ghcr.io/oivindoh/misp-container`, `-modules` | the image tag: the git tag without the `v` |
 | `oci://ghcr.io/oivindoh/charts/misp` | the chart version of `Chart.yaml` |
 
 Helm installs a pre-release chart only when the command names its version (`--version

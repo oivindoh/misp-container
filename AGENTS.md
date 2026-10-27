@@ -169,7 +169,7 @@ build applies the patches of `patches/` (DEVELOPING.md, Patches to MISP):
 | `generate_docs.py` | Fill the generated regions of the docs and AGENTS.md from the code. |
 | `release.py` | Prepare a release. |
 | `update-composer-lock.sh` | Resolve MISP's composer dependencies for the current CORE_TAG plus this image's extra packages, and write the result to files/composer.lock. The image build installs exactly that lock and fails when it is out of date with upstream's composer.json (a new MISP release), so run this on every bump. |
-| `update_misp_requirements.py` | Resolve the packages MISP's own scripts import into files/requirements-misp.txt. |
+| `update_misp_requirements.py` | Resolve the Python packages of both images into hash-locked files. |
 <!-- end generated -->
 
 ## Tests: `tests/`
@@ -225,7 +225,7 @@ The values and manifests of the stack suites:
 | `mise run test-all` | Run the unit tests, then every stack suite |
 | `mise run smoketest` | Run smoke test against a live MISP instance |
 | `mise run composer-lock` | Resolve MISP's PHP dependencies for the current CORE_TAG into files/composer.lock |
-| `mise run misp-requirements` | Resolve the Python packages of MISP's own scripts for the current CORE_TAG into files/requirements-misp.txt |
+| `mise run misp-requirements` | Resolve the Python packages of both images, MISP's scripts' for the current CORE_TAG among them, into hash-locked files/requirements-*.txt |
 | `mise run release` | Prepare a release: the next 3.0.0-wip.N while MISP is a work-in-progress pin, else of one kind (hotfix, normal or breaking) |
 <!-- end generated -->
 
@@ -238,12 +238,14 @@ The jobs of `ci.yaml` (tests/README.md, CI):
 |---|---|
 | `gate` |  |
 | `build` | `gate` |
+| `arm64` | `gate` |
 | `unit` | `gate` |
 | `suite` | `gate`, `build` |
-| `ci-ok` | `gate`, `build`, `unit`, `suite` |
-| `publish-plan` | `gate`, `build`, `unit`, `suite` |
+| `ci-ok` | `gate`, `build`, `arm64`, `unit`, `suite` |
+| `publish-plan` | `gate`, `build`, `arm64`, `unit`, `suite` |
 | `publish-arm64` | `publish-plan` |
 | `publish` | `publish-plan`, `publish-arm64` |
+| `caches` | `gate`, `build`, `arm64`, `unit`, `suite`, `publish` |
 <!-- end generated -->
 
 <!-- generated: workflows -->
@@ -251,5 +253,5 @@ The jobs of `ci.yaml` (tests/README.md, CI):
 |---|---|---|
 | `.github/workflows/cache-cleanup.yaml` | pull_request | Deletes a pull request's Actions caches when it closes: nothing reads them again, and at the repository's 10 GB limit GitHub evicts the least recently used entries, master's layers among them. |
 | `.github/workflows/ci.yaml` | push (master, tag v*), pull_request (master) | Tests, scans and releases the images and the Helm chart: unit tests, the chart renders, the stack suites on k3s and Trivy; on a tag, pushes the images for amd64 and arm64 and the chart and creates the release (tests/README.md, CI). |
-| `.github/workflows/track-misp-releases.yaml` | schedule, workflow_dispatch | Opens a draft pull request for each new MISP release of the major version the Dockerfile pins: bumps CORE_TAG, clears a CORE_COMMIT pin, and resolves files/composer.lock and files/requirements-misp.txt (DEVELOPING.md, New MISP releases). While the pin is a work-in-progress branch such as 3.0_wip, the first release of that major version replaces it. |
+| `.github/workflows/track-misp-releases.yaml` | schedule, workflow_dispatch | Opens a draft pull request for each new MISP release of the major version the Dockerfile pins: sets CORE_TAG and pins CORE_COMMIT to the release's commit, and resolves files/composer.lock and the hash-locked files/requirements-*.txt (DEVELOPING.md, New MISP releases). While the pin is a work-in-progress branch such as 3.0_wip, the first release of that major version replaces it. |
 <!-- end generated -->
