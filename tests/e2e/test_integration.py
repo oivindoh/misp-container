@@ -973,10 +973,25 @@ def test_modules_dns_available(modules_ready):
     assert "dns" in names, names
 
 
+# The dns module takes MISP's standard format: an attribute in, a dns-record object out
+DNS_QUERY = {"module": "dns", "attribute": {"type": "domain", "value": "example.com",
+                                            "uuid": "5d2c8e4a-7b1f-4c3e-9a6d-0f8b2e1c4a7d"}}
+
+
+def resolved(body):
+    """The A and AAAA values of the dns-record object in a dns module answer; none for any other body."""
+    try:
+        objects = json.loads(body).get("results", {}).get("Object", [])
+    except (ValueError, AttributeError):
+        return []
+    return [a.get("value") for o in objects if o.get("name") == "dns-record"
+            for a in o.get("Attribute", []) if a.get("object_relation") in ("a-record", "aaaa-record")]
+
+
 def test_modules_dns_resolves(modules_ready):
     # Needs public DNS from the cluster
-    body = modules("/query", {"module": "dns", "domain": "example.com"})[1]
-    assert json.loads(body).get("results", [{}])[0].get("values"), body[:500]
+    body = modules("/query", DNS_QUERY)[1]
+    assert resolved(body), body[:500]
 
 
 def test_modules_enrichment_url_in_misp(stack, modules_ready):
@@ -986,14 +1001,13 @@ def test_modules_enrichment_url_in_misp(stack, modules_ready):
 
 def test_web_reaches_modules_for_enrichment(stack, modules_ready):
     _, out = stack.python("""
-import json, urllib.request
+import os, urllib.request
 request = urllib.request.Request('http://modules:6666/query', headers={'Content-Type': 'application/json'},
-                                 data=json.dumps({'module': 'dns', 'domain': 'example.com'}).encode())
+                                 data=os.environ['QUERY'].encode())
 with urllib.request.urlopen(request, timeout=10) as response:
-    values = json.loads(response.read()).get('results', [{}])[0].get('values', [])
-    print(values[0] if values else '')
-""")
-    assert out.strip(), out
+    print(response.read().decode())
+""", env={"QUERY": json.dumps(DNS_QUERY)})
+    assert resolved(out), out[:500]
 
 
 # -- multi-replica web ---------------------------------------------------------------
