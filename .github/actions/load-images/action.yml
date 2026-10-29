@@ -1,5 +1,6 @@
-# Builds the two images from the layer caches the build job filled (seconds)
-# and loads them into the job's docker, under the tag the suites run.
+# Builds the two images from the layer caches the build job filled, a minute or
+# two for the download, and loads them into the job's docker, under the tag the
+# suites run.
 name: Load the images
 description: The misp and modules images from the build job's layer caches, loaded into docker
 inputs:

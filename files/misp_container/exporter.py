@@ -5,7 +5,7 @@ upstream guard reads as MISP API routes.
 """
 
 import socket
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from .log import get as getlog
 
@@ -37,13 +37,14 @@ def serve(collect, port: int = PORT) -> None:
         def log_message(self, format, *args):
             """No access log: Prometheus scrapes too often for it to help."""
 
-    # Dual-stack where the host offers IPv6 (Kubernetes), IPv4 otherwise
+    # Dual-stack where the host offers IPv6 (Kubernetes), IPv4 otherwise. A thread per
+    # request, so a slow scrape does not hold the probes
     try:
-        HTTPServer.address_family = socket.AF_INET6
-        server = HTTPServer(("::", port), Handler)
+        ThreadingHTTPServer.address_family = socket.AF_INET6
+        server = ThreadingHTTPServer(("::", port), Handler)
     except OSError:
-        HTTPServer.address_family = socket.AF_INET
-        server = HTTPServer(("0.0.0.0", port), Handler)
+        ThreadingHTTPServer.address_family = socket.AF_INET
+        server = ThreadingHTTPServer(("0.0.0.0", port), Handler)
     log.info("serving metrics on :%d/metrics", port)
     try:
         server.serve_forever()

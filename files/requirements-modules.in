@@ -1,0 +1,5 @@
+# The modules image; mise run misp-requirements resolves it into the hash-locked
+# requirements-modules.txt
+misp-modules[minimal]==3.0.10
+# GHSA-9v8h-qqgm-4m35
+brotli>=1.2.1

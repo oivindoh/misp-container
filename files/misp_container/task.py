@@ -7,15 +7,19 @@ from one. Every task runs MISP's console in this pod, with the command line MISP
 own scheduler would hand a worker (app/Console/Command/SchedulerWorkerShell.php):
 the pod renders app/Config, and the work happens here, not on the workers. The
 server tasks run once per server, one after the other, so a CronJob that forbids
-overlapping runs also keeps two pulls of one server apart.
+overlapping runs also keeps two pulls of one server apart. The log files MISP
+writes in the pod, such as server-sync.log, are relayed after each command.
 """
 
+import re
+import signal
 import subprocess
 import sys
 
 from . import CAKE, db
 from .init import prepare
 from .log import is_log_line, setup as setup_logging, get as getlog
+from .logrelay import Relay
 from .worker import limit_worker_memory
 
 log = getlog("task")
@@ -50,8 +54,14 @@ TASKS = {
 
 # The server tasks: each runs for every server whose column is true, in MISP's priority order
 SERVER_TASKS = {"pull-servers": "pull", "push-servers": "push", "cache-servers": "caching_enabled"}
-# The start of a line in which pull and push report a failed server; both exit 0 anyway
-FAILED = ("ERROR:", "Job failed.")
+# A line in which a task reports a failure while the console exits 0: a failed pull, and a
+# feed that could not be fetched or cached
+FAILED = re.compile(r"^(ERROR:|Job failed\.)|Failed: [1-9]|\b[1-9][0-9]* feeds? could not be pulled")
+# The job_type of the row that pull and push write per server. Push reports a failure in
+# that row only
+JOB_TYPES = {"pull-servers": "pull", "push-servers": "push"}
+# MISP's Job::STATUS_COMPLETED
+JOB_COMPLETED = 4
 
 # What each task does, for the usage message and docs/kubernetes.md (scripts/generate_docs.py)
 DESCRIPTIONS = {
@@ -107,14 +117,29 @@ def servers(name: str) -> list[int]:
     return [row["id"] for row in db.dict_query(f"SELECT id FROM servers WHERE {column} ORDER BY priority, id")]
 
 
+class Stop:
+    """SIGTERM, past activeDeadlineSeconds or on a pod deletion: stop the running command, then the task."""
+
+    requested = False
+    proc: subprocess.Popen | None = None
+
+    @classmethod
+    def handle(cls, _signum=None, _frame=None) -> None:
+        cls.requested = True
+        if cls.proc is not None and cls.proc.poll() is None:
+            log.error("SIGTERM: stopping cake %s", " ".join(cls.proc.args[1:]))
+            cls.proc.terminate()
+
+
 def console(args: list[str]) -> bool:
     """Run a console command, its output streamed as it comes; True when it succeeded."""
     log.info("cake %s", " ".join(args[1:]))
     failed = False
     with subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1) as proc:
+        Stop.proc = proc
         for line in proc.stdout:
             line = line.rstrip("\n")
-            failed = failed or line.startswith(FAILED)
+            failed = failed or bool(FAILED.search(line))
             # MISP's own log lines are in the container format already; the console's
             # plain output gets it here
             if is_log_line(line):
@@ -128,19 +153,44 @@ def console(args: list[str]) -> bool:
     return proc.returncode == 0 and not failed
 
 
+def server_run(name: str, server: int) -> bool:
+    """Run a server task for one server; True when it succeeded, by the job row where MISP writes one."""
+    job_type = JOB_TYPES.get(name)
+    if job_type is None:
+        return console(command(name, str(server)))
+    before = db.dict_query("SELECT COALESCE(MAX(id), 0) AS id FROM jobs")[0]["id"]
+    ok = console(command(name, str(server)))
+    rows = db.dict_query("SELECT status, message FROM jobs WHERE id > %s AND job_type = %s AND job_input = %s "
+                         "ORDER BY id LIMIT 1", (before, job_type, f"Server: {server}"))
+    if not rows or rows[0]["status"] != JOB_COMPLETED:
+        log.error("%s of server %d failed: %s", job_type, server, rows[0]["message"] if rows else "no job row")
+        return False
+    return ok
+
+
 def run(name: str, arg: str = "") -> int:
     """Run one task's console command in this pod: 0 when it succeeded, else 1."""
+    signal.signal(signal.SIGTERM, Stop.handle)
     prepare()
     limit_worker_memory()
     db.wait_for_db(retries=60, wait_seconds=5)
     db.wait_for_configure()
+    # A fresh pod: the files start empty, so the relay needs no offsets
+    relay = Relay(offsets_file=None)
     if name not in SERVER_TASKS:
-        return 0 if console(command(name, arg)) else 1
+        ok = console(command(name, arg))
+        relay.poll()
+        return 0 if ok else 1
     ids = servers(name)
     if not ids:
         log.info("%s: no server has %s on, nothing to run", name, SERVER_TASKS[name])
-    results = [console(command(name, str(server))) for server in ids]
-    return 0 if all(results) else 1
+    results = []
+    for server in ids:
+        if Stop.requested:
+            break
+        results.append(server_run(name, server))
+        relay.poll()
+    return 0 if all(results) and not Stop.requested else 1
 
 
 def main(argv: list[str]) -> None:

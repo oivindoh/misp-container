@@ -20,9 +20,16 @@ class FakeConsole:
 
     def __call__(self, args, **kwargs):
         self.calls.append(args)
+        self.args = args
         self.returncode, output = next(self.script)
-        self.stdout = iter(output.splitlines(keepends=True))
+        self.stdout = iter(output.splitlines(keepends=True)) if isinstance(output, str) else output(self)
         return self
+
+    def poll(self):
+        return None
+
+    def terminate(self):
+        self.returncode = -15
 
     def __enter__(self):
         return self
@@ -31,13 +38,29 @@ class FakeConsole:
         return False
 
 
-def run(name, arg="", script=((0, "done\n"),), servers=()):
+def fake_db(servers, jobs):
+    """dict_query for the server list, the newest job ID, and each server's job row (a status, or None for none)."""
+    statuses = iter(jobs if jobs is not None else [task.JOB_COMPLETED] * len(servers))
+
+    def dict_query(sql, params=None):
+        if sql.startswith("SELECT id FROM servers"):
+            return [{"id": s} for s in servers]
+        if "MAX(id)" in sql:
+            return [{"id": 0}]
+        status = next(statuses)
+        return [] if status is None else [{"status": status, "message": "Job failed. Reason: no answer"}]
+    return dict_query
+
+
+def run(name, arg="", script=((0, "done\n"),), servers=(), jobs=None):
     """task.run with the pod preparation, the database and the console stubbed: (exit code, console calls)."""
     console = FakeConsole(script)
+    task.Stop.requested, task.Stop.proc = False, None
     with patch("misp_container.task.prepare"), \
             patch("misp_container.task.limit_worker_memory"), patch("misp_container.task.db.wait_for_db"), \
             patch("misp_container.task.db.wait_for_configure") as wait, \
-            patch("misp_container.task.db.dict_query", return_value=[{"id": s} for s in servers]), \
+            patch("misp_container.task.db.dict_query", fake_db(servers, jobs)), \
+            patch("misp_container.task.signal.signal"), patch("misp_container.task.Relay"), \
             patch("misp_container.task.subprocess.Popen", console):
         rc = task.run(name, arg)
     wait.assert_called_once()
@@ -68,8 +91,31 @@ class TestRun:
         assert calls == [[CAKE, "Server", "pull", "1", "3", "full"], [CAKE, "Server", "pull", "1", "1", "full"]]
 
     def test_a_server_that_fails_fails_the_run_after_the_others(self):
-        rc, calls = run("push-servers", script=[(0, "Job failed. Reason: no answer\n"), (0, "done\n")], servers=(1, 2))
+        # Push prints nothing and exits 0: only its job row says that it failed
+        rc, calls = run("push-servers", script=[(0, ""), (0, "")], servers=(1, 2), jobs=[3, task.JOB_COMPLETED])
         assert rc == 1 and len(calls) == 2
+
+    def test_a_server_without_its_job_row_fails_the_run(self):
+        assert run("push-servers", script=[(0, "")], servers=(1,), jobs=[None])[0] == 1
+
+    @pytest.mark.parametrize("name, output, rc", [
+        ("fetch-feeds", "Job done. 0 feeds pulled successfully, 1 feeds could not be pulled.", 1),
+        ("fetch-feeds", "Job done. 2 feeds pulled successfully, 0 feeds could not be pulled.", 0),
+        ("cache-feeds", "0 feeds from 1 cached. Failed: 1 See error logs for more details.", 1),
+        ("cache-feeds", "1 feed from 1 cached. Failed: 0", 0),
+        ("cache-feeds", "Job failed. See error logs for more details.", 1),
+    ])
+    def test_a_feed_task_fails_on_a_feed_it_could_not_get(self, name, output, rc):
+        # MISP saves these runs as completed and exits 0
+        assert run(name, script=[(0, output + "\n")])[0] == rc
+
+    def test_sigterm_stops_the_running_command_and_the_servers_after_it(self):
+        def output(proc):
+            yield "Pulling\n"
+            task.Stop.handle()
+            assert proc.returncode == -15
+        rc, calls = run("pull-servers", script=[(0, output)], servers=(1, 2), jobs=[3])
+        assert rc == 1 and len(calls) == 1
 
     def test_a_pull_error_fails_the_run(self):
         assert run("pull-servers", script=[(0, "ERROR: curl error 7\n")], servers=(1,))[0] == 1

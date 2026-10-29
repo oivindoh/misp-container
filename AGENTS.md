@@ -105,8 +105,7 @@ The values and the components are in docs/kubernetes.md (Values, Components). Th
 | `deployment-modules.yaml` | Deployment `modules` | misp-modules: the enrichment, import, export and action modules MISP calls over HTTP on port 6666. A distroless image without a shell, as UID 65532. |
 | `deployment-web.yaml` | Deployment `web` | MISP's web tier: PHP-FPM (127.0.0.1:9002) and a caddy sidecar that serves the static files and passes the rest to PHP-FPM over FastCGI (port 8080). Replicas scale freely: each pod renders its own app/Config and waits for the configure Job. |
 | `deployment-worker.yaml` | Deployment `worker` | Scalable job workers -- safe to run multiple replicas. MISP's own scheduler never runs: periodic tasks are Kubernetes CronJobs (the cronjobs component). |
-| `httproute.yaml` | HTTPRoute `misp` | The httpRoute component: an HTTPRoute for a Gateway API implementation, in place of the ingress. caddy takes the client address from X-Forwarded-For, right to left, past TRUSTED_PROXY_CIDR: set that in env to the Gateway's proxy pods. |
-| `ingress.yaml` | Ingress `misp` | The ingress component: an Ingress to the web Service. The default annotation makes the haproxy ingress replace X-Forwarded-For with the address it sees, so only that address reaches caddy (docs/kubernetes.md, Client addresses). Behind another load balancer, that is the balancer's address unless it speaks the PROXY protocol to HAProxy. |
+| `httproute.yaml` | HTTPRoute `misp` | The httpRoute component: an HTTPRoute to the web Service, for a Gateway API implementation. caddy takes the client address from X-Forwarded-For, right to left, past TRUSTED_PROXY_CIDR, which trusts every private range unless set. |
 | `job-configure.yaml` | Job `configure-<revision>` | One-shot configuration: schema, MISP's updates, admin user and organisation. Web and worker pods wait until this Job has recorded their image version and configuration checksum, so the order of the rollout does not depend on the tool that applies the chart. Each release revision has its own Job, because a Job's pod template cannot change; a run on a configured instance takes seconds. With the migrate component, the copy runs first, in an init container. |
 | `job-org-sync.yaml` | Job `org-sync-<revision>` | Declarative org sync: applies the misp-orgs ConfigMap (orgs.yaml) through the MISP API once the configure run of its revision finished and web serves. Exits 0 at once when ADMIN_KEY is empty or orgs.yaml has nothing to apply. Each release revision has its own Job; Argo CD: a Sync hook in wave 3, recreated on every sync. |
 | `networkpolicy.yaml` | NetworkPolicy `misp`, NetworkPolicy `misp-web`, NetworkPolicy `misp-metrics`, NetworkPolicy `misp-egress`, NetworkPolicy `misp-modules`, NetworkPolicy `misp-stores` | The networkPolicy component: NetworkPolicies for the pods of the release, for any CNI that enforces the Kubernetes NetworkPolicy API, Cilium included. Every pod template carries app.kubernetes.io/instance (the release) and app.kubernetes.io/part-of: misp, and every rule selects on them, so the pods of another release or an operator in the namespace keep their own rules. |
@@ -117,7 +116,7 @@ The values and the components are in docs/kubernetes.md (Values, Components). Th
 | `secrets.yaml` | Secret `misp-db`, Secret `misp-app`, Secret `misp-admin`, Secret `misp-migrate` | The Secrets follow their consumers: web and worker pods get misp-db and misp-app, never misp-admin; metrics gets two keys of misp-db, and of misp-app the Redis and proxy passwords. Each holds its map of the secrets value; with secrets.create: false the release supplies them. |
 | `service-metrics.yaml` | Service `metrics` | The exporter on port 9191, for Prometheus to scrape. |
 | `service-modules.yaml` | Service `modules` | misp-modules on port 6666, for MISP's enrichment, import, export and action calls. |
-| `service-web.yaml` | Service `web` | MISP over HTTP: caddy in the web pods, port 8080. The ingress or HTTPRoute routes here. |
+| `service-web.yaml` | Service `web` | MISP over HTTP: caddy in the web pods, port 8080. The HTTPRoute routes here. |
 | `tests/test-misp.yaml` | Pod `misp-test` | helm test: checks a release from inside the cluster. It loads the login page through the web Service and, with ADMIN_KEY in misp-admin, calls the API as the admin and reads MISP.live. |
 <!-- end generated -->
 
@@ -130,17 +129,16 @@ UI. A setting's env var is its name in upper case with dots as underscores
 <!-- generated: settings-groups -->
 | Group | Holds |
 |---|---|
-| `minimum_config` | also rendered into config.php, by every pod. MISP never reads SystemSetting::BLOCKED_SETTINGS from the database (salt, encryption key, password policy, python_bin, ca_path, tmpdir, attachments_dir, self_update, online_version_check, system_setting_db, GnuPG.binary, disable_local_feed_access), so those live here. |
-| `db_enable` | toggle system_setting_db |
+| `core` | the connections, paths and security bootstrap |
 | `initialisation` | core instance settings |
 | `critical` | security hardening |
 | `optional` | nice-to-have defaults |
 | `gpg` | GnuPG settings |
 | `s3` | S3 attachment storage (only while PLUGIN_S3_BUCKET_NAME is set, which also sets MISP.attachments_dir to s3://) |
 | `proxy` | HTTP proxy settings (an empty Proxy.host means no proxy) |
-| `custom_auth` | header authentication from a reverse proxy, no directory lookup (CUSTOM_AUTH_ENABLE=true turns it on; the CUSTOM_AUTH_* names are aliases, below) |
+| `custom_auth` | header authentication from a reverse proxy, no directory lookup (CUSTOM_AUTH_ENABLE=true turns it on; the CUSTOM_AUTH_* names are aliases of settings.yaml) |
 | `kafka` | Kafka pub/sub integration (PLUGIN_KAFKA_ENABLE=true turns it on) |
-| `oidc` | OidcAuth plugin, rendered into config.php when OIDC_ENABLE=true. The documented OIDC_* names map onto these (the aliases below). role_mapper and scopes take JSON in env; scopes also takes a comma-separated list. |
+| `oidc` | OidcAuth plugin, rendered into config.php when OIDC_ENABLE=true. The documented OIDC_* names map onto these (the aliases of settings.yaml). role_mapper and scopes take JSON in env; scopes also takes a comma-separated list. |
 | `ldap` | LdapAuth plugin, rendered into config.php when LDAPAUTH_ENABLE=true |
 <!-- end generated -->
 
@@ -155,7 +153,8 @@ build applies the patches of `patches/` (DEVELOPING.md, Patches to MISP):
 |---|---|---|---|
 | `01-event-index-stats-quotes-the-alias.patch` | app/Model/Behavior/EventIndexStatsBehavior.php | Quote the alias of the events index stats | not filed yet |
 | `02-a-job-keeps-the-workers-environment.patch` | app/Lib/Tools/BackgroundJobs/BackgroundJob.php | A background job keeps the worker's environment | not filed yet |
-| `03-a-worker-finishes-its-job-on-sigterm.patch` | app/Console/Command/StartWorkerShell.php | A worker finishes its running job on SIGTERM | not filed yet |
+| `03-a-worker-finishes-its-job-on-sigterm.patch` | app/Console/Command/StartWorkerShell.php, app/Lib/Tools/BackgroundJobs/BackgroundJob.php | A worker finishes its running job on SIGTERM | not filed yet |
+| `04-the-acl-reads-the-host-org-at-each-use.patch` | app/Controller/Component/ACLComponent.php | The ACL reads the host organisation at each use | not filed yet |
 <!-- end generated -->
 
 ## Scripts: `scripts/`
@@ -170,7 +169,7 @@ build applies the patches of `patches/` (DEVELOPING.md, Patches to MISP):
 | `generate_docs.py` | Fill the generated regions of the docs and AGENTS.md from the code. |
 | `release.py` | Prepare a release. |
 | `update-composer-lock.sh` | Resolve MISP's composer dependencies for the current CORE_TAG plus this image's extra packages, and write the result to files/composer.lock. The image build installs exactly that lock and fails when it is out of date with upstream's composer.json (a new MISP release), so run this on every bump. |
-| `update_misp_requirements.py` | Resolve the packages MISP's own scripts import into files/requirements-misp.txt. |
+| `update_misp_requirements.py` | Resolve the Python packages of both images into hash-locked files. |
 <!-- end generated -->
 
 ## Tests: `tests/`
@@ -226,7 +225,7 @@ The values and manifests of the stack suites:
 | `mise run test-all` | Run the unit tests, then every stack suite |
 | `mise run smoketest` | Run smoke test against a live MISP instance |
 | `mise run composer-lock` | Resolve MISP's PHP dependencies for the current CORE_TAG into files/composer.lock |
-| `mise run misp-requirements` | Resolve the Python packages of MISP's own scripts for the current CORE_TAG into files/requirements-misp.txt |
+| `mise run misp-requirements` | Resolve the Python packages of both images, MISP's scripts' for the current CORE_TAG among them, into hash-locked files/requirements-*.txt |
 | `mise run release` | Prepare a release: the next 3.0.0-wip.N while MISP is a work-in-progress pin, else of one kind (hotfix, normal or breaking) |
 <!-- end generated -->
 
@@ -239,12 +238,14 @@ The jobs of `ci.yaml` (tests/README.md, CI):
 |---|---|
 | `gate` |  |
 | `build` | `gate` |
+| `arm64` | `gate` |
 | `unit` | `gate` |
 | `suite` | `gate`, `build` |
-| `ci-ok` | `gate`, `build`, `unit`, `suite` |
-| `publish-plan` | `gate`, `build`, `unit`, `suite` |
+| `ci-ok` | `gate`, `build`, `arm64`, `unit`, `suite` |
+| `publish-plan` | `gate`, `build`, `arm64`, `unit`, `suite` |
 | `publish-arm64` | `publish-plan` |
 | `publish` | `publish-plan`, `publish-arm64` |
+| `caches` | `gate`, `build`, `arm64`, `unit`, `suite`, `publish` |
 <!-- end generated -->
 
 <!-- generated: workflows -->
@@ -252,5 +253,5 @@ The jobs of `ci.yaml` (tests/README.md, CI):
 |---|---|---|
 | `.github/workflows/cache-cleanup.yaml` | pull_request | Deletes a pull request's Actions caches when it closes: nothing reads them again, and at the repository's 10 GB limit GitHub evicts the least recently used entries, master's layers among them. |
 | `.github/workflows/ci.yaml` | push (master, tag v*), pull_request (master) | Tests, scans and releases the images and the Helm chart: unit tests, the chart renders, the stack suites on k3s and Trivy; on a tag, pushes the images for amd64 and arm64 and the chart and creates the release (tests/README.md, CI). |
-| `.github/workflows/track-misp-releases.yaml` | schedule, workflow_dispatch | Opens a draft pull request for each new MISP release of the major version the Dockerfile pins: bumps CORE_TAG, clears a CORE_COMMIT pin, and resolves files/composer.lock and files/requirements-misp.txt (DEVELOPING.md, New MISP releases). While the pin is a work-in-progress branch such as 3.0_wip, the first release of that major version replaces it. |
+| `.github/workflows/track-misp-releases.yaml` | schedule, workflow_dispatch | Opens a draft pull request for each new MISP release of the major version the Dockerfile pins: sets CORE_TAG and pins CORE_COMMIT to the release's commit, and resolves files/composer.lock and the hash-locked files/requirements-*.txt (DEVELOPING.md, New MISP releases). While the pin is a work-in-progress branch such as 3.0_wip, the first release of that major version replaces it. |
 <!-- end generated -->

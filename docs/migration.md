@@ -1,11 +1,11 @@
 # Migrating an existing MISP instance
 
+## TL;DR
+
 The migration copies an existing MISP database (MySQL or MariaDB: the official misp-docker,
 a VM, a bare-metal install) into this deployment's PostgreSQL, and copies the attachments
 into this deployment's store: its S3 bucket, or the attachments volume. The configure Job
 then configures the copy as on any release upgrade.
-
-## TL;DR
 
 1. Read `Security.salt`, `Security.encryption_key` and `MISP.uuid` from the old instance
    (`config.php` or `system_settings`) into `misp-app` and `misp-env`. The migration refuses
@@ -15,8 +15,8 @@ then configures the copy as on any release upgrade.
    bucket (`MIGRATE_SOURCE_S3_*`). A source on an older MISP release than this image's needs
    `MIGRATE_SOURCE_UPGRADE=true` and a restored copy of its database (see
    [An older source](#an-older-source)).
-3. Set the old instance read-only (`MISP.live=false`), then run the copy before the first
-   configure run: with the `migrate` component on, the chart runs it as an init container of
+3. Set the old instance read-only (`MISP.live=false`) and stop its workers and scheduled
+   tasks, then run the copy before the first configure run: with the `migrate` component on, the chart runs it as an init container of
    the configure Job. The copy refuses a target that holds anything else (see
    [The target](#the-target)).
 4. Switch the component off once the copy has succeeded. Users log in again;
@@ -52,15 +52,21 @@ meanwhile waits for it, then configures the copy.
 | Exit code | Meaning |
 |-----------|---------|
 | 0 | Copied, or the target holds a copy the migration made, which stays |
-| 1 | The copy failed part way, rows, the source's updates or attachments; the target holds a partial copy, run again with `MIGRATE_FORCE=true` |
+| 1 | The copy failed part way: rows or the source's updates, and the target holds a partial copy, so run again with `MIGRATE_FORCE=true`; or attachments, each failed one logged, and the next run keeps the database copy and copies the attachments again |
 | 2 | Configuration: no `MIGRATE_SOURCE_HOST`, the source refuses the connection, both attachment sources set, a bucket without an access key, or a bucket the migration cannot list |
 | 3 | The target database is not empty and holds no copy the migration made |
 | 4 | An identity setting on the source differs from this deployment's |
 | 5 | The source schema is not this image's |
 
-The migration counts its runs in the target's `system_settings` row
-`misp_docker.runs.migrate`, and the metrics exporter reports them as it does the configure
-runs ([metrics.md](metrics.md)).
+The migration counts its runs in the target's `system_settings` rows
+`misp_docker.runs.migrate` (the database) and `misp_docker.runs.migrate-files` (the
+attachments), and the metrics exporter reports them as it does the configure runs
+([metrics.md](metrics.md)).
+
+The copy reads every table in one snapshot of the source, so rows that refer to each other
+arrive together. A text value with a NUL byte, which PostgreSQL refuses, arrives without it,
+and the log counts such values per table. An S3 request that fails with no answer or a 5xx
+status is tried four times.
 
 ### The target
 
@@ -156,9 +162,9 @@ Onto a deployment that has run once, set `MIGRATE_FORCE=true` in `migrate.secret
 The web and worker pods keep running; they answer with errors while the copy runs, and MISP
 shows itself as offline (`MISP.live=false`) until the configure Job has configured the copy.
 
-With the `networkPolicy` component the configure pod may reach the
-source on port 3306 and S3 on 443, in the cluster or outside it, while `migrate` is on;
-another port needs a change to the template.
+With the `networkPolicy` component the MISP pods may reach the source on port 3306 and S3 on
+443, in the cluster or outside it, while `migrate` is on; `networkPolicy.egress` adds another
+port.
 
 ## Files copied by hand
 
@@ -177,10 +183,11 @@ The old instance stays read-only while the migration runs, so time a trial run a
 copy of the source first. The migration logs the conversion to MISP 3.0, each table and each
 index it builds. On a large instance the conversion takes hours.
 
-1. Set `MISP.live=false` on the old instance so no event changes during the copy.
+1. Set `MISP.live=false` on the old instance, and stop its workers and scheduled tasks: they
+   change events whatever `MISP.live` says.
 2. Run the migration and the first sync. Check the copy: log in, open an event with an
    attachment, list the sync servers.
-3. Move the DNS name or the ingress to the new instance.
+3. Move the DNS name to the new instance's Gateway.
 4. To go back, point the name back at the old instance and set `MISP.live=true` there. The
    migration never writes to the old database: `MIGRATE_SOURCE_UPGRADE` runs on a copy.
 

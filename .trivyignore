@@ -1,0 +1,2 @@
+# Findings the image gates leave out, one CVE ID a line with the reason above it: a fix that
+# Trivy knows before Debian's apt can install it, or one that does not reach the image's use.

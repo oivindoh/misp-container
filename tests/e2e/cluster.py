@@ -138,9 +138,15 @@ class Cluster:
             namespace, pod_name = pod["metadata"]["namespace"], pod["metadata"]["name"]
             if namespace == "kube-system":
                 continue
+            restarts = {status["name"]: status.get("restartCount", 0)
+                        for status in [*pod.get("status", {}).get("initContainerStatuses", []),
+                                       *pod.get("status", {}).get("containerStatuses", [])]}
             for container in [*pod["spec"].get("initContainers", []), *pod["spec"]["containers"]]:
-                logs = self.kubectl("logs", "-n", namespace, pod_name, "-c", container["name"], timeout=120)
-                out.append(f"--- {namespace}/{pod_name} {container['name']} ---\n{logs.stdout}{logs.stderr}")
+                # In a crash loop the current log holds the last start; the previous one, the crash
+                runs = [("", [])] + ([(" (previous)", ["--previous"])] if restarts.get(container["name"]) else [])
+                for label, flag in runs:
+                    logs = self.kubectl("logs", "-n", namespace, pod_name, "-c", container["name"], *flag, timeout=120)
+                    out.append(f"--- {namespace}/{pod_name} {container['name']}{label} ---\n{logs.stdout}{logs.stderr}")
         path.write_text("\n".join(out))
         return path
 

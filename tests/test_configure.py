@@ -73,11 +73,22 @@ class TestEncryptionKey:
 
 class TestRepositoryRows:
     def test_the_rows_of_carried_settings_go(self):
-        with patch.dict(os.environ, {"MISP_REPOSITORY_SETTINGS": "MISP.org,GnuPG.sign"}), \
+        with patch.dict(os.environ, {"MISP_REPOSITORY_SETTINGS": "MISP.org,GnuPG.sign",
+                                     "MISP_SETTING_MISP__org": "x", "MISP_SETTING_GnuPG__sign": "false"}), \
                 patch.object(configure.db, "execute", return_value=2) as execute:
             configure.forget_repository_rows()
         sql, params = execute.call_args[0]
         assert "DELETE FROM system_settings" in sql and params == (["GnuPG.sign", "MISP.org"],)
+
+    def test_a_listed_setting_without_its_variable_is_reported_and_its_row_stays(self):
+        # A supplied Secret without the key: MISP never gets the value, so a row set in MISP is all there is
+        with patch.dict(os.environ, {"MISP_REPOSITORY_SETTINGS": "MISP.org,GnuPG.password",
+                                     "MISP_SETTING_MISP__org": "x"}), \
+                patch.object(configure.db, "execute", return_value=1) as execute, \
+                patch.object(configure.log, "warning") as warning:
+            configure.forget_repository_rows()
+        assert execute.call_args[0][1] == (["MISP.org"],)
+        assert warning.call_args[0][1] == "GnuPG.password"
 
     def test_a_manual_setting_is_reported_with_its_change(self):
         rows = [{"setting": "MISP.welcome_text_top", "changed": "by admin@example.org at 2026-10-26 10:00:00"}]

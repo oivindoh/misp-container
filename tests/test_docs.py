@@ -7,12 +7,14 @@ more of them either. A failure names the doc, the name and where the code keeps 
 """
 
 import ast
+import json
 import os
 import re
 import sys
 import tomllib
 from pathlib import Path
 
+import pytest
 import yaml
 
 REPO = Path(__file__).resolve().parents[1]
@@ -152,7 +154,7 @@ def table_names(doc: Path, header: str, section: str = "") -> set[str]:
 
 
 # A backticked dotted name whose first part is a top-level value: a chart value
-VALUE_TOKEN = re.compile(r"([a-z][A-Za-z]*)((?:\.[\w-]+)+)(?:=\S*)?")
+VALUE_TOKEN = re.compile(r"([a-z][A-Za-z]*)((?:\.[\w-]+)+)(?:(?:=|: )\S*)?")
 FILE_SUFFIX = re.compile(r"\.(md|py|ya?ml|env|sh|json|php|log|tpl|txt|conf|pem|asc|ini|tgz)$")
 
 
@@ -221,8 +223,9 @@ def test_the_migration_exit_codes_match_the_job():
 
 # -- generated regions ---------------------------------------------------------------
 
-def test_agents_md_is_ascii():
-    assert (REPO / "AGENTS.md").read_text().isascii()
+def test_every_doc_is_ascii():
+    found = [rel(doc) for doc in [*DOCS, REPO / "AGENTS.md"] if not doc.read_text().isascii()]
+    assert not found, f"a character outside ASCII in {found}"
 
 
 def test_the_generated_regions_match_the_code():
@@ -289,6 +292,13 @@ def test_the_worker_stop_grace():
         f"docs/architecture.md should say: {expected}"
 
 
+def test_the_web_request_timeout():
+    timeout = yaml.safe_load((REPO / "deploy/chart/values.yaml").read_text())["env"]["PHP_REQUEST_TIMEOUT"]
+    expected = f"`PHP_REQUEST_TIMEOUT` seconds (default {timeout})"
+    assert expected in " ".join((REPO / "docs/architecture.md").read_text().split()), \
+        f"docs/architecture.md should say: {expected}"
+
+
 def test_the_mail_ports_of_the_network_policy():
     policies = [d for d in chart.objects(every_component=True) if d["kind"] == "NetworkPolicy"]
     ports = sorted({int(p["port"]) for d in policies for rule in d["spec"].get("egress", [])
@@ -324,3 +334,69 @@ def test_the_quick_start_runs_the_k3s_of_the_suites():
     pinned = re.search(r'K3S_IMAGE = \("(docker\.io/rancher/k3s:[^"@]+)', (REPO / "tests/e2e/cluster.py").read_text()).group(1)
     named = set(re.findall(r"docker\.io/rancher/k3s:\S+", (REPO / "README.md").read_text()))
     assert named == {pinned}, f"README.md runs {sorted(named)}; the suites run {pinned} (tests/e2e/cluster.py)"
+
+
+def test_the_configure_wait():
+    import inspect
+    defaults = inspect.signature(db.wait_for_configure).parameters
+    minutes = defaults["retries"].default * defaults["wait_seconds"].default // 60
+    assert f"up to {minutes} minutes" in (REPO / "docs/architecture.md").read_text()
+
+
+def test_the_partner_check_interval():
+    from misp_container import metrics
+    expected = f"every {metrics.NET_INTERVAL // 60} minutes"
+    assert expected in (REPO / "docs/metrics.md").read_text(), f"docs/metrics.md should say: {expected}"
+
+
+def test_the_relay_limit():
+    from misp_container import logrelay
+    expected = f"emptied past {logrelay.MAX_BYTES // 1024 // 1024} MB"
+    assert expected in (REPO / "docs/configuration.md").read_text(), f"docs/configuration.md should say: {expected}"
+
+
+def test_the_login_lockout():
+    secure = SETTINGS_FILE["settings"]["initialisation"]
+    expected = (f"{secure['SecureAuth.amount']['value']} failed logins per address and user name in "
+                f"{secure['SecureAuth.expire']['value']} seconds")
+    assert expected in " ".join((REPO / "docs/kubernetes.md").read_text().split()), f"docs/kubernetes.md should say: {expected}"
+
+
+def setting_default(env_var: str):
+    """The settings.yaml default of the setting an env var or its alias names."""
+    var = SETTINGS_FILE["aliases"].get(env_var, env_var)
+    for group in SETTINGS_FILE["settings"].values():
+        for name, spec in group.items():
+            if name.replace(".", "_").upper() == var:
+                return spec["value"]
+    raise KeyError(env_var)
+
+
+def as_written(value) -> str:
+    if isinstance(value, bool):
+        return str(value).lower()
+    if isinstance(value, list):
+        return ",".join(value)
+    if isinstance(value, dict):
+        return json.dumps(value, separators=(",", ":"))
+    return str(value)
+
+
+@pytest.mark.parametrize("section", ["### OpenID Connect", "### Header authentication"])
+def test_the_default_columns_match_settings_yaml(section):
+    lines = (REPO / "docs/configuration.md").read_text().splitlines()
+    start = next(i for i, line in enumerate(lines) if line.startswith(section))
+    start = next(i for i, line in enumerate(lines) if i > start and line.startswith("| Variable | Setting | Default |"))
+    wrong = []
+    for line in lines[start + 2:]:
+        if not line.startswith("|"):
+            break
+        cells = line.split("|")
+        variables, defaults = re.findall(r"`([^`]+)`", cells[1]), re.findall(r"`([^`]+)`", cells[3])
+        # A cell in words, such as "required" or "unset: ...", names no value
+        if len(defaults) < len(variables):
+            continue
+        for var, written in zip(variables, defaults):
+            if written != as_written(setting_default(var)):
+                wrong.append(f"{var}: the doc says {written}, settings.yaml {as_written(setting_default(var))}")
+    assert not wrong, "\n".join(wrong)

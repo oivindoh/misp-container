@@ -22,6 +22,13 @@ tolerations: []
 # Affinity for every pod of the release.
 affinity: {}
 
+# Annotations on every pod of the release, such as a service mesh's opt-out or a backup tool's
+# hints.
+podAnnotations: {}
+
+# Labels on every pod of the release.
+podLabels: {}
+
 # The misp-env ConfigMap, which every MISP pod reads. A release sets an entry to change it, or
 # null to drop it. The settings of MISP itself are in files/settings.yaml.
 env:
@@ -35,6 +42,9 @@ env:
   # -- Admin
   ADMIN_EMAIL: "admin@admin.test"
   ADMIN_ORG: "ORGNAME"
+  # The admin organisation's UUID, as sync partners know it; unset, the organisation of the
+  # first user keeps the UUID MISP gave it. Either way it is MISP's host organisation
+  # ADMIN_ORG_UUID: ""
   # -- Database: PostgreSQL; DB_HOST postgres is the Service of the postgres component
   DB_HOST: "postgres"
   DB_PORT: "5432"
@@ -44,19 +54,19 @@ env:
   # -- Redis
   MISP_REDIS_HOST: "redis"
   MISP_REDIS_PORT: "6379"
-  # -- Email
+  # -- Email: the relay MISP sends through. SMTP_TLS true sends STARTTLS; a relay that speaks
+  # TLS from the first byte (port 465) takes SMTP_FQDN ssl://<host>. With SMTP_USERNAME, MISP
+  # logs in with SMTP_PASSWORD from secrets.app
   SMTP_FQDN: "mail"
   SMTP_PORT: "25"
-  # -- GPG: every pod imports the instance key from the misp-gnupg Secret (docs/kubernetes.md, Secrets)
-  GNUPG_HOMEDIR: "/var/www/MISP/.gnupg"
-  # -- Client addresses: the ingress or Gateway proxy pods, whose X-Forwarded-For caddy follows
+  SMTP_TLS: "false"
+  SMTP_USERNAME: ""
+  # -- Client addresses: the Gateway's proxy pods, whose X-Forwarded-For caddy follows
   # (docs/kubernetes.md, Client addresses). Unset, caddy trusts every private range, and a
   # client with a private address is logged as the proxy.
   # TRUSTED_PROXY_CIDR: "10.244.0.0/16"
   # -- Logging. json: one JSON object per line, for a log collector; text: for a terminal
   LOG_FORMAT: "json"
-  # -- Paths
-  MISP_ATTACHMENTS_DIR: "/var/www/MISP/app/attachments"
   # -- Auth plugins: true turns one on. Their settings are the groups oidc and ldap of
   # files/settings.yaml, rendered into config.php (docs/configuration.md)
   OIDC_ENABLE: "false"
@@ -66,6 +76,10 @@ env:
   # -- PHP
   PHP_MEMORY_LIMIT: "2048M"
   PHP_MAX_EXECUTION_TIME: "300"
+  # A web request's wall-clock limit in seconds: PHP_MAX_EXECUTION_TIME counts CPU time only.
+  # PHP-FPM ends a request past it, also one that MISP lets run longer (a role's limit, a
+  # download). A stopping web pod lets its running requests finish within it.
+  PHP_REQUEST_TIMEOUT: "330"
   PHP_UPLOAD_MAX_FILESIZE: "50M"
   PHP_POST_MAX_SIZE: "50M"
   PHP_MAX_INPUT_TIME: "300"
@@ -100,8 +114,9 @@ secrets:
   # misp-app: configure and its migrate container, web, worker, the redis component, the task
   # CronJobs; metrics gets MISP_REDIS_PASSWORD and PROXY_PASSWORD. A key named after a setting
   # is that setting's value (Security.salt -> SECURITY_SALT): the chart passes it to MISP by
-  # reference, so it never lands in a ConfigMap. A secret setting without a key here
-  # (OIDC_CLIENT_SECRET, PROXY_PASSWORD) goes here the same way.
+  # reference, so it never lands in a ConfigMap. Every secret setting of settings.yaml takes its
+  # key here, or in the Secret of a release with create: false, also one this map does not
+  # name (OIDC_CLIENT_SECRET, PROXY_PASSWORD, PLUGIN_S3_AWS_SECRET_KEY); so does SMTP_PASSWORD.
   app:
     MISP_REDIS_PASSWORD: "change-me"
     GNUPG_PASSWORD: "change-me"
@@ -129,6 +144,12 @@ connectionSecrets: []
 databaseCA: {}
   # databaseCA: {name: misp-cluster-cert, key: ca.crt}
 
+# The CA bundle MISP's pods trust for their outbound TLS, from a Secret: a name and a key. It
+# replaces the image's bundle, so it must hold the public roots as well as a private CA (a
+# trust-manager Bundle, for one): an IdP, S3, Redis or a sync partner behind a private CA.
+caBundle: {}
+  # caBundle: {name: misp-ca-bundle, key: ca-certificates.crt}
+
 # The configure Job: schema, MISP's updates, admin user and organisation, on every install and upgrade.
 configure:
   resources:
@@ -138,6 +159,9 @@ configure:
 # MISP's web tier: PHP-FPM and the caddy sidecar in each pod. Replicas scale freely.
 web:
   replicas: 1
+  # Such as [{maxSkew: 1, topologyKey: topology.kubernetes.io/zone, whenUnsatisfiable:
+  # DoNotSchedule, labelSelector: {matchLabels: {app.kubernetes.io/name: web}}}]
+  topologySpreadConstraints: []
   resources:
     phpFpm:
       requests: {cpu: 100m, memory: 256Mi}
@@ -149,6 +173,7 @@ web:
 # The background workers, which take their jobs from Redis. Replicas scale freely.
 worker:
   replicas: 1
+  topologySpreadConstraints: []
   resources:
     requests: {cpu: 10m, memory: 512Mi}
     limits: {cpu: 1000m, memory: 2Gi}
@@ -209,18 +234,11 @@ redis:
     requests: {cpu: 10m, memory: 64Mi}
     limits: {cpu: 1000m, memory: 384Mi}
 
-# An Ingress to the web Service. The default annotation makes the haproxy ingress replace
-# X-Forwarded-For with the address it sees (docs/kubernetes.md, Client addresses).
-ingress:
-  enabled: false
-  className: haproxy
-  host: misp.example.com
-  tlsSecret: misp-tls
-  annotations:
-    haproxy.org/request-set-header: "X-Forwarded-For %[src]"
-
-# An HTTPRoute for a Gateway API implementation, in place of the ingress. The Gateway must
-# allow routes from this namespace; set TRUSTED_PROXY_CIDR in env to its proxy pods.
+# An HTTPRoute to the web Service, for a Gateway API implementation. The Gateway must allow
+# routes from this namespace. The render fails unless TRUSTED_PROXY_CIDR in env names the
+# Gateway's proxy pods or networkPolicy is on: else any pod chooses the client address MISP sees
+# (docs/kubernetes.md, Client addresses). timeouts.request covers the longest request, above
+# PHP_MAX_EXECUTION_TIME.
 httpRoute:
   enabled: false
   parentRefs:
@@ -228,19 +246,21 @@ httpRoute:
       namespace: gateway-system
   hostnames:
     - misp.example.com
+  timeouts:
+    request: 300s
 
 # NetworkPolicies for the release's pods, for any CNI that enforces the NetworkPolicy API,
-# Cilium included: ingress from the release's own pods, DNS, HTTPS out, SMTP and LDAP.
-# ingressNamespace holds the ingress or Gateway proxies, monitoringNamespace Prometheus;
-# egress adds rules for the MISP pods, by default an external PostgreSQL and Redis.
+# Cilium included: ingress from the release's own pods, DNS, HTTPS out, SMTP and LDAP, and
+# DB_PORT and MISP_REDIS_PORT while the postgres and redis components are off.
+# ingressNamespace holds the Gateway's proxies, monitoringNamespace Prometheus; egress adds
+# rules for the MISP pods.
 networkPolicy:
   enabled: false
-  ingressNamespace: haproxy-controller
+  ingressNamespace: gateway-system
   monitoringNamespace: monitoring
   # Egress rules of the MISP pods, on top of the chart's. A rule names the port the server's
   # pods listen on.
-  egress:
-    - ports: [{port: 5432, protocol: TCP}, {port: 6379, protocol: TCP}]
+  egress: []
     # - to: [{podSelector: {matchLabels: {cnpg.io/cluster: misp-pg}}}]
     #   ports: [{port: 5432, protocol: TCP}]
 
@@ -269,14 +289,18 @@ cronjobs:
     check-user-validity: ""
     block-invalid-users: ""
   workflows: {}
+  # A run past it gets SIGTERM, and the task logs the command it stopped. Pulls from many
+  # partners, or a first full pull, can need more
+  activeDeadlineSeconds: 3600
   resources:
     requests: {cpu: 50m, memory: 256Mi}
     limits: {cpu: 1000m, memory: 2560Mi}
 
 # Nightly deletes of old rows in jobs, logs and audit_logs (HOUSEKEEPING_<TABLE>_DAYS in env,
-# defaults 2, 30 and 90).
+# defaults 2, 30 and 90). On by default: nothing else prunes the tables, and the exporter scans
+# jobs on every scrape.
 housekeeping:
-  enabled: false
+  enabled: true
   schedules:
     jobs: "0 2 * * *"
     logs: "0 3 * * *"

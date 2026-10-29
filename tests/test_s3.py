@@ -96,3 +96,33 @@ class TestRequests:
         assert sent["url"] == "http://garage:3900/misp/shadow/12/34"
         assert sent["X-amz-content-sha256"] == hashlib.sha256(b"attachment").hexdigest()
         assert sent["Content-length"] == "10"
+
+
+class TestRetries:
+    def test_a_slowdown_is_tried_again_and_an_upload_sends_its_file_again(self, monkeypatch, tmp_path):
+        bodies = []
+
+        def answer(request, timeout, context):
+            bodies.append(request.data.read())
+            if len(bodies) < 3:
+                raise urllib.error.HTTPError(request.full_url, 503, "Slow Down", {}, io.BytesIO(b"<Code>SlowDown</Code>"))
+            return io.BytesIO(b"")
+
+        monkeypatch.setattr(s3.urllib.request, "urlopen", answer)
+        monkeypatch.setattr(s3.time, "sleep", lambda seconds: None)
+        path = tmp_path / "blob"
+        path.write_bytes(b"attachment")
+        s3.Bucket("misp", "a", "s", endpoint="http://garage:3900").upload("12/34", path)
+        assert bodies == [b"attachment"] * 3
+
+    def test_a_refusal_is_not_tried_again(self, monkeypatch):
+        calls = []
+
+        def refuse(request, timeout, context):
+            calls.append(request)
+            raise urllib.error.HTTPError(request.full_url, 403, "Forbidden", {}, io.BytesIO(b""))
+
+        monkeypatch.setattr(s3.urllib.request, "urlopen", refuse)
+        with pytest.raises(s3.S3Error):
+            list(s3.Bucket("misp", "a", "s", endpoint="http://garage:3900").keys())
+        assert len(calls) == 1

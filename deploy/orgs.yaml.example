@@ -12,6 +12,7 @@ warninglists:
   - name: Sector specific top list
     enabled: true
     description: "sector sites and domains typically used extensively within"
+    # The version MISP creates the list with; MISP raises it at each edit
     version: 20260515
     type: hostname
     matching_attributes:

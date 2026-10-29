@@ -7,24 +7,28 @@
 #       <Category.key>:
 #         value: <the value>
 #         blank_protection: true  # optional: an empty value leaves MISP's own default
+#         secret: true            # optional: the value comes from the misp-app Secret only
+#         config_php: true        # optional: also in config.php, which MISP reads first
 #
 # The env var of a setting is its name in upper case with dots as underscores
 # (MISP.redis_host -> MISP_REDIS_HOST); set in the chart's env value, it replaces the
-# value here. The chart passes every setting to MISP as MISP_SETTING_<Category>__<key>,
-# MISP's own environment layer, which wins over config.php and the database and makes
-# MISP refuse a change. minimum_config, db_enable and s3 (while PLUGIN_S3_BUCKET_NAME is
-# set) also go into config.php, which MISP reads before that layer, and so do the auth
-# plugin groups while their switch is true (oidc: OIDC_ENABLE, ldap: LDAPAUTH_ENABLE).
-# A name without a category (debug) goes into config.php only.
+# value here, and an empty value clears it unless the setting has blank_protection. A
+# secret setting takes the key of that name in the misp-app Secret (or its documented
+# alias, such as OIDC_CLIENT_SECRET); the chart refuses it in env. The chart passes every
+# setting to MISP as MISP_SETTING_<Category>__<key>, MISP's own environment layer, which
+# wins over config.php and the database and makes MISP refuse a change. The auth plugin
+# groups go into config.php instead, while their switch is true (oidc: OIDC_ENABLE, ldap:
+# LDAPAUTH_ENABLE): MISP loads a plugin from config.php before that layer.
 
 settings:
 
-  # -- minimum_config: also rendered into config.php, by every pod ----------
-  # MISP never reads SystemSetting::BLOCKED_SETTINGS from the database (salt,
-  # encryption key, password policy, python_bin, ca_path, tmpdir,
-  # attachments_dir, self_update, online_version_check, system_setting_db,
-  # GnuPG.binary, disable_local_feed_access), so those live here.
-  minimum_config:
+  # -- core: the connections, paths and security bootstrap ------------------
+  core:
+
+    # MISP reads the database rows only with this on, and decides that before its env layer
+    MISP.system_setting_db:
+      value: true
+      config_php: true
 
     # Redis connection
     MISP.redis_host:
@@ -33,6 +37,7 @@ settings:
       value: 6379
     MISP.redis_password:
       value: ""
+      secret: true
     MISP.redis_database:
       value: 13
 
@@ -47,6 +52,7 @@ settings:
       value: 6379
     Plugin.ZeroMQ_redis_password:
       value: ""
+      secret: true
     Plugin.ZeroMQ_redis_database:
       value: 1
     Plugin.ZeroMQ_redis_namespace:
@@ -59,6 +65,8 @@ settings:
       value: 50000
     Plugin.ZeroMQ_password:
       value: ""
+      blank_protection: true
+      secret: true
 
     # Background jobs Redis
     SimpleBackgroundJobs.redis_host:
@@ -67,6 +75,7 @@ settings:
       value: 6379
     SimpleBackgroundJobs.redis_password:
       value: ""
+      secret: true
     SimpleBackgroundJobs.redis_database:
       value: 1
     SimpleBackgroundJobs.redis_namespace:
@@ -92,13 +101,13 @@ settings:
     MISP.osuser:
       value: misp
 
-    # Security bootstrap (BLOCKED_SETTINGS: only config.php counts)
+    # Security bootstrap
     Security.salt:
       value: ""
-      blank_protection: true
+      secret: true
     Security.encryption_key:
       value: ""
-      blank_protection: true
+      secret: true
     Security.password_policy_length:
       value: 12
     # 12-15 must be "complex" - after 16 characters anything goes
@@ -124,12 +133,6 @@ settings:
       value: ""
     MISP.menu_custom_right_link_html:
       value: ""
-
-  # -- db_enable: toggle system_setting_db -------------------------------------
-  db_enable:
-
-    MISP.system_setting_db:
-      value: true
 
   # -- initialisation: core instance settings ----------------------------------
   initialisation:
@@ -335,6 +338,10 @@ settings:
       value: false
     Security.csp_enforce:
       value: true
+    # true while MISP_BASEURL starts with https://, which the chart sees to: PHP sees plain
+    # HTTP from caddy, and MISP marks the session cookie Secure only with this on
+    Security.force_https:
+      value: false
     Security.do_not_log_authkeys:
       value: true
 
@@ -397,6 +404,11 @@ settings:
       value: true
     Plugin.Cortex_ssl_verify_peer:
       value: true
+    # MISP stores and logs a key set in its UI in clear
+    Plugin.Cortex_authkey:
+      value: ""
+      blank_protection: true
+      secret: true
     Plugin.Workflow_enable:
       value: true
     Plugin.Workflow_debug_url:
@@ -469,6 +481,7 @@ settings:
       value: /var/www/MISP/.gnupg
     GnuPG.password:
       value: ""
+      secret: true
     GnuPG.onlyencrypted:
       value: false
     GnuPG.sign:
@@ -482,6 +495,7 @@ settings:
     SMIME.password:
       value: ""
       blank_protection: true
+      secret: true
 
   # -- s3: S3 attachment storage (only while PLUGIN_S3_BUCKET_NAME is set, which also sets MISP.attachments_dir to s3://)
   s3:
@@ -496,6 +510,7 @@ settings:
       value: ""
     Plugin.S3_aws_secret_key:
       value: ""
+      secret: true
     Plugin.S3_region:
       value: ""
 
@@ -517,9 +532,10 @@ settings:
     Proxy.password:
       value: ""
       blank_protection: true
+      secret: true
 
   # -- custom_auth: header authentication from a reverse proxy, no directory lookup
-  # (CUSTOM_AUTH_ENABLE=true turns it on; the CUSTOM_AUTH_* names are aliases, below)
+  # (CUSTOM_AUTH_ENABLE=true turns it on; the CUSTOM_AUTH_* names are aliases of settings.yaml)
   custom_auth:
 
     Plugin.CustomAuth_enable:
@@ -576,7 +592,7 @@ settings:
       value: misp_audit
 
   # -- oidc: OidcAuth plugin, rendered into config.php when OIDC_ENABLE=true ---
-  # The documented OIDC_* names map onto these (the aliases below). role_mapper and
+  # The documented OIDC_* names map onto these (the aliases of settings.yaml). role_mapper and
   # scopes take JSON in env; scopes also takes a comma-separated list.
   oidc:
     Security.auth:
@@ -593,6 +609,7 @@ settings:
     OidcAuth.client_secret:
       value: ""
       blank_protection: true
+      secret: true
     OidcAuth.role_mapper:
       value: {}
     OidcAuth.default_org:
@@ -651,6 +668,7 @@ settings:
     LdapAuth.ldapReaderPassword:
       value: ""
       blank_protection: true
+      secret: true
     LdapAuth.ldapSearchFilter:
       value: ""
       blank_protection: true
@@ -658,11 +676,12 @@ settings:
       value: mail
     LdapAuth.ldapEmailField:
       value: mail
+    # Unset: the plugin's own, organisation 1 and role 3 (User)
     LdapAuth.ldapDefaultOrgId:
-      value: ""
+      value: null
       blank_protection: true
     LdapAuth.ldapDefaultRoleId:
-      value: ""
+      value: null
       blank_protection: true
     LdapAuth.ldapRoleField:
       value: ""
@@ -672,6 +691,29 @@ settings:
       blank_protection: true
     LdapAuth.ldapOrgGroupMapping:
       value: {}
+    LdapAuth.ldapRoleGroupMapping:
+      value: {}
+    LdapAuth.ldapUseMemberOf:
+      value: false
+    LdapAuth.updateUser:
+      value: true
+    # A local password logs in beside LDAP
+    LdapAuth.mixedAuth:
+      value: true
+    LdapAuth.starttls:
+      value: false
+    # A CA file for the LDAP server's certificate; false: the system's
+    LdapAuth.ldapTlsCustomCaCert:
+      value: false
+    # LDAP_OPT_X_TLS_DEMAND
+    LdapAuth.ldapTlsRequireCert:
+      value: 2
+    # LDAP_OPT_X_TLS_CRL_PEER
+    LdapAuth.ldapTlsCrlCheck:
+      value: 1
+    # LDAP_OPT_X_TLS_PROTOCOL_TLS1_2
+    LdapAuth.ldapTlsProtocolMin:
+      value: 771
     LdapAuth.ldapProtocol:
       value: 3
     LdapAuth.ldapNetworkTimeout:
@@ -684,6 +726,8 @@ settings:
       value: false
     LdapAuth.ldapEscape:
       value: true
+    LdapAuth.ldapEscapeIgnoreChars:
+      value: ""
     LdapAuth.ldapHeaderAuth:
       value: false
     LdapAuth.ldapHeaderAuthHeader:

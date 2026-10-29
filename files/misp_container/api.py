@@ -53,10 +53,9 @@ class MISPClient:
                 raw = resp.read()
                 try:
                     return json.loads(raw)
-                except (json.JSONDecodeError, ValueError):
-                    # Some MISP endpoints (e.g. warninglists/add) return HTML
-                    # after a redirect. Treat non-JSON 200 as success.
-                    return {"success": True, "raw_length": len(raw)}
+                except ValueError:
+                    # MISP answers REST in JSON: an HTML page is a login page after a redirect
+                    raise APIError(resp.status, f"not JSON: {raw[:200]!r}", path) from None
         except urllib.error.HTTPError as e:
             body_text = ""
             try:
@@ -81,9 +80,9 @@ class MISPClient:
         return inner if isinstance(inner, dict) else None
 
     def get_organisations(self) -> dict[str, dict]:
-        """Returns {uuid: org_dict}."""
+        """Returns {uuid: org_dict}, remote organisations included: REST lists local ones only by default."""
         result = {}
-        for item in self.get("/organisations"):
+        for item in self.get("/organisations/index/scope:all"):
             org = self._unwrap(item, "Organisation")
             if org and "uuid" in org:
                 result[org["uuid"].lower()] = org
@@ -123,9 +122,9 @@ class MISPClient:
         return result
 
     def get_tags(self) -> dict[str, dict]:
-        """Returns {name: tag_dict}."""
+        """Returns {name: tag_dict}, without the usage counts, which MISP counts over every tagged attribute."""
         result = {}
-        resp = self.get("/tags")
+        resp = self.get("/tags/index/exclude_statistics:1")
         # MISP may return {"Tag": [...]} or just [...]
         items = resp.get("Tag", resp) if isinstance(resp, dict) else resp
         if not isinstance(items, list):

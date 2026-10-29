@@ -76,6 +76,20 @@ Each team has a `servers` list: the sync partners of its organisation. `pull_tag
 name tags in MISP, such as those of the `tags` list: a run refuses a server whose push rule
 names another, because the rule would then push every event.
 
+A server's `authkey` goes to MISP when it differs from the key the server last got: the run
+keeps the SHA-256 of each in `system_settings`. A key changed in MISP's UI stays until the
+file's key changes.
+
+A team's organisation may already be in MISP as a remote organisation, such as a partner's
+after a pull: a run makes it local.
+
+## Warninglists
+
+`warninglists` names MISP's built-in lists to enable, and defines custom ones by `name`, with
+`type`, `category`, `matching_attributes` and `values`. A run creates a missing custom list
+with the file's `version`, and edits one whose description, type, category, matching
+attributes or values differ. MISP raises a list's version at each edit itself.
+
 ## Sharing groups
 
 ```yaml
@@ -94,7 +108,7 @@ sharing_groups:
 | `name` | The sharing group. Without a `uuid`, a run finds it by this name |
 | `uuid` | Optional: the UUID of the sharing group |
 | `description`, `releasability`, `active`, `roaming`, `local` | MISP's fields of the sharing group; a key the file leaves out keeps MISP's value |
-| `organisations` | The members, each by its UUID, or as `uuid` and `extend`. A run adds the missing members and removes the others |
+| `organisations` | The members, each by its UUID, or as `uuid` and `extend`. A run adds the missing members, removes the others, and adds a member again whose `extend` changed |
 
 Each member must be an organisation in MISP, such as a team of the file.
 

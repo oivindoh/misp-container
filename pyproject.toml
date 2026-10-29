@@ -5,7 +5,7 @@ requires-python = ">=3.13"
 
 [dependency-groups]
 dev = [
-    # The database drivers, bcrypt and redis at the versions files/requirements-final.txt
+    # The database drivers, bcrypt and redis at the versions files/requirements-final.in
     # pins in the image: the unit tests run the org sync's authkey check for real
     "bcrypt==5.0.0",
     "pg8000==1.31.5",

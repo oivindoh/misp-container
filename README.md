@@ -16,7 +16,7 @@ migrate Job ([docs/migration.md](docs/migration.md)).
   layer. Every setting has an env var (`MISP.redis_host` -> `MISP_REDIS_HOST`); the repository's
   live in `deploy/chart/files/settings.yaml`.
 - Kubernetes: the Helm chart `deploy/chart` renders MISP itself; components switch on the
-  optional parts (database, cache, ingress or HTTPRoute, network policies, CronJobs for all
+  optional parts (database, cache, HTTPRoute, network policies, CronJobs for all
   periodic work, PDBs). Each release publishes it to GHCR.
 - On one machine, k3s in podman runs the chart ([Quick start](#quick-start)). The test suites
   run it the same way.
@@ -84,7 +84,7 @@ Every other setting has an env var too; see [docs/configuration.md](docs/configu
 ## Kubernetes
 
 The Helm chart in `deploy/chart` renders MISP itself; each component (database, cache,
-ingress or HTTPRoute, network policies, CronJobs) switches on with `<component>.enabled`.
+HTTPRoute, network policies, CronJobs) switches on with `<component>.enabled`.
 Each release publishes the chart as `oci://ghcr.io/oivindoh/charts/misp`. The chart has its
 own SemVer version, and its `appVersion` is the MISP version of the images. Helm, Argo CD or
 Flux installs it ([docs/kubernetes.md](docs/kubernetes.md#install)), which also shows the

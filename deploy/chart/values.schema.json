@@ -10,7 +10,8 @@
       "additionalProperties": false,
       "properties": {
         "cpu": {"type": ["string", "number"]},
-        "memory": {"type": ["string", "number"]}
+        "memory": {"type": ["string", "number"]},
+        "ephemeral-storage": {"type": ["string", "number"]}
       }
     },
     "resources": {
@@ -72,6 +73,8 @@
     "nodeSelector": {"type": "object"},
     "tolerations": {"type": "array"},
     "affinity": {"type": "object"},
+    "podAnnotations": {"type": "object", "additionalProperties": {"type": "string"}},
+    "podLabels": {"type": "object", "additionalProperties": {"type": "string"}},
     "env": {"$ref": "#/definitions/scalars"},
     "secrets": {
       "type": "object",
@@ -102,6 +105,7 @@
       }
     },
     "databaseCA": {"$ref": "#/definitions/secretKeyRef"},
+    "caBundle": {"$ref": "#/definitions/secretKeyRef"},
     "configure": {
       "type": "object",
       "additionalProperties": false,
@@ -112,6 +116,7 @@
       "additionalProperties": false,
       "properties": {
         "replicas": {"type": "integer", "minimum": 0},
+        "topologySpreadConstraints": {"type": "array", "items": {"type": "object"}},
         "resources": {
           "type": "object",
           "additionalProperties": false,
@@ -127,6 +132,7 @@
       "additionalProperties": false,
       "properties": {
         "replicas": {"type": "integer", "minimum": 0},
+        "topologySpreadConstraints": {"type": "array", "items": {"type": "object"}},
         "resources": {"$ref": "#/definitions/resources"}
       }
     },
@@ -172,24 +178,14 @@
         "resources": {"$ref": "#/definitions/resources"}
       }
     },
-    "ingress": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "enabled": {"type": "boolean"},
-        "className": {"type": "string"},
-        "host": {"type": "string"},
-        "tlsSecret": {"type": "string"},
-        "annotations": {"type": "object", "additionalProperties": {"type": "string"}}
-      }
-    },
     "httpRoute": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
         "enabled": {"type": "boolean"},
         "parentRefs": {"type": "array", "items": {"type": "object"}},
-        "hostnames": {"type": "array", "items": {"type": "string"}}
+        "hostnames": {"type": "array", "items": {"type": "string"}},
+        "timeouts": {"type": "object"}
       }
     },
     "networkPolicy": {"$ref": "#/definitions/networkPolicy"},
@@ -201,6 +197,7 @@
         "tasks": {"type": "object", "additionalProperties": {"type": "string"},
                   "propertyNames": {"enum": ["block-invalid-users", "cache-feeds", "cache-servers", "check-user-validity", "fetch-feeds", "periodic-summary", "pull-servers", "push-servers", "push-taxii", "sharing-group-blueprints", "update-galaxies", "update-noticelists", "update-object-templates", "update-taxonomies", "update-warninglists"]}},
         "workflows": {"type": "object", "additionalProperties": {"type": "string"}},
+        "activeDeadlineSeconds": {"type": "integer", "minimum": 1},
         "resources": {"$ref": "#/definitions/resources"}
       }
     },

@@ -11,6 +11,7 @@ import urllib.parse
 from pathlib import Path
 
 from . import db
+from .config import setting
 from .env import env
 from .init import check_writable, prepare
 from .log import get as getlog, setup as setup_logging
@@ -65,7 +66,7 @@ def main():
     prepare()
     set_session_save_path()
     if not env("PLUGIN_S3_BUCKET_NAME"):
-        check_writable(env("MISP_ATTACHMENTS_DIR"), "attachments")
+        check_writable(setting("MISP.attachments_dir"), "attachments")
     db.wait_for_db()
     db.wait_for_configure()
     start_log_relay()

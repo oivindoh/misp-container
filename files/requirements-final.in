@@ -1,0 +1,7 @@
+# The packages of this repository's code in the main image; mise run misp-requirements
+# resolves them into the hash-locked requirements-final.txt
+pyyaml==6.0.3
+pymysql==1.2.3
+bcrypt==5.0.0
+pg8000==1.31.5
+redis==8.1.0

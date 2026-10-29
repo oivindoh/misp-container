@@ -274,7 +274,10 @@ def s3_run(stack, volume_copy):
 
 @pytest.fixture(scope="module")
 def s3_copy(stack, s3_run):
-    switch(stack, {"env": S3_TARGET})
+    # The chart refuses a secret in env: the key goes in secrets.app
+    secret = "PLUGIN_S3_AWS_SECRET_KEY"
+    switch(stack, {"env": {k: v for k, v in S3_TARGET.items() if k != secret},
+                   "secrets": {"app": {secret: S3_TARGET[secret]}}})
     return "s3"
 
 

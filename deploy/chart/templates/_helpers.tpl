@@ -3,24 +3,36 @@
 {{- .Values.image.tag | default .Chart.AppVersion -}}
 {{- end }}
 
-{{/* Labels of a resource. Selectors use app.kubernetes.io/name only. */}}
-{{- define "misp.labels" -}}
+{{/*
+The labels that place an object in a release. The network policies select a
+release's pods by app.kubernetes.io/instance and part-of; the Services and
+Deployments by name.
+*/}}
+{{- define "misp.nameLabels" -}}
 app.kubernetes.io/name: {{ .name }}
 app.kubernetes.io/instance: {{ .root.Release.Name }}
 app.kubernetes.io/part-of: misp
+{{- end }}
+
+{{/* Labels of a resource. Selectors use app.kubernetes.io/name only. */}}
+{{- define "misp.labels" -}}
+{{ include "misp.nameLabels" . }}
 app.kubernetes.io/managed-by: {{ .root.Release.Service }}
 app.kubernetes.io/version: {{ include "misp.tag" .root | quote }}
 helm.sh/chart: {{ printf "%s-%s" .root.Chart.Name .root.Chart.Version | replace "+" "_" }}
 {{- end }}
 
-{{/*
-Labels of a pod template. The network policies select a release's pods by
-app.kubernetes.io/instance and part-of; the Services and Deployments by name.
-*/}}
+{{/* Labels of a pod template: the release's, then the podLabels value */}}
 {{- define "misp.podLabels" -}}
-app.kubernetes.io/name: {{ .name }}
-app.kubernetes.io/instance: {{ .root.Release.Name }}
-app.kubernetes.io/part-of: misp
+{{ include "misp.nameLabels" . }}
+{{- with .root.Values.podLabels }}
+{{ toYaml . }}
+{{- end }}
+{{- end }}
+
+{{/* The podAnnotations value, as the lines of a pod template's annotations */}}
+{{- define "misp.podAnnotations" -}}
+{{- with .Values.podAnnotations }}{{ toYaml . }}{{ end }}
 {{- end }}
 
 {{/* Scheduling and pull secrets of every pod. No pod talks to the Kubernetes API. */}}
@@ -109,7 +121,7 @@ worker and the task CronJobs. Each pod renders its own app/Config.
   readOnly: true
 - name: tmp
   mountPath: /tmp
-{{- with include "misp.dbCAVolumeMount" . }}
+{{- with include "misp.caVolumeMounts" . }}
 {{ . }}
 {{- end }}
 {{- end }}
@@ -145,29 +157,38 @@ worker and the task CronJobs. Each pod renders its own app/Config.
   secret:
     secretName: misp-certs
     optional: true
-{{- with include "misp.dbCAVolume" . }}
+{{- with include "misp.caVolumes" . }}
 {{ . }}
 {{- end }}
 {{- end }}
 
-{{/* The databaseCA certificate at DB_SSLROOTCERT, in every pod that connects to the database */}}
-{{- define "misp.dbCAVolumeMount" -}}
-{{- if .Values.databaseCA -}}
-- name: db-ca
-  mountPath: /etc/misp-docker/db-ca
-  readOnly: true
+{{/*
+The CA certificates of a pod that connects to the database and out: databaseCA at
+DB_SSLROOTCERT, and caBundle over the image's bundle, which PHP, curl and Python read.
+*/}}
+{{- define "misp.caVolumeMounts" -}}
+{{- $mounts := list }}
+{{- if .Values.databaseCA }}
+{{- $mounts = append $mounts (dict "name" "db-ca" "mountPath" "/etc/misp-docker/db-ca" "readOnly" true) }}
 {{- end }}
+{{- if .Values.caBundle }}
+{{- $mounts = append $mounts (dict "name" "ca-bundle" "mountPath" "/etc/ssl/certs/ca-certificates.crt"
+      "subPath" "ca-certificates.crt" "readOnly" true) }}
+{{- end }}
+{{- with $mounts }}{{ toYaml . }}{{ end }}
 {{- end }}
 
-{{- define "misp.dbCAVolume" -}}
-{{- with .Values.databaseCA -}}
-- name: db-ca
-  secret:
-    secretName: {{ .name }}
-    items:
-      - key: {{ .key }}
-        path: ca.crt
+{{- define "misp.caVolumes" -}}
+{{- $volumes := list }}
+{{- with .Values.databaseCA }}
+{{- $volumes = append $volumes (dict "name" "db-ca" "secret" (dict "secretName" .name
+      "items" (list (dict "key" .key "path" "ca.crt")))) }}
 {{- end }}
+{{- with .Values.caBundle }}
+{{- $volumes = append $volumes (dict "name" "ca-bundle" "secret" (dict "secretName" .name
+      "items" (list (dict "key" .key "path" "ca-certificates.crt")))) }}
+{{- end }}
+{{- with $volumes }}{{ toYaml . }}{{ end }}
 {{- end }}
 
 {{/* The attachments volume: the shared claim, or an emptyDir per pod when attachments are in S3 */}}
@@ -185,7 +206,7 @@ worker and the task CronJobs. Each pod renders its own app/Config.
 {{/*
 The checksum of the configuration a pod runs with: misp-env, and misp-db and misp-app when
 the chart makes them. A change rolls the pods, and each pod waits for a configure run of the
-same checksum (MISP_CONFIG_CHECKSUM, misp.checksumEnv), so a revision whose configure Job
+same checksum (MISP_CHECKSUM, misp.checksumEnv), so a revision whose configure Job
 refuses its configuration never serves.
 */}}
 {{- define "misp.checksums" -}}
@@ -196,9 +217,9 @@ refuses its configuration never serves.
 checksum/config: {{ printf "%s%s%s" (include (print .Template.BasePath "/configmap-env.yaml") .) (include (print .Template.BasePath "/configmap-settings.yaml") .) $secrets | sha256sum }}
 {{- end }}
 
-{{/* The pod's checksum/config annotation as MISP_CONFIG_CHECKSUM; empty in a pod without it */}}
+{{/* The pod's checksum/config annotation as MISP_CHECKSUM; empty in a pod without it */}}
 {{- define "misp.checksumEnv" -}}
-- name: MISP_CONFIG_CHECKSUM
+- name: MISP_CHECKSUM
   valueFrom:
     fieldRef:
       fieldPath: metadata.annotations['checksum/config']
@@ -293,11 +314,11 @@ name in misp-db (DB_USER, DB_PASSWORD) or misp-app (MISP_REDIS_PASSWORD). Takes 
 {{- end }}
 
 {{/*
-A CronJob of periodic work. Takes (dict root name task args schedule), and
+A CronJob of periodic work. Takes (dict root name task args schedule), deadline, and
 module "housekeeping" for a housekeeping run. A task (app.kubernetes.io/component:
 misp-task) renders app/Config and runs MISP's console in the pod; housekeeping
-(misp-housekeeping) deletes old rows straight in the database. The network
-policies select on that label.
+(misp-housekeeping) deletes old rows straight in the database. A network policy of
+the release's owner can select on that label.
 */}}
 {{- define "misp.taskCronJob" -}}
 {{- $root := .root }}
@@ -313,6 +334,10 @@ metadata:
     app.kubernetes.io/component: {{ $component }}
 spec:
   schedule: {{ .schedule | quote }}
+  {{- with $root.Values.env.TZ }}
+  # The schedules run in the zone that PHP runs in
+  timeZone: {{ . | quote }}
+  {{- end }}
   concurrencyPolicy: Forbid
   successfulJobsHistoryLimit: 1
   failedJobsHistoryLimit: 3
@@ -321,15 +346,18 @@ spec:
       # A retry would mail the summaries twice, or repeat every server of a run
       # because one partner did not answer
       backoffLimit: {{ ternary 0 2 (has .task (list "periodic-summary" "pull-servers" "push-servers" "cache-servers")) }}
-      activeDeadlineSeconds: 3600
+      activeDeadlineSeconds: {{ default 3600 .deadline }}
       template:
         metadata:
           labels:
             {{- include "misp.podLabels" (dict "root" $root "name" .name) | nindent 12 }}
             app.kubernetes.io/component: {{ $component }}
-          {{- if $task }}
+          {{- if or $task $root.Values.podAnnotations }}
           annotations:
+            {{- if $task }}
             {{- include "misp.checksums" $root | nindent 12 }}
+            {{- end }}
+            {{- include "misp.podAnnotations" $root | nindent 12 }}
           {{- end }}
         spec:
           restartPolicy: {{ ternary "Never" "OnFailure" $task }}
@@ -349,7 +377,7 @@ spec:
                 {{- toYaml $root.Values.cronjobs.resources | nindent 16 }}
               {{- else }}
               {{- include "misp.appEnv" (list $root "misp-db") | nindent 14 }}
-              {{- with include "misp.dbCAVolumeMount" $root }}
+              {{- with include "misp.caVolumeMounts" $root }}
               volumeMounts:
                 {{- . | nindent 16 }}
               {{- end }}
@@ -363,6 +391,6 @@ spec:
             {{- include "misp.attachmentsVolume" $root | nindent 12 }}
           {{- else if $root.Values.databaseCA }}
           volumes:
-            {{- include "misp.dbCAVolume" $root | nindent 12 }}
+            {{- include "misp.caVolumes" $root | nindent 12 }}
           {{- end }}
 {{- end }}

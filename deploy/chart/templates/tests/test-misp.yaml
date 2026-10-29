@@ -8,9 +8,13 @@ metadata:
   labels:
     {{- include "misp.labels" (dict "root" . "name" "misp-test") | nindent 4 }}
     app.kubernetes.io/component: misp-test
+    {{- with .Values.podLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
   annotations:
     helm.sh/hook: test
     helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+    {{- include "misp.podAnnotations" . | nindent 4 }}
 spec:
   restartPolicy: Never
   {{- include "misp.podSecurityContext" . | nindent 2 }}

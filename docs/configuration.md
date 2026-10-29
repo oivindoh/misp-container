@@ -18,7 +18,7 @@ flowchart LR
     file["settings.yaml<br/>(the chart)"] --> chart["helm template"]
     env["values: env, Secrets"] --> chart
     chart --> layer["MISP_SETTING_* env:<br/>MISP's own layer"]
-    chart --> php["MISP_CONFIG_* env:<br/>config.php, rendered by every pod"]
+    chart --> php["MISP_CONFIG_* env:<br/>config.php, rendered by every pod:<br/>system_setting_db, the auth plugins"]
     layer --> misp["MISP"]
     php --> misp
     db["system_settings:<br/>UI changes"] --> misp
@@ -32,7 +32,11 @@ MISP.redis_host        ->  MISP_REDIS_HOST
 Plugin.S3_bucket_name  ->  PLUGIN_S3_BUCKET_NAME
 ```
 
-A value in the chart's `env` (or, for a secret, in a Secret) replaces the file's. The chart
+A value in the chart's `env` replaces the file's; an empty value clears it, unless the setting
+has `blank_protection`. A secret setting (`secret: true`: the salt, the encryption key, the
+passwords, the OIDC client secret, the S3 secret key, the Cortex key) takes its value from the
+key of the same name in the `misp-app` Secret, or from its documented alias such as
+`OIDC_CLIENT_SECRET`, and the chart refuses it in `env`, which lands in a ConfigMap. The chart
 passes every setting to MISP as `MISP_SETTING_<Category>__<key>`, MISP's own environment
 layer:
 
@@ -42,12 +46,16 @@ layer:
 | `system_settings` table | After config.php | Saved here, for a setting the repository does not set |
 | `config.php`, rendered by every pod | First | None |
 
-`config.php` holds what MISP reads before its environment layer: the `minimum_config` and
-`db_enable` groups, `s3` while `PLUGIN_S3_BUCKET_NAME` is set, and the auth plugins.
+`config.php` holds what MISP reads before its environment layer: `MISP.system_setting_db`,
+and the auth plugins while their switch is on.
 
 A MISP setting that `settings.yaml` does not list takes its `MISP_SETTING_*` name in the
 chart's `env` directly: `MISP_SETTING_MISP__welcome_text_top: Welcome` sets
-`MISP.welcome_text_top`. Once set there, the UI can no longer change it.
+`MISP.welcome_text_top`. Once set there, the UI can no longer change it. For a setting
+`settings.yaml` lists, the chart refuses the direct name and names the env var to use.
+
+With an `https://` base URL, the chart sets `Security.force_https`: caddy passes plain HTTP to
+PHP, and MISP marks the session cookie Secure only with that setting on.
 
 Some env vars fill others unless those are set explicitly (the `derived` list of
 `settings.yaml`): `MISP_REDIS_*` fills the background-job and ZeroMQ Redis settings,
@@ -84,7 +92,7 @@ engine needs MySQL, so it is not available.
 
 ## HTTPS
 
-Caddy serves plain HTTP on 8080, for an ingress, a Gateway or a load balancer in front, which
+Caddy serves plain HTTP on 8080, for a Gateway or a load balancer in front, which
 terminates TLS.
 
 ## Authentication plugins
@@ -175,8 +183,15 @@ leaves the account enabled.
 ### LDAP
 
 `LDAPAUTH_LDAPSERVER`, `LDAPAUTH_LDAPDN`, `LDAPAUTH_LDAPREADERUSER`, `LDAPAUTH_LDAPREADERPASSWORD`
-are required; `LDAPAUTH_LDAPSEARCHFILTER`, `LDAPAUTH_LDAPDEFAULTORGID`, `LDAPAUTH_LDAPDEFAULTROLEID`,
-`LDAPAUTH_LDAPROLEFIELD` and the rest of the `ldap` group follow the plugin's README.
+(in `misp-app`) are required; `LDAPAUTH_LDAPSEARCHFILTER`, `LDAPAUTH_LDAPDEFAULTORGID`,
+`LDAPAUTH_LDAPDEFAULTROLEID`, `LDAPAUTH_LDAPROLEFIELD` and the rest of the `ldap` group follow
+the plugin's README. `LDAPAUTH_STARTTLS` and `LDAPAUTH_LDAPTLSCUSTOMCACERT` take STARTTLS and a
+CA file for the server, `LDAPAUTH_LDAPROLEGROUPMAPPING` maps groups to roles (JSON), and
+`LDAPAUTH_MIXEDAUTH` (`true`) keeps the password form for local accounts.
+
+A key a plugin reads that `settings.yaml` does not list takes
+`MISP_CONFIG_<Section>__<key>` in the chart's `env`, such as
+`MISP_CONFIG_OidcAuth__timeout: "30"`; the value is JSON, or else a string.
 
 ## Logging
 

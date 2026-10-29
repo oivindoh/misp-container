@@ -11,7 +11,7 @@ import sys
 from . import admin
 from . import cake
 from . import db
-from .config import repository_settings
+from .config import missing_settings, repository_settings
 from .env import env
 from .init import prepare
 from .log import get as getlog, setup as setup_logging
@@ -74,7 +74,10 @@ def forget_repository_rows() -> None:
 
     The layer wins over them anyway; left, they would read as changes made by hand.
     """
-    names = sorted(repository_settings())
+    missing = missing_settings()
+    for name in sorted(missing):
+        log.warning("setting %s has no value in this pod: its Secret lacks the key, so MISP keeps its own", name)
+    names = sorted(repository_settings() - missing)
     if names:
         gone = db.execute("DELETE FROM system_settings WHERE setting = ANY(%s)", (names,))
         if gone:

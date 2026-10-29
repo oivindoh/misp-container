@@ -1,7 +1,7 @@
 """Logging setup for MISP container entrypoints.
 
 LOG_FORMAT selects the line format: json (one JSON object per line, the
-default) or text (coloured on a terminal).
+chart's default) or text (coloured on a terminal, the default without it).
 """
 
 import json

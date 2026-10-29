@@ -1,0 +1,32 @@
+# The gates an image passes before a release tags it: no CRITICAL finding with a fix in
+# any package, and no HIGH one with a fix in its Debian packages. Distroless and the base
+# image carry only what their digest held, so a fixed HIGH finding there means a digest
+# to bump. .trivyignore lists the fixes Trivy knows before apt can install them.
+name: Check an image
+description: Trivy's CRITICAL gate on every package and HIGH gate on the Debian packages of a loaded image
+inputs:
+  image:
+    description: The image, by name and tag or digest
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Fail on a fixable CRITICAL finding
+      uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+      with:
+        image-ref: ${{ inputs.image }}
+        severity: CRITICAL
+        ignore-unfixed: true
+        exit-code: "1"
+        trivyignores: .trivyignore
+    - name: Fail on a fixable HIGH finding in a Debian package
+      uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+      env:
+        TRIVY_PKG_TYPES: os
+      with:
+        image-ref: ${{ inputs.image }}
+        severity: HIGH,CRITICAL
+        ignore-unfixed: true
+        exit-code: "1"
+        trivyignores: .trivyignore
+        skip-setup-trivy: true

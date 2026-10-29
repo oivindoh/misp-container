@@ -14,6 +14,7 @@ import hashlib
 import hmac
 import shutil
 import ssl
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -23,6 +24,10 @@ from pathlib import Path
 from typing import BinaryIO, Iterator
 
 EMPTY_SHA256 = hashlib.sha256(b"").hexdigest()
+# The statuses a later attempt can pass: no answer, and the errors S3 asks a client to retry
+# (503 SlowDown among them)
+RETRY = (0, 500, 502, 503, 504)
+ATTEMPTS = 4
 S3_NS = "{http://s3.amazonaws.com/doc/2006-03-01/}"
 CHUNK = 1024 * 1024
 
@@ -105,6 +110,19 @@ class Bucket:
 
     def _request(self, method: str, key: str = "", query: dict[str, str] | None = None,
                  body: BinaryIO | None = None, length: int = 0, payload_sha256: str = EMPTY_SHA256):
+        """The response to a request, after up to ATTEMPTS tries for an error in RETRY."""
+        for attempt in range(ATTEMPTS):
+            try:
+                return self._send(method, key, query, body, length, payload_sha256)
+            except S3Error as e:
+                if e.status not in RETRY or attempt == ATTEMPTS - 1:
+                    raise
+            time.sleep(2 ** attempt)
+            if body is not None:
+                body.seek(0)
+
+    def _send(self, method: str, key: str, query: dict[str, str] | None, body: BinaryIO | None,
+              length: int, payload_sha256: str):
         scheme, host, path = self._target(key)
         query = query or {}
         headers = sign(method, host, path, query, {"content-length": str(length)} if body else {},

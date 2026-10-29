@@ -26,6 +26,7 @@ spec:
         {{- include "misp.podLabels" (dict "root" . "name" "configure") | nindent 8 }}
       annotations:
         {{- include "misp.checksums" . | nindent 8 }}
+        {{- include "misp.podAnnotations" . | nindent 8 }}
     spec:
       restartPolicy: Never
       {{- include "misp.podSecurityContext" . | nindent 6 }}
@@ -52,7 +53,7 @@ spec:
               mountPath: /var/www/MISP/app/Config
             - name: misp-tmp
               mountPath: /var/www/MISP/app/tmp
-            {{- with include "misp.dbCAVolumeMount" . }}
+            {{- with include "misp.caVolumeMounts" . }}
             {{- . | nindent 12 }}
             {{- end }}
             {{- with .Values.migrate.volumeMounts }}

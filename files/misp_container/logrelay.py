@@ -14,7 +14,7 @@ container relays no line twice.
 
 import json
 import os
-import sys
+import signal
 import time
 from pathlib import Path
 
@@ -98,9 +98,13 @@ class Relay:
         return relayed
 
     def run(self, interval: float = INTERVAL) -> None:
-        while True:
+        """Poll until SIGTERM, then once more for the lines written before it."""
+        stopping = []
+        signal.signal(signal.SIGTERM, lambda *_: stopping.append(True))
+        while not stopping:
             self.poll()
             time.sleep(interval)
+        self.poll()
 
 
 def main() -> None:
@@ -109,7 +113,7 @@ def main() -> None:
     try:
         Relay().run()
     except KeyboardInterrupt:
-        sys.exit(0)
+        pass
 
 
 if __name__ == "__main__":

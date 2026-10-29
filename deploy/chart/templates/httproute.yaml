@@ -1,8 +1,10 @@
-# The httpRoute component: an HTTPRoute for a Gateway API implementation, in
-# place of the ingress. caddy takes the client address from X-Forwarded-For,
-# right to left, past TRUSTED_PROXY_CIDR: set that in env to the Gateway's
-# proxy pods.
+# The httpRoute component: an HTTPRoute to the web Service, for a Gateway API
+# implementation. caddy takes the client address from X-Forwarded-For, right to
+# left, past TRUSTED_PROXY_CIDR, which trusts every private range unless set.
 {{- if .Values.httpRoute.enabled }}
+{{- if not (or .Values.env.TRUSTED_PROXY_CIDR .Values.networkPolicy.enabled) }}
+{{- fail "httpRoute: set env.TRUSTED_PROXY_CIDR to the Gateway's proxy pods, or turn networkPolicy on: else any pod chooses the client address MISP sees, which its login lockout and API key address checks trust (docs/kubernetes.md, Client addresses)" }}
+{{- end }}
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
@@ -18,4 +20,8 @@ spec:
     - backendRefs:
         - name: web
           port: 8080
+      {{- with .Values.httpRoute.timeouts }}
+      timeouts:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
 {{- end }}

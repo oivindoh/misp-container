@@ -38,6 +38,7 @@ class TestPrograms:
         with patch.dict(os.environ, counts):
             programs = worker.programs()
         assert [p.name for p in programs] == ["default_00", "default_01", "update_00", "logrelay"]
+        assert [p.last for p in programs] == [False, False, False, True]
         assert programs[0].command == [CAKE, "start_worker", "default"] and programs[0].cwd == MISP_BASE
         assert programs[-1].command[1:] == ["-m", "misp_container.logrelay"]
 
@@ -97,6 +98,24 @@ class TestStop:
                 patch.object(worker, "POLL", 0.05):
             assert sup.shutdown() == 0
         assert sent == [("kill", 21, signal.SIGTERM), ("kill", 22, signal.SIGTERM), ("killpg", 22, signal.SIGKILL)]
+
+    def test_the_log_relay_stops_after_the_workers(self):
+        job, relay = FakeProc(41), FakeProc(42)
+        procs = {41: job, 42: relay}
+        order = []
+
+        def kill(pid, signum):
+            # The relay must still run while a worker stops
+            assert pid != 41 or relay.returncode is None
+            order.append(pid)
+            procs[pid].returncode = -signum
+
+        relay_program = program("logrelay", relay)
+        relay_program.last = True
+        sup = worker.Supervisor([relay_program, program("a", job)], grace=0.2)
+        with patch.object(worker.os, "kill", side_effect=kill), patch.object(worker, "POLL", 0.05):
+            sup.shutdown()
+        assert order == [41, 42]
 
     def test_a_process_that_is_already_gone_is_no_error(self):
         proc = FakeProc(31)

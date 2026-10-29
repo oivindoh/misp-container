@@ -11,60 +11,78 @@ from misp_container import admin
 UUID = "550e8400-e29b-41d4-a716-446655440000"
 
 
+class FakeDb:
+    """The organisation queries of _configure_admin_org against a small state."""
+
+    def __init__(self, by_uuid=None, generated=None, user_org=1, host_org=None):
+        self.by_uuid, self.generated, self.user_org, self.host_org = by_uuid, generated, user_org, host_org
+        self.executed = []
+
+    def dict_query(self, sql, params=()):
+        if "WHERE uuid" in sql:
+            return [{"id": self.by_uuid}] if self.by_uuid else []
+        if "type = 'ADMIN'" in sql:
+            return [{"id": self.generated}] if self.generated else []
+        if "FROM users WHERE id = 1" in sql:
+            return [{"org_id": self.user_org}]
+        raise AssertionError(sql)
+
+    def execute(self, sql, params=()):
+        self.executed.append((sql, params))
+        if sql.startswith("INSERT INTO organisations"):
+            self.by_uuid = 9
+        return 1
+
+    def run(self, admin_org, org_uuid=""):
+        with patch.dict(os.environ, {"ADMIN_ORG_UUID": org_uuid}), \
+                patch("misp_container.admin.db.dict_query", self.dict_query), \
+                patch("misp_container.admin.db.execute", self.execute), \
+                patch("misp_container.admin.db.get_system_setting", return_value=self.host_org), \
+                patch("misp_container.admin.cake.set_setting") as set_setting:
+            admin._configure_admin_org(admin_org)
+        return set_setting
+
+
 class TestConfigureAdminOrg:
-    @patch("misp_container.admin.cake.set_setting")
-    @patch("misp_container.admin.db.execute")
-    @patch("misp_container.admin.db.dict_query")
-    def test_a_name_with_an_apostrophe_travels_as_a_parameter(self, query, execute, set_setting):
-        query.side_effect = [[{"id": 7}], [{"org_id": 1}]]
-        with patch.dict(os.environ, {"ADMIN_ORG_UUID": UUID}):
-            admin._configure_admin_org("O'Brien's CERT")
-        rename, assign = execute.call_args_list
-        assert "O'Brien" not in rename[0][0]
-        assert rename[0][1] == ("O'Brien's CERT", 7, "O'Brien's CERT")
-        assert assign[0][1] == (7,)
+    def test_a_name_with_an_apostrophe_travels_as_a_parameter(self):
+        db = FakeDb(by_uuid=7)
+        set_setting = db.run("O'Brien's CERT", UUID)
+        assign, rename = db.executed
+        assert assign[1] == (7,)
+        assert "O'Brien" not in rename[0] and rename[1] == ("O'Brien's CERT", 7, "O'Brien's CERT")
         set_setting.assert_called_once_with("MISP.host_org_id", 7)
 
-    @patch("misp_container.admin.cake.set_setting")
-    @patch("misp_container.admin.db.execute")
-    @patch("misp_container.admin.db.dict_query")
-    def test_a_new_uuid_creates_the_org(self, query, execute, set_setting):
-        query.side_effect = [[], [], [{"id": 9}], [{"org_id": 9}]]
-        with patch.dict(os.environ, {"ADMIN_ORG_UUID": UUID}):
-            admin._configure_admin_org("CERT")
-        insert = execute.call_args_list[0][0]
-        assert insert[0].startswith("INSERT INTO organisations")
-        assert insert[1] == ("CERT", UUID)
-        assert len(execute.call_args_list) == 2  # insert, rename; the admin is in the org already
+    def test_a_new_uuid_creates_the_org(self):
+        db = FakeDb(user_org=9)
+        db.run("CERT", UUID)
+        insert = db.executed[0]
+        assert insert[0].startswith("INSERT INTO organisations") and insert[1] == ("CERT", UUID)
+        assert len(db.executed) == 2  # insert, rename; the admin is in the org already
 
-    @patch("misp_container.admin.cake.set_setting")
-    @patch("misp_container.admin.db.execute")
-    @patch("misp_container.admin.db.dict_query")
-    def test_the_org_misp_generated_takes_the_uuid(self, query, execute, set_setting):
+    def test_the_org_misp_generated_takes_the_uuid(self):
         # MISP generated it for its first user, named after MISP.org
-        query.side_effect = [[], [{"id": 1}], [{"org_id": 1}]]
-        with patch.dict(os.environ, {"ADMIN_ORG_UUID": UUID}):
-            admin._configure_admin_org("CERT")
-        assert query.call_args_list[1][0][1] == ("CERT", admin.GENERATED_ORG_DESCRIPTION)
-        adopt = execute.call_args_list[0][0]
+        db = FakeDb(generated=1)
+        set_setting = db.run("CERT", UUID)
+        adopt = db.executed[0]
         assert adopt[0].startswith("UPDATE organisations SET uuid") and adopt[1] == (UUID, 1)
-        assert not any(c[0][0].startswith("INSERT") for c in execute.call_args_list)
+        assert not any(sql.startswith("INSERT") for sql, _ in db.executed)
         set_setting.assert_called_once_with("MISP.host_org_id", 1)
 
-    @patch("misp_container.admin.db.execute")
-    @patch("misp_container.admin.db.dict_query")
-    def test_without_a_uuid_the_first_org_is_renamed(self, query, execute):
-        with patch.dict(os.environ, {"ADMIN_ORG_UUID": ""}):
-            admin._configure_admin_org("CERT")
-        query.assert_not_called()
-        assert execute.call_args[0][1] == ("CERT", "CERT")
+    def test_without_a_uuid_the_admins_org_is_renamed_and_hosts(self):
+        db = FakeDb(user_org=4)
+        set_setting = db.run("CERT")
+        assert db.executed == [(db.executed[0][0], ("CERT", 4, "CERT"))]
+        set_setting.assert_called_once_with("MISP.host_org_id", 4)
 
-    @patch("misp_container.admin.db.execute")
-    @patch("misp_container.admin.db.dict_query")
-    def test_the_default_name_changes_nothing(self, query, execute):
-        with patch.dict(os.environ, {"ADMIN_ORG_UUID": ""}):
-            admin._configure_admin_org("ORGNAME")
-        execute.assert_not_called()
+    def test_the_host_org_is_set_only_when_it_changes(self):
+        # Each set is a PHP process and a log row in MISP
+        db = FakeDb(user_org=4, host_org=4)
+        db.run("CERT").assert_not_called()
+
+    def test_the_default_name_changes_nothing(self):
+        db = FakeDb(host_org=1)
+        db.run("ORGNAME").assert_not_called()
+        assert db.executed == []
 
 
 class TestSetAdminAuthkey:

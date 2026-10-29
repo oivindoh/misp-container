@@ -223,29 +223,6 @@ class TestCollectDbMetrics:
         assert parsed["misp_tags"][0] == ({}, "100")
 
     @patch("misp_container.metrics._connect")
-    def test_instance_info(self, mock_connect):
-        """Instance info metric includes uuid and base_url labels."""
-        mock_connect.return_value = _make_conn({
-            "system_settings": [
-                {"setting": "MISP.uuid", "value": '"test-uuid"'},
-                {"setting": "MISP.baseurl", "value": '"https://misp.test"'},
-            ],
-            "pg_stat_user_tables": [],
-            "organisations": {
-                "orgs": 0, "orgs_local": 0,
-                "users_active": 0, "users_disabled": 0,
-                "sharing_groups": 0, "tags": 0,
-            },
-            "FROM servers": [],
-            "FROM jobs": [],
-        })
-        output, _ = _collect_db_metrics()
-        parsed = _parse_metrics(output)
-        labels, val = parsed["misp_instance_info"][0]
-        assert labels["uuid"] == "test-uuid"
-        assert labels["base_url"] == "https://misp.test"
-
-    @patch("misp_container.metrics._connect")
     def test_instance_info_from_the_env_layer(self, mock_connect, monkeypatch):
         monkeypatch.setenv("MISP_SETTING_MISP__uuid", "env-uuid")
         monkeypatch.setenv("MISP_SETTING_MISP__baseurl", "https://env.test")
@@ -800,3 +777,35 @@ class TestCollectAll:
             parsed = _parse_metrics(collect_all())
         check.assert_not_called()
         assert parsed["misp_server_reachable"][0] == ({"id": "1"}, "1")
+
+
+class TestExporter:
+    def test_a_slow_scrape_does_not_hold_the_probes(self):
+        # The kubelet's 1 s probe would fail behind a scrape that waits on the database
+        import socket
+        import threading
+        import urllib.request
+        from misp_container import exporter
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            port = s.getsockname()[1]
+        release, entered = threading.Event(), threading.Event()
+
+        def collect():
+            entered.set()
+            release.wait(10)
+            return ""
+        threading.Thread(target=exporter.serve, args=(collect, port), daemon=True).start()
+        for _ in range(50):
+            try:
+                urllib.request.urlopen(f"http://127.0.0.1:{port}/healthz", timeout=1).read()
+                break
+            except OSError:
+                threading.Event().wait(0.1)
+        threading.Thread(target=lambda: urllib.request.urlopen(f"http://127.0.0.1:{port}/metrics", timeout=10).read(),
+                         daemon=True).start()
+        assert entered.wait(5)
+        try:
+            assert urllib.request.urlopen(f"http://127.0.0.1:{port}/healthz", timeout=1).read() == b"ok\n"
+        finally:
+            release.set()

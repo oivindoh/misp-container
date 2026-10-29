@@ -7,11 +7,11 @@
 {{- range $task, $schedule := .Values.cronjobs.tasks }}
 {{- if $schedule }}
 ---
-{{ include "misp.taskCronJob" (dict "root" $ "name" $task "task" $task "args" list "schedule" $schedule) }}
+{{ include "misp.taskCronJob" (dict "root" $ "name" $task "task" $task "args" list "schedule" $schedule "deadline" $.Values.cronjobs.activeDeadlineSeconds) }}
 {{- end }}
 {{- end }}
 {{- range $id, $schedule := .Values.cronjobs.workflows }}
 ---
-{{ include "misp.taskCronJob" (dict "root" $ "name" (printf "workflow-%v" $id) "task" "workflow" "args" (list (toString $id)) "schedule" $schedule) }}
+{{ include "misp.taskCronJob" (dict "root" $ "name" (printf "workflow-%v" $id) "task" "workflow" "args" (list (toString $id)) "schedule" $schedule "deadline" $.Values.cronjobs.activeDeadlineSeconds) }}
 {{- end }}
 {{- end }}

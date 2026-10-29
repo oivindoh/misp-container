@@ -11,12 +11,15 @@ kind: PersistentVolumeClaim
 metadata:
   name: attachments
   labels:
-    {{- include "misp.labels" (dict "root" . "name" "web") | nindent 4 }}
+    {{- include "misp.labels" (dict "root" . "name" "attachments") | nindent 4 }}
   annotations:
     # helm uninstall leaves the claim and its data. Argo CD keeps it on an
     # Application delete for the Helm annotation, but prunes it without its own.
     helm.sh/resource-policy: keep
     argocd.argoproj.io/sync-options: Prune=false
+    # Beside its first consumer, the configure hook: Argo CD waits for a Pending claim of a
+    # WaitForFirstConsumer class, so in wave 0 it would wait for ever
+    argocd.argoproj.io/sync-wave: "1"
 spec:
   accessModes:
     - {{ .Values.attachments.accessMode }}

@@ -24,7 +24,8 @@ secrets:
   db:
     DB_PASSWORD: misp-test-pw
   app:
-    MISP_REDIS_PASSWORD: redis-test-pw
+    # The characters that need quoting in a URL, PHP, SQL or a shell
+    MISP_REDIS_PASSWORD: 'redis''"$\@:/?#&%-pw'
     GNUPG_PASSWORD: test-gpg-passphrase
     SECURITY_SALT: a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192
   admin:

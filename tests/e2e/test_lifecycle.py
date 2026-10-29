@@ -21,7 +21,7 @@ import yaml
 
 import manifests
 from cluster import CHART, REPO, Cluster, build_images
-from stack import Release
+from stack import Release, merge
 
 PORTS = {28080: 30080}
 # The chart of every release
@@ -40,8 +40,8 @@ NODEPORT_POLICY = {
                           "ports": [{"port": 8080, "protocol": "TCP"}]}]}}
 
 
-def newest_release() -> str:
-    """The newest published chart of this tree's major version; "" while there is none.
+def newest_release() -> dict:
+    """The newest published chart of this tree's major version, as its Chart.yaml; empty while there is none.
 
     A tree's own chart reaches GHCR only after its suites pass, so the newest one is
     always an earlier release. Every published chart's images carry amd64 and arm64.
@@ -51,9 +51,22 @@ def newest_release() -> str:
                            capture_output=True, text=True, timeout=120)
     if shown.returncode != 0:
         if "could not locate a version" in shown.stderr:
-            return ""
+            return {}
         pytest.fail(f"cannot read the published charts of {REGISTRY_CHART}: {shown.stderr}")
-    return yaml.safe_load(shown.stdout)["version"]
+    return yaml.safe_load(shown.stdout)
+
+
+def release_values(app_version: str) -> dict:
+    """tests/k3s/values.yaml as the release of this image tag had it: the values its chart's schema takes.
+
+    CI checks out one commit without tags, so the tag is fetched first.
+    """
+    tag = f"v{app_version}"
+    git = ["git", "-C", str(REPO)]
+    if subprocess.run([*git, "rev-parse", "-q", "--verify", f"refs/tags/{tag}"], capture_output=True).returncode:
+        subprocess.run([*git, "fetch", "-q", "--depth", "1", "origin", "tag", tag], check=True, timeout=120)
+    shown = subprocess.run([*git, "show", f"{tag}:tests/k3s/values.yaml"], capture_output=True, text=True, check=True)
+    return yaml.safe_load(shown.stdout)
 
 
 def smoke(release):
@@ -85,12 +98,18 @@ def stack(options, failed_in_module):
 @pytest.fixture(scope="module")
 def published(stack):
     """The newest release, installed from GHCR: its version and the smoke test's result, else why not."""
-    version = newest_release()
-    if not version:
+    chart = newest_release()
+    if not chart:
         return {"skip": "no chart of this major version in GHCR yet: the suite starts from this tree"}
-    stack.install({"secrets": {"admin": {"ADMIN_KEY": ADMIN_KEY}}}, chart=REGISTRY_CHART, version=version, tag="")
+    # The release's own test values, which its schema takes; the upgrade below takes this tree's
+    tree_values = stack.values
+    stack.values = merge(release_values(chart["appVersion"]), {"secrets": {"admin": {"ADMIN_KEY": ADMIN_KEY}}})
+    try:
+        stack.install(chart=REGISTRY_CHART, version=chart["version"], tag="")
+    finally:
+        stack.values = tree_values
     stack.wait_for_misp()
-    return {"version": version, "smoke": smoke(stack)}
+    return {"version": chart["version"], "smoke": smoke(stack)}
 
 
 @pytest.fixture(scope="module")

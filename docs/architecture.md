@@ -97,8 +97,10 @@ limits one large event import or enrichment.
 ## Rollout order
 
 Ordering does not depend on the tool that applies the chart. The Job records the image
-version and the configuration checksum it ran for, and a web or worker pod waits until both
-match its own, so a pod of a new version never serves before its migrations ran. Each release
+version and the configuration checksum it ran for, and a web or worker pod waits until a
+recorded run matches its own, so a pod of a new version never serves before its migrations ran.
+The Job keeps the last ten runs, so a pod of the previous revision that restarts while a rollout
+stalls serves again. Each release
 revision has its own Job, `configure-<revision>`, because the pod template of a Job cannot
 change; the upgrade removes the Job of the previous revision.
 
@@ -108,17 +110,17 @@ change; the upgrade removes the Job of the previous revision.
 | Later rollouts | Pods of the old version keep serving while the Job runs MISP's schema updates, as MISP's own updater does on a live instance. Pods of the new version wait for the new Job to record their version, then serve. |
 | The Job fails | New pods keep waiting and restarting; old pods keep serving. Read the Job's log, fix the cause, upgrade again. |
 | Nothing changed | The Job runs, finds nothing to do, and exits 0 in seconds. |
-| Rollback | `helm rollback` runs the Job of the previous revision again: it records its version and the pods of that version serve. A `kubectl rollout undo` alone leaves the pods waiting. MISP's schema changes are one-way: a rollback to an older MISP pin needs a restore of the database ([operations.md](operations.md#restore)). |
+| Rollback | `helm rollback` runs the Job of the previous revision again: it records its version and the pods of that version serve. A `kubectl rollout undo` serves at once while the previous revision's run is among the last ten. MISP's schema changes are one-way: a rollback to an older MISP pin needs a restore of the database ([operations.md](operations.md#restore)). |
 
 | Tool | Notes |
 |------|-------|
 | Helm | Each `helm install` or `helm upgrade` creates the Jobs of its revision and removes those of the previous one. |
-| Argo CD | The Jobs are Sync hooks (`configure` in wave 1, the Deployments in wave 2, `org-sync` in wave 3), recreated on every sync. Argo CD renders the chart as revision 1 every time, so the hook, not the name, makes the new Job. The Deployments do not even roll before the Job succeeded. |
+| Argo CD | The Jobs are Sync hooks (`configure` in wave 1, the Deployments in wave 2, `org-sync` in wave 3), recreated on every sync. Argo CD renders the chart as revision 1 every time, so the hook, not the name, makes the new Job. The Deployments do not even roll before the Job succeeded. The attachments claim is in wave 1 beside its first consumer, the configure hook, so a storage class that binds on first consumer does not stall the first sync. |
 | Flux | A HelmRelease upgrades the release as `helm upgrade` does. |
 
 ## Scaling
 
 | Deployment | Replicas | Notes |
 |------------|----------|-------|
-| web | any | Sessions live in Redis; org logos and attachments are on a shared claim |
+| web | any | Sessions live in Redis; org logos and attachments are on a shared claim. A stopping pod leaves the Service, takes no new request, and lets its running requests finish within `PHP_REQUEST_TIMEOUT` seconds (default 330) |
 | worker | any | Redis `BLPOP` gives each job to one worker. A stopping worker takes no new job and gets `WORKER_STOP_GRACE` seconds (default 300) to finish its running one; the pod's termination grace period is 30 s more. A job on a worker that dies is lost |

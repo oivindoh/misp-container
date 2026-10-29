@@ -6,7 +6,8 @@ restarts at once; a process that dies within RAPID_EXIT seconds of its start res
 a delay that doubles up to MAX_DELAY. On SIGTERM each process gets SIGTERM, but not the rest of
 its group: a worker then takes no new job and exits once its running job, a child in its group,
 ends (patches/03). A group that still runs after WORKER_STOP_GRACE seconds gets SIGKILL, and
-its running job is lost. Runs as UID 1000 (misp).
+its running job is lost. The log relay stops after the workers, so it relays the lines of
+their last jobs. Runs as UID 1000 (misp).
 """
 
 from __future__ import annotations
@@ -21,6 +22,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import CAKE, MISP_BASE, WORKER_QUEUES, db
+from .config import setting
 from .env import env
 from .init import check_writable, prepare
 from .log import get as getlog, setup as setup_logging
@@ -31,6 +33,8 @@ PHP_CLI_INI_DIR = "/tmp/php-cli"
 RAPID_EXIT = 10
 MAX_DELAY = 60
 POLL = 0.5
+# The log relay's last poll after the workers stopped
+RELAY_GRACE = 5
 
 
 @dataclass
@@ -42,6 +46,8 @@ class Program:
     started: float = 0.0
     failures: int = 0
     due: float = 0.0
+    # Stops after the workers: it serves them
+    last: bool = False
 
     def start(self, now: float) -> None:
         self.proc = subprocess.Popen(self.command, cwd=self.cwd, start_new_session=True)
@@ -68,7 +74,7 @@ def programs() -> list[Program]:
     """One program per worker process of each queue, then the log relay."""
     out = [Program(f"{queue}_{n:02d}", [CAKE, "start_worker", queue], cwd=MISP_BASE)
            for queue in WORKER_QUEUES for n in range(int(env(f"NUM_WORKERS_{queue.upper()}", "0")))]
-    out.append(Program("logrelay", [sys.executable, "-m", "misp_container.logrelay"]))
+    out.append(Program("logrelay", [sys.executable, "-m", "misp_container.logrelay"], last=True))
     return out
 
 
@@ -99,19 +105,25 @@ class Supervisor:
                 p.start(now)
 
     def shutdown(self) -> int:
-        running = [p for p in self.programs if p.running()]
-        log.info("stopping %d processes; a running job gets %ds to finish", len(running), self.grace)
+        workers = [p for p in self.programs if p.running() and not p.last]
+        log.info("stopping %d processes; a running job gets %ds to finish", len(workers), self.grace)
+        self.stop_all(workers, self.grace)
+        self.stop_all([p for p in self.programs if p.running() and p.last], RELAY_GRACE)
+        return 0
+
+    @staticmethod
+    def stop_all(running: list[Program], grace: float) -> None:
+        """SIGTERM to each program, and SIGKILL to the group of each that outlives the grace."""
         for p in running:
             p.signal(signal.SIGTERM)
-        deadline = time.monotonic() + self.grace
+        deadline = time.monotonic() + grace
         while any(p.running() for p in running) and time.monotonic() < deadline:
             time.sleep(POLL)
         for p in running:
             if p.running():
-                log.warning("%s still runs after %ds; killing it", p.name, self.grace)
+                log.warning("%s still runs after %ds; killing it", p.name, grace)
                 p.signal_group(signal.SIGKILL)
                 p.proc.wait()
-        return 0
 
     def run(self) -> int:
         signal.signal(signal.SIGTERM, self.stop)
@@ -144,7 +156,7 @@ def main() -> None:
     log.info("MISP worker container starting")
     prepare()
     if not env("PLUGIN_S3_BUCKET_NAME"):
-        check_writable(env("MISP_ATTACHMENTS_DIR"), "attachments")
+        check_writable(setting("MISP.attachments_dir"), "attachments")
     db.wait_for_db(retries=60, wait_seconds=5)
     db.wait_for_configure()
     limit_worker_memory()

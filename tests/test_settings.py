@@ -4,6 +4,7 @@ import sys
 from collections import Counter
 from pathlib import Path
 
+import pytest
 import yaml
 
 REPO = Path(__file__).resolve().parents[1]
@@ -52,14 +53,38 @@ class TestTheEnvLayer:
         env = rendered()
         carried = set(env["MISP_REPOSITORY_SETTINGS"].split(","))
         names = {name for group, settings in SETTINGS["settings"].items()
-                 if group not in PLUGIN_GROUPS | {"s3"} for name in settings if "." in name}
+                 if group not in PLUGIN_GROUPS | {"s3"} for name in settings}
         with_value = {name for group, settings in SETTINGS["settings"].items()
                       if group not in PLUGIN_GROUPS | {"s3"} for name, spec in settings.items()
-                      if "." in name and spec.get("value") not in ("", None)}
+                      if spec.get("value") not in ("", None) and not spec.get("secret")}
         # A blank-protected empty default stays MISP's own until env or a Secret gives a value
         assert with_value <= carried <= names
         for name in carried:
             assert f"MISP_SETTING_{name.replace('.', '__')}" in env, name
+
+    def test_debug_is_in_the_env_layer_too(self):
+        # MISP takes debug as a database row, which would win over config.php
+        assert rendered()["MISP_SETTING_debug"] == "0"
+
+    def test_an_empty_env_value_clears_a_setting(self):
+        assert rendered("env.MISP_EVENT_VIEW_FILTER_FIELDS=")["MISP_SETTING_MISP__event_view_filter_fields"] == ""
+        assert "MISP_SETTING_MISP__welcome_text_top" not in rendered("env.MISP_WELCOME_TEXT_TOP=")
+
+    def test_a_large_number_keeps_its_digits(self):
+        # toString would print 1e+06, which PHP refuses as a limit
+        data = chart.find("ConfigMap", "misp-env", "--set-json=env.PHP_MEMORY_LIMIT=1500000")["data"]
+        assert data["PHP_MEMORY_LIMIT"] == "1500000"
+
+    def test_a_trailing_slash_leaves_the_baseurl(self):
+        env = rendered("env.MISP_BASEURL=https://misp.example.org/")
+        assert env["MISP_SETTING_MISP__baseurl"] == env["MISP_SETTING_MISP__external_baseurl"] == "https://misp.example.org"
+
+    def test_an_https_baseurl_forces_https(self):
+        # PHP sees plain HTTP from caddy; with force_https MISP marks the session cookie Secure
+        assert rendered("env.MISP_BASEURL=https://misp.example.org")["MISP_SETTING_Security__force_https"] == "true"
+        assert rendered("env.MISP_BASEURL=http://localhost:8080")["MISP_SETTING_Security__force_https"] == "false"
+        assert rendered("env.MISP_BASEURL=https://misp.example.org",
+                        "env.SECURITY_FORCE_HTTPS=false")["MISP_SETTING_Security__force_https"] == "false"
 
     def test_an_env_value_replaces_the_default(self):
         assert rendered("env.MISP_TITLE_TEXT=Example")["MISP_SETTING_MISP__title_text"] == "Example"
@@ -67,9 +92,25 @@ class TestTheEnvLayer:
     def test_a_secret_setting_comes_from_its_secret(self):
         env = rendered()
         assert env["MISP_SETTING_GnuPG__password"] == "<misp-app/GNUPG_PASSWORD>"
-        assert env["MISP_CONFIG_Security__salt"] == "<misp-app/SECURITY_SALT>"
-        assert not [k for k in chart.find("ConfigMap", "misp-settings")["data"] if k.endswith(("salt", "_password"))
-                    and not k.endswith("ZeroMQ_password")]
+        assert env["MISP_SETTING_Security__salt"] == "<misp-app/SECURITY_SALT>"
+        secret = {f"MISP_SETTING_{name.replace('.', '__')}" for group in SETTINGS["settings"].values()
+                  for name, spec in group.items() if spec.get("secret")}
+        assert not secret & set(chart.find("ConfigMap", "misp-settings")["data"])
+
+    def test_a_supplied_secret_needs_no_entry_in_the_secrets_value(self):
+        # With secrets.create false the release's Secret may hold OIDC_CLIENT_SECRET alone
+        env = rendered("secrets.create=false", "env.OIDC_ENABLE=true")
+        assert env["MISP_CONFIG_OidcAuth__client_secret"] == "<misp-app/OIDC_CLIENT_SECRET>"
+        assert "MISP_CONFIG_OidcAuth__client_secret" in env["MISP_PLAIN_CONFIG"].split(",")
+
+    @pytest.mark.parametrize("value", ["env.PLUGIN_S3_AWS_SECRET_KEY=s", "env.OIDC_CLIENT_SECRET=s"])
+    def test_a_secret_in_env_is_refused(self, value):
+        with pytest.raises(RuntimeError, match="secrets.app"):
+            chart.find("ConfigMap", "misp-settings", value)
+
+    def test_a_listed_setting_by_its_direct_name_is_refused(self):
+        with pytest.raises(RuntimeError, match="use env.MISP_TITLE_TEXT"):
+            chart.find("ConfigMap", "misp-settings", "env.MISP_SETTING_MISP__title_text=x")
 
     def test_a_connection_secret_feeds_the_derived_redis_passwords(self):
         env = rendered("connectionSecrets[0].name=cache", "connectionSecrets[0].keys.MISP_REDIS_PASSWORD=pw")
@@ -97,15 +138,19 @@ class TestDerivedNames:
 
 
 class TestConfigPhp:
-    def test_the_bootstrap_settings_go_into_config_php(self):
+    def test_config_php_holds_only_what_misp_reads_before_its_env_layer(self):
         out = config_php()
-        assert "'redis_host' => 'redis'," in out and "'debug' => 0," in out
-        assert "'attachments_dir' => '/var/www/MISP/app/attachments'," in out
-        assert "title_text" not in out
+        assert "'system_setting_db' => true," in out
+        assert "redis_host" not in out and "debug" not in out and "title_text" not in out
 
     def test_a_bucket_points_attachments_at_s3(self):
-        out = config_php("env.PLUGIN_S3_BUCKET_NAME=misp")
-        assert "'attachments_dir' => 's3://'," in out and "'S3_bucket_name' => 'misp'," in out
+        env = rendered("env.PLUGIN_S3_BUCKET_NAME=misp")
+        assert env["MISP_SETTING_MISP__attachments_dir"] == "s3://"
+        assert env["MISP_SETTING_Plugin__S3_bucket_name"] == "misp"
+
+    def test_a_string_setting_stays_a_string(self):
+        out = config_php("env.OIDC_ENABLE=true", "env.OIDC_CLIENT_ID=true", "env.LDAPAUTH_ENABLE=true")
+        assert "'client_id' => 'true'," in out and "'ldapProtocol' => 3," in out and "'mixedAuth' => true," in out
 
     def test_the_auth_plugins_are_off_by_default(self):
         out = config_php()

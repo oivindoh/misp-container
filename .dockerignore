@@ -5,3 +5,6 @@ deploy
 LICENSE
 .dockerignore
 .claude
+**/__pycache__
+.venv
+tests

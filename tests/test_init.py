@@ -64,6 +64,23 @@ class TestGenerateEmailConfig:
         assert "587" in content
         assert "misp@example.com" in content
 
+    def test_an_authenticated_relay_gets_the_login_and_starttls(self, tmp_path):
+        env_vars = {"MISP_EMAIL": "m@x", "SMTP_FQDN": "smtp.office365.com", "SMTP_PORT": "587",
+                    "SMTP_USERNAME": "misp@example.org", "SMTP_PASSWORD": "it's", "SMTP_TLS": "true"}
+        with patch.dict(os.environ, env_vars):
+            _generate_email_config(tmp_path)
+        content = (tmp_path / "email.php").read_text()
+        assert "'username'      => 'misp@example.org'," in content
+        assert "'password'      => 'it\\'s'," in content
+        assert "'tls'           => true," in content
+
+    def test_without_a_user_name_no_login(self, tmp_path):
+        with patch.dict(os.environ, {"MISP_EMAIL": "m@x", "SMTP_FQDN": "mail", "SMTP_USERNAME": "",
+                                     "SMTP_PASSWORD": "x", "SMTP_TLS": ""}):
+            _generate_email_config(tmp_path)
+        content = (tmp_path / "email.php").read_text()
+        assert "username" not in content and "'tls'           => false," in content
+
     def test_a_port_that_is_no_number_falls_back(self, tmp_path):
         with patch.dict(os.environ, {"MISP_EMAIL": "m@x", "SMTP_FQDN": "smtp", "SMTP_PORT": ""}):
             _generate_email_config(tmp_path)
@@ -89,7 +106,7 @@ class TestPopulateGnupg:
 
     def _env(self, tmp_path):
         return {
-            "GNUPG_HOMEDIR": str(tmp_path / "gnupg"),
+            "MISP_SETTING_GnuPG__homedir": str(tmp_path / "gnupg"),
             "GNUPG_BINARY": "gpg",
         }
 

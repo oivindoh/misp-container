@@ -7,10 +7,12 @@ env:
   OIDC_ENABLE: "true"
   OIDC_PROVIDER_URL: http://keycloak:8080/realms/misp
   OIDC_CLIENT_ID: misp
-  OIDC_CLIENT_SECRET: misp-oidc-test-secret
   OIDC_ROLES_MAPPING: '{"admin": "admin", "org-admin": "Org Admin", "publisher": "Publisher", "user": "User", "read-only": "Read Only"}'
   # The client's plain list of organisation aliases, whatever the realm's organization claim holds
   OIDCAUTH_ORGANISATION_PROPERTY: misp_organisation
   OIDC_MIXEDAUTH: "true"
   # Refresh tokens, so the user validity check asks Keycloak about the OIDC user
   OIDCAUTH_OFFLINE_ACCESS: "true"
+secrets:
+  app:
+    OIDC_CLIENT_SECRET: misp-oidc-test-secret

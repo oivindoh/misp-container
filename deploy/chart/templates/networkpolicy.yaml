@@ -5,12 +5,12 @@
 # their own rules.
 #
 # Traffic flow:
-#   ingress or Gateway ns --> web :8080
+#   the Gateway's ns      --> web :8080
 #   monitoring ns         --> metrics :9191
 #   the release's pods    --> each other: web :8080, modules :6666, postgres :5432, redis :6379
-#   MISP pods             --> DNS, HTTPS outside the private ranges, SMTP, LDAP,
-#                             the rules of networkPolicy.egress; with migrate, the source
-#                             database and S3
+#   MISP pods             --> DNS, HTTPS outside the private ranges, SMTP, LDAP, an
+#                             external PostgreSQL and Redis, the rules of
+#                             networkPolicy.egress; with migrate, the source database and S3
 #   modules               --> DNS, HTTPS outside the private ranges
 #   postgres, redis       --> DNS
 #
@@ -43,7 +43,7 @@ spec:
             matchLabels:
               {{- toYaml $release | nindent 14 }}
 ---
-# The ingress or Gateway proxies reach web
+# The Gateway's proxies reach web
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -124,6 +124,18 @@ spec:
           protocol: TCP
         - port: 636
           protocol: TCP
+    {{- if not .Values.postgres.enabled }}
+    # The external PostgreSQL, in or outside the cluster
+    - ports:
+        - port: {{ int (.Values.env.DB_PORT | default 5432) }}
+          protocol: TCP
+    {{- end }}
+    {{- if not .Values.redis.enabled }}
+    # The external Redis
+    - ports:
+        - port: {{ int (.Values.env.MISP_REDIS_PORT | default 6379) }}
+          protocol: TCP
+    {{- end }}
     {{- if .Values.migrate.enabled }}
     # The migration source: its MySQL or MariaDB, and its S3 bucket
     - ports:
