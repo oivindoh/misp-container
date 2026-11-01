@@ -30,7 +30,7 @@ ARG EXCLUDED_SUBMODULES="PyMISP app/files/scripts/cti-python-stix2 app/files/scr
 # =============================================================================
 # Stage 1: php-base - Common runtime packages
 # =============================================================================
-FROM debian:trixie-slim@sha256:62bd423aeee912639ca8ee681c2b762cb3e25137e0a92b20be455898a9f034ad AS php-base
+FROM debian:trixie-slim@sha256:f6b08b09a05725f9431502d3b5714f5c4576e82c1a84fa1debe0c24a7e0c3ec4 AS php-base
 ARG DEBIAN_FRONTEND=noninteractive
 ARG RUNTIME_PACKAGES
 
@@ -43,7 +43,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 # =============================================================================
 # Stage 2: misp-source - Clone MISP, set permissions
 # =============================================================================
-FROM debian:trixie-slim@sha256:62bd423aeee912639ca8ee681c2b762cb3e25137e0a92b20be455898a9f034ad AS misp-source
+FROM debian:trixie-slim@sha256:f6b08b09a05725f9431502d3b5714f5c4576e82c1a84fa1debe0c24a7e0c3ec4 AS misp-source
 ARG CORE_TAG
 ARG CORE_COMMIT
 ARG EXCLUDED_SUBMODULES
@@ -187,7 +187,7 @@ FROM ghcr.io/astral-sh/uv:latest@sha256:af22a52f5eafef3d78e551599d405c02df61919d
 # carry. The bind mount keeps the uv binary out of every layer. The bytecode is
 # compiled here: the read-only root keeps Python from writing it, and each
 # STIX import or export MISP starts would compile its packages again.
-FROM debian:trixie-slim@sha256:62bd423aeee912639ca8ee681c2b762cb3e25137e0a92b20be455898a9f034ad AS python
+FROM debian:trixie-slim@sha256:f6b08b09a05725f9431502d3b5714f5c4576e82c1a84fa1debe0c24a7e0c3ec4 AS python
 ARG DEBIAN_FRONTEND=noninteractive
 
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
@@ -215,7 +215,7 @@ RUN setcap -r /usr/bin/caddy
 # install, so what it removes (perl from adduser and debconf, gconv, the Python
 # test suite, docs and man pages) never enters a layer. Deleted in a later layer
 # on top of php-base, those files would still be pulled.
-FROM debian:trixie-slim@sha256:62bd423aeee912639ca8ee681c2b762cb3e25137e0a92b20be455898a9f034ad AS final
+FROM debian:trixie-slim@sha256:f6b08b09a05725f9431502d3b5714f5c4576e82c1a84fa1debe0c24a7e0c3ec4 AS final
 ARG DEBIAN_FRONTEND=noninteractive
 
 ARG RUNTIME_PACKAGES
@@ -329,7 +329,7 @@ CMD ["python3", "-m", "misp_container.web"]
 #   misp-modules[all]      -- everything including numpy, pandas, opencv
 #   misp-modules           -- core only (~89 modules, 106 MB)
 
-FROM debian:trixie-slim@sha256:62bd423aeee912639ca8ee681c2b762cb3e25137e0a92b20be455898a9f034ad AS modules-build
+FROM debian:trixie-slim@sha256:f6b08b09a05725f9431502d3b5714f5c4576e82c1a84fa1debe0c24a7e0c3ec4 AS modules-build
 ARG DEBIAN_FRONTEND=noninteractive
 
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
@@ -343,7 +343,7 @@ RUN --mount=type=bind,from=uv,source=/uv,target=/tmp/uv \
     && rm /tmp/requirements.txt
 
 # gcr.io/distroless/python3-debian13 (Python 3.13, nonroot UID 65532)
-FROM gcr.io/distroless/python3-debian13:nonroot@sha256:64e54c4b1200da244d80181d98e86fc01d73c8101f107d5baf472152d8e119a2 AS modules
+FROM gcr.io/distroless/python3-debian13:nonroot@sha256:1c32c3720dc4c7f0c7dbe998737f32c200add6511eca7cec705008be488b87d6 AS modules
 COPY --from=modules-build /usr/local/lib/python3.13/dist-packages /usr/local/lib/python3.13/dist-packages
 
 EXPOSE 6666
