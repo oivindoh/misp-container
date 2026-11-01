@@ -228,7 +228,7 @@ postgres:
 # fail, because MISP keeps the feed and server caches, sessions and key use counters there.
 redis:
   enabled: false
-  image: docker.io/library/redis:8.10.1-trixie@sha256:8a1efc5f479551822b47424ccae982026b633f28818eab0387348120a61e10e2
+  image: docker.io/library/redis:8.10.3-trixie@sha256:298641b35ac51aa999f9bb85707d6681fe635ce59cda51886a0b6adc1da37b8e
   maxmemory: 256mb
   resources:
     requests: {cpu: 10m, memory: 64Mi}
