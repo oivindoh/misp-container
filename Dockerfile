@@ -175,7 +175,7 @@ RUN cp "/usr/lib/$(gcc -dumpmachine)"/libfuzzy.* /usr/lib && \
 # =============================================================================
 # Stage 5: uv - Python package installer (pinned)
 # =============================================================================
-FROM ghcr.io/astral-sh/uv:latest@sha256:af22a52f5eafef3d78e551599d405c02df61919d18028f0cea8eda93bc9986d0 AS uv
+FROM ghcr.io/astral-sh/uv:latest@sha256:96f40d3904aad8d0bd010539001d36c8e2188b981e1334471a90c4a1d93bb490 AS uv
 
 # =============================================================================
 # Stage 6: python - Python packages of misp_container and of MISP's scripts
@@ -343,7 +343,7 @@ RUN --mount=type=bind,from=uv,source=/uv,target=/tmp/uv \
     && rm /tmp/requirements.txt
 
 # gcr.io/distroless/python3-debian13 (Python 3.13, nonroot UID 65532)
-FROM gcr.io/distroless/python3-debian13:nonroot@sha256:64e54c4b1200da244d80181d98e86fc01d73c8101f107d5baf472152d8e119a2 AS modules
+FROM gcr.io/distroless/python3-debian13:nonroot@sha256:1c32c3720dc4c7f0c7dbe998737f32c200add6511eca7cec705008be488b87d6 AS modules
 COPY --from=modules-build /usr/local/lib/python3.13/dist-packages /usr/local/lib/python3.13/dist-packages
 
 EXPOSE 6666
