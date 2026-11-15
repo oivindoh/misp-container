@@ -30,7 +30,7 @@ ARG EXCLUDED_SUBMODULES="PyMISP app/files/scripts/cti-python-stix2 app/files/scr
 # =============================================================================
 # Stage 1: php-base - Common runtime packages
 # =============================================================================
-FROM debian:trixie-slim@sha256:62bd423aeee912639ca8ee681c2b762cb3e25137e0a92b20be455898a9f034ad AS php-base
+FROM debian:trixie-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2 AS php-base
 ARG DEBIAN_FRONTEND=noninteractive
 ARG RUNTIME_PACKAGES
 
@@ -43,7 +43,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 # =============================================================================
 # Stage 2: misp-source - Clone MISP, set permissions
 # =============================================================================
-FROM debian:trixie-slim@sha256:62bd423aeee912639ca8ee681c2b762cb3e25137e0a92b20be455898a9f034ad AS misp-source
+FROM debian:trixie-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2 AS misp-source
 ARG CORE_TAG
 ARG CORE_COMMIT
 ARG EXCLUDED_SUBMODULES
@@ -94,7 +94,7 @@ RUN find /var/www/MISP/INSTALL/* ! -name 'POSTGRESQL.sql' -type f -exec rm {} + 
     chmod 0660 /var/www/MISP/.git/ORIG_HEAD
 
 # The composer binary, as a stage of its own so that dependabot bumps its digest
-FROM composer:2@sha256:b6dcd72ca98fa19d0e5b8476de179859704891fad06dd9e0b96833d4c430a5fc AS composer-bin
+FROM composer:2@sha256:ca11f643d7791ebdd90a34fc20caf11380d434007ae539a9ea75cd9212e13dca AS composer-bin
 
 # =============================================================================
 # Stage 3: composer - PHP dependencies, pinned by files/composer.lock
@@ -175,7 +175,7 @@ RUN cp "/usr/lib/$(gcc -dumpmachine)"/libfuzzy.* /usr/lib && \
 # =============================================================================
 # Stage 5: uv - Python package installer (pinned)
 # =============================================================================
-FROM ghcr.io/astral-sh/uv:latest@sha256:af22a52f5eafef3d78e551599d405c02df61919d18028f0cea8eda93bc9986d0 AS uv
+FROM ghcr.io/astral-sh/uv:latest@sha256:5cc1805e2426484abca4ad46ea783bab281fdb225fd82d8ce6d66a81254bac85 AS uv
 
 # =============================================================================
 # Stage 6: python - Python packages of misp_container and of MISP's scripts
@@ -187,7 +187,7 @@ FROM ghcr.io/astral-sh/uv:latest@sha256:af22a52f5eafef3d78e551599d405c02df61919d
 # carry. The bind mount keeps the uv binary out of every layer. The bytecode is
 # compiled here: the read-only root keeps Python from writing it, and each
 # STIX import or export MISP starts would compile its packages again.
-FROM debian:trixie-slim@sha256:62bd423aeee912639ca8ee681c2b762cb3e25137e0a92b20be455898a9f034ad AS python
+FROM debian:trixie-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2 AS python
 ARG DEBIAN_FRONTEND=noninteractive
 
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
@@ -215,7 +215,7 @@ RUN setcap -r /usr/bin/caddy
 # install, so what it removes (perl from adduser and debconf, gconv, the Python
 # test suite, docs and man pages) never enters a layer. Deleted in a later layer
 # on top of php-base, those files would still be pulled.
-FROM debian:trixie-slim@sha256:62bd423aeee912639ca8ee681c2b762cb3e25137e0a92b20be455898a9f034ad AS final
+FROM debian:trixie-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2 AS final
 ARG DEBIAN_FRONTEND=noninteractive
 
 ARG RUNTIME_PACKAGES
@@ -329,7 +329,7 @@ CMD ["python3", "-m", "misp_container.web"]
 #   misp-modules[all]      -- everything including numpy, pandas, opencv
 #   misp-modules           -- core only (~89 modules, 106 MB)
 
-FROM debian:trixie-slim@sha256:62bd423aeee912639ca8ee681c2b762cb3e25137e0a92b20be455898a9f034ad AS modules-build
+FROM debian:trixie-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2 AS modules-build
 ARG DEBIAN_FRONTEND=noninteractive
 
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
@@ -343,7 +343,7 @@ RUN --mount=type=bind,from=uv,source=/uv,target=/tmp/uv \
     && rm /tmp/requirements.txt
 
 # gcr.io/distroless/python3-debian13 (Python 3.13, nonroot UID 65532)
-FROM gcr.io/distroless/python3-debian13:nonroot@sha256:64e54c4b1200da244d80181d98e86fc01d73c8101f107d5baf472152d8e119a2 AS modules
+FROM gcr.io/distroless/python3-debian13:nonroot@sha256:6c4cb3bfa4b555429dd19541796a6ba6b30c84675b460bd0bd5072f7d5bdae71 AS modules
 COPY --from=modules-build /usr/local/lib/python3.13/dist-packages /usr/local/lib/python3.13/dist-packages
 
 EXPOSE 6666
