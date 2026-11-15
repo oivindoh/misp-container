@@ -16,7 +16,7 @@ spec:
       enableServiceLinks: false
       containers:
         - name: redis
-          image: docker.io/library/redis:8.10.1-trixie@sha256:8a1efc5f479551822b47424ccae982026b633f28818eab0387348120a61e10e2
+          image: docker.io/library/redis:8.10.3-trixie@sha256:1f88291b4c57bdf249f02eb085a8669889b2d2954e91d4de5118a5da6b78dd53
           args: ["--requirepass", "$(REDIS_PASSWORD)", "--save", "", "--appendonly", "no"]
           env:
             - name: REDIS_PASSWORD
