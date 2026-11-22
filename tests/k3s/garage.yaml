@@ -37,7 +37,7 @@ spec:
       enableServiceLinks: false
       containers:
         - name: garage
-          image: docker.io/dxflrs/garage:v2.4.1
+          image: docker.io/dxflrs/garage:v2.5.0
           env:
             - name: GARAGE_CONFIG_FILE
               value: /etc/garage/garage.toml

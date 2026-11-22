@@ -19,7 +19,7 @@ spec:
       enableServiceLinks: false
       containers:
         - name: redis
-          image: docker.io/library/redis:8.10.1-trixie@sha256:8a1efc5f479551822b47424ccae982026b633f28818eab0387348120a61e10e2
+          image: docker.io/library/redis:8.10.3-trixie@sha256:1f88291b4c57bdf249f02eb085a8669889b2d2954e91d4de5118a5da6b78dd53
           args: ["redis-server", "--requirepass", "$(REDIS_PASSWORD)", "--save", ""]
           envFrom:
             - configMapRef:
@@ -52,7 +52,7 @@ spec:
       enableServiceLinks: false
       containers:
         - name: core
-          image: ghcr.io/misp/misp-docker/misp-core:v2.5.50@sha256:ae32e751870fc7dab8bea3a6d16c41a9045f20d724e243c3125c1910e109c848
+          image: ghcr.io/misp/misp-docker/misp-core:v2.5.52@sha256:33627106f4962082fd7c58ac0cd15576c55c8ae672ca311699fe652e59c432dc
           envFrom:
             - configMapRef:
                 name: misp-25-env
@@ -86,7 +86,7 @@ spec:
       enableServiceLinks: false
       containers:
         - name: nginx
-          image: ghcr.io/misp/misp-docker/misp-nginx:v2.5.50@sha256:10d8a3af27f49ade99e8f4a8f75802f5d5c565eb38635ac110da9dfb84534c7e
+          image: ghcr.io/misp/misp-docker/misp-nginx:v2.5.52@sha256:4c1c78e634b56e96e8a801f6e325642faaa5ae236fe71f97fad0831148c796f3
           env:
             - name: FASTCGI_LISTEN
               value: core:9002
